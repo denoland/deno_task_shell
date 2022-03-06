@@ -1,7 +1,13 @@
 [package]
 name = "deno_task_shell"
 version = "0.1.0"
+authors = ["the Deno authors"]
+documentation = "https://docs.rs/deno_task_shell"
 edition = "2021"
+homepage = "https://deno.land/"
+license = "MIT"
+repository = "https://github.com/denoland/deno_task_shell"
+description = "Cross platform scripting for deno task"
 
 [dependencies]
 anyhow = "1.0.55"
