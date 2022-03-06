@@ -3,8 +3,8 @@
 mod combinators;
 mod fs_util;
 mod parser;
-mod shell_types;
 mod shell;
+mod shell_types;
 
 pub use parser::*;
 pub use shell::*;

@@ -137,9 +137,7 @@ pub enum RedirectOp {
 }
 
 pub fn parse(input: &str) -> Result<SequentialList> {
-  fn error_for_failure(
-    e: ParseErrorFailure,
-  ) -> Result<SequentialList> {
+  fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
     bail!(
       "{}\n  {}\n  ~",
       e.message,
