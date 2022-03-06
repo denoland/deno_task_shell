@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  rust:
+    name: deno_task_shell-${{ matrix.os }}
+    if: |
+      github.event_name == 'push' ||
+      !startsWith(github.event.pull_request.head.label, 'denoland:')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [macOS-latest, ubuntu-latest, windows-latest]
+
+    env:
+      CARGO_INCREMENTAL: 0
+      GH_ACTIONS: 1
+      RUST_BACKTRACE: full
+      RUSTFLAGS: -D warnings
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v2
+
+      - uses: denoland/setup-deno@v1
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Format
+        if: contains(matrix.os, 'ubuntu')
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        if: contains(matrix.os, 'ubuntu')
+        run: cargo clippy --all-targets --all-features --release
+
+      - name: Build
+        run: cargo build --all-targets --all-features --release
+      - name: Test
+        run: cargo test --all-targets --all-features --release
+
+      - name: Publish on version change
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        if: |
+          github.repository == 'denoland/deno_task_shell' &&
+          github.ref == 'refs/heads/main' &&
+          contains(matrix.os, 'ubuntu')
+        run: deno run -A --no-check https://raw.githubusercontent.com/denoland/automation/0.3.0/tasks/release_on_crate_version_change.ts --publish
