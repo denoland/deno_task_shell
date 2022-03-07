@@ -399,6 +399,7 @@ async fn start_command(
     let child = sub_command
       .current_dir(state.cwd())
       .args(&args)
+      .env_clear()
       .envs(state.env_vars())
       .stdout(Stdio::piped())
       .stdin(match &stdin {
@@ -438,33 +439,26 @@ async fn start_command(
     ExecutedTask {
       stdout,
       task: async move {
-        let (process_exit_tx, mut process_exit_rx) =
-          tokio::sync::mpsc::channel(1);
         // spawn a task to pipe the messages from the process' stdout to the channel
         tokio::task::spawn(async move {
           let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
-          loop {
-            tokio::select! {
-              _ = process_exit_rx.recv() => {
-                drop(stdout_tx); // close stdout
-                break;
-              }
-              // todo: it seems tokio returns immediately and so this
-              // code basically does a spin loop. Need to investigate...
-              size = child_stdout.read(&mut buffer) => {
-                let size = match size {
-                  Ok(size) => size,
-                  Err(_) => break,
-                };
-                if stdout_tx.send(buffer[..size].to_vec()).is_err() {
-                  break;
-                }
-              }
+          while let Ok(size) = child_stdout.read(&mut buffer).await {
+            // It seems checking for size of `0` is the recommended
+            // way to detect when to close stdout. I tried to do a signal
+            // after the `child.wait().await` call below up to here, but
+            // what happens is a spin loop for 1000+ iterations between
+            // when the process exists and when the signal occurs
+            if size == 0 {
+              break;
+            }
+            if stdout_tx.send(buffer[..size].to_vec()).is_err() {
+              break;
             }
           }
+          drop(stdout_tx); // close stdout
         });
 
-        let result = match child.wait().await {
+        match child.wait().await {
           Ok(status) => {
             // TODO(THIS PR): Is unwrapping to 1 ok here?
             ExecuteResult::Continue(status.code().unwrap_or(1), Vec::new())
@@ -473,10 +467,7 @@ async fn start_command(
             eprintln!("{}", err);
             ExecuteResult::Continue(1, Vec::new())
           }
-        };
-        // signal to the stdout reader that it's complete
-        let _ = process_exit_tx.send(()).await;
-        result
+        }
       }
       .boxed(),
     }

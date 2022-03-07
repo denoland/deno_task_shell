@@ -28,19 +28,16 @@ pub struct EnvState {
 impl EnvState {
   pub fn new(env_vars: HashMap<String, String>, cwd: PathBuf) -> Self {
     let mut result = Self {
-      env_vars,
+      env_vars: Default::default(),
       shell_vars: Default::default(),
-      cwd,
+      cwd: PathBuf::new(),
     };
-    result.sync_cwd_with_pwd();
+    // ensure the data is normalized
+    for (name, value) in env_vars {
+      result.apply_env_var(&name, &value);
+    }
+    result.set_cwd(&cwd);
     result
-  }
-
-  /// $PWD holds the current working directory, so we keep cwd and $PWD in sync
-  fn sync_cwd_with_pwd(&mut self) {
-    self
-      .env_vars
-      .insert("PWD".to_string(), self.cwd.display().to_string());
   }
 
   pub fn cwd(&self) -> &PathBuf {
@@ -60,7 +57,10 @@ impl EnvState {
 
   pub fn set_cwd(&mut self, cwd: &Path) {
     self.cwd = cwd.to_path_buf();
-    self.sync_cwd_with_pwd();
+    // $PWD holds the current working directory, so we keep cwd and $PWD in sync
+    self
+      .env_vars
+      .insert("PWD".to_string(), self.cwd.display().to_string());
   }
 
   pub fn apply_changes(&mut self, changes: &[EnvChange]) {
@@ -86,19 +86,26 @@ impl EnvState {
   }
 
   pub fn apply_env_var(&mut self, name: &str, value: &str) {
+    let name = if cfg!(windows) {
+      // environment variables are case insensitive on windows
+      name.to_uppercase()
+    } else {
+      name.to_string()
+    };
     if name == "PWD" {
       let cwd = PathBuf::from(value);
       if cwd.is_absolute() {
         if let Ok(cwd) = fs_util::canonicalize_path(&cwd) {
+          // this will update the environment variable too
           self.set_cwd(&cwd);
         }
       }
     } else {
-      self.shell_vars.remove(name);
+      self.shell_vars.remove(&name);
       if value.is_empty() {
-        self.env_vars.remove(name);
+        self.env_vars.remove(&name);
       } else {
-        self.env_vars.insert(name.to_string(), value.to_string());
+        self.env_vars.insert(name, value.to_string());
       }
     }
   }
