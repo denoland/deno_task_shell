@@ -12,18 +12,18 @@ use futures::FutureExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-use super::parser::Sequence;
-use super::parser::SequentialList;
-use super::shell_types::EnvChange;
-use super::shell_types::EnvState;
-use super::shell_types::ExecuteResult;
-use super::shell_types::ExecutedTask;
-use super::shell_types::ShellPipe;
-use super::shell_types::ShellPipeSender;
 use crate::fs_util;
 use crate::parser::Command;
-use crate::StringOrWord;
-use crate::StringPart;
+use crate::parser::Sequence;
+use crate::parser::SequentialList;
+use crate::parser::StringOrWord;
+use crate::parser::StringPart;
+use crate::shell_types::EnvChange;
+use crate::shell_types::EnvState;
+use crate::shell_types::ExecuteResult;
+use crate::shell_types::ExecutedTask;
+use crate::shell_types::ShellPipe;
+use crate::shell_types::ShellPipeSender;
 
 pub async fn execute(
   list: SequentialList,
@@ -41,12 +41,11 @@ pub async fn execute(
   });
   let result = executed.task.await;
   output_task.await.unwrap();
-  let final_exit_code = match result {
+
+  Ok(match result {
     ExecuteResult::Exit => 1,
     ExecuteResult::Continue(exit_code, _) => exit_code,
-  };
-
-  Ok(final_exit_code)
+  })
 }
 
 /// When a user calls `deno task <task-name> -- <args>`, we want
