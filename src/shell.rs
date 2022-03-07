@@ -341,41 +341,41 @@ async fn start_command(
     // ignores additional arguments
     ExecutedTask::from_exit_code(1)
   } else if command_name == "cp" {
-      let cwd = state.cwd().clone();
-      let (tx, stdout) = ShellPipe::channel();
-      ExecutedTask {
-        stdout,
-        task: async move {
-          let result = cp_command(&cwd, args).await;
-          drop(tx); // close stdout
-          result
-        }
-        .boxed(),
+    let cwd = state.cwd().clone();
+    let (tx, stdout) = ShellPipe::channel();
+    ExecutedTask {
+      stdout,
+      task: async move {
+        let result = cp_command(&cwd, args).await;
+        drop(tx); // close stdout
+        result
       }
+      .boxed(),
+    }
   } else if command_name == "mv" {
-      let cwd = state.cwd().clone();
-      let (tx, stdout) = ShellPipe::channel();
-      ExecutedTask {
-        stdout,
-        task: async move {
-          let result = mv_command(&cwd, args).await;
-          drop(tx); // close stdout
-          result
-        }
-        .boxed(),
+    let cwd = state.cwd().clone();
+    let (tx, stdout) = ShellPipe::channel();
+    ExecutedTask {
+      stdout,
+      task: async move {
+        let result = mv_command(&cwd, args).await;
+        drop(tx); // close stdout
+        result
       }
+      .boxed(),
+    }
   } else if command_name == "rm" {
-      let cwd = state.cwd().clone();
-      let (tx, stdout) = ShellPipe::channel();
-      ExecutedTask {
-        stdout,
-        task: async move {
-          let result = rm_command(&cwd, args).await;
-          drop(tx); // close stdout
-          result
-        }
-        .boxed(),
+    let cwd = state.cwd().clone();
+    let (tx, stdout) = ShellPipe::channel();
+    ExecutedTask {
+      stdout,
+      task: async move {
+        let result = rm_command(&cwd, args).await;
+        drop(tx); // close stdout
+        result
       }
+      .boxed(),
+    }
   } else if command_name == "sleep" {
     let (tx, stdout) = ShellPipe::channel();
     ExecutedTask {

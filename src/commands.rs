@@ -19,9 +19,7 @@ pub fn cd_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
     // affects the parent state
     let new_dir = cwd.join(&args[0]);
     match fs_util::canonicalize_path(&new_dir) {
-      Ok(new_dir) => {
-        ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)])
-      }
+      Ok(new_dir) => ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)]),
       Err(err) => {
         eprintln!("Could not cd to {}.\n\n{}", new_dir.display(), err);
         ExecuteResult::Continue(1, Vec::new())
@@ -42,7 +40,12 @@ pub async fn cp_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
     let operations = get_copy_and_move_operations(cwd, args);
     for (from, to) in operations {
       if let Err(err) = tokio::fs::copy(&from, &to).await {
-        eprintln!("Could not copy {} to {}.\n\n{}", from.display(), to.display(), err);
+        eprintln!(
+          "Could not copy {} to {}.\n\n{}",
+          from.display(),
+          to.display(),
+          err
+        );
         return ExecuteResult::Continue(1, Vec::new());
       }
     }
@@ -62,7 +65,12 @@ pub async fn mv_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
     let operations = get_copy_and_move_operations(cwd, args);
     for (from, to) in operations {
       if let Err(err) = tokio::fs::rename(&from, &to).await {
-        eprintln!("Could not copy {} to {}.\n\n{}", from.display(), to.display(), err);
+        eprintln!(
+          "Could not copy {} to {}.\n\n{}",
+          from.display(),
+          to.display(),
+          err
+        );
         return ExecuteResult::Continue(1, Vec::new());
       }
     }
@@ -70,7 +78,10 @@ pub async fn mv_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
   }
 }
 
-fn get_copy_and_move_operations(cwd: &Path, mut args: Vec<String>) -> Vec<(PathBuf, PathBuf)> {
+fn get_copy_and_move_operations(
+  cwd: &Path,
+  mut args: Vec<String>,
+) -> Vec<(PathBuf, PathBuf)> {
   // copy and move share the same logic
   let destination = cwd.join(args.pop().unwrap());
   let from_args = args.into_iter().map(|a| cwd.join(a)).collect::<Vec<_>>();
