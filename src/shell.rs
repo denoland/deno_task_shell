@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
 
 use anyhow::bail;
 use anyhow::Result;
@@ -12,7 +11,11 @@ use futures::FutureExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-use crate::fs_util;
+use crate::commands::cd_command;
+use crate::commands::cp_command;
+use crate::commands::mv_command;
+use crate::commands::rm_command;
+use crate::commands::sleep_command;
 use crate::parser::Command;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
@@ -292,6 +295,7 @@ async fn start_command(
   state: &EnvState,
   stdin: ShellPipe,
 ) -> ExecutedTask {
+  // todo: reduce code duplication in here
   let mut args = evaluate_args(command.args, state).await;
   let command_name = if args.is_empty() {
     String::new()
@@ -304,23 +308,9 @@ async fn start_command(
     ExecutedTask {
       stdout,
       task: async move {
+        let result = cd_command(&cwd, args);
         drop(tx); // close stdout
-        if args.len() != 1 {
-          eprintln!("cd is expected to have 1 argument.");
-          ExecuteResult::Continue(1, Vec::new())
-        } else {
-          // affects the parent state
-          let new_dir = cwd.join(&args[0]);
-          match fs_util::canonicalize_path(&new_dir) {
-            Ok(new_dir) => {
-              ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)])
-            }
-            Err(err) => {
-              eprintln!("Could not cd to {}.\n\n{}", new_dir.display(), err);
-              ExecuteResult::Continue(1, Vec::new())
-            }
-          }
-        }
+        result
       }
       .boxed(),
     }
@@ -350,28 +340,50 @@ async fn start_command(
   } else if command_name == "false" {
     // ignores additional arguments
     ExecutedTask::from_exit_code(1)
+  } else if command_name == "cp" {
+      let cwd = state.cwd().clone();
+      let (tx, stdout) = ShellPipe::channel();
+      ExecutedTask {
+        stdout,
+        task: async move {
+          let result = cp_command(&cwd, args).await;
+          drop(tx); // close stdout
+          result
+        }
+        .boxed(),
+      }
+  } else if command_name == "mv" {
+      let cwd = state.cwd().clone();
+      let (tx, stdout) = ShellPipe::channel();
+      ExecutedTask {
+        stdout,
+        task: async move {
+          let result = mv_command(&cwd, args).await;
+          drop(tx); // close stdout
+          result
+        }
+        .boxed(),
+      }
+  } else if command_name == "rm" {
+      let cwd = state.cwd().clone();
+      let (tx, stdout) = ShellPipe::channel();
+      ExecutedTask {
+        stdout,
+        task: async move {
+          let result = rm_command(&cwd, args).await;
+          drop(tx); // close stdout
+          result
+        }
+        .boxed(),
+      }
   } else if command_name == "sleep" {
     let (tx, stdout) = ShellPipe::channel();
     ExecutedTask {
       stdout,
       task: async move {
-        // the time to sleep is the sum of all the arguments
-        let mut total_time_ms = 0;
-        for arg in args.iter() {
-          match arg.parse::<f64>() {
-            Ok(value_s) => {
-              let ms = (value_s * 1000f64) as u64;
-              total_time_ms += ms;
-            }
-            Err(err) => {
-              eprintln!("Error parsing sleep argument to number: {}", err);
-              return ExecuteResult::Continue(1, Vec::new());
-            }
-          }
-        }
-        tokio::time::sleep(Duration::from_millis(total_time_ms)).await;
+        let result = sleep_command(args).await;
         drop(tx); // close stdout
-        ExecuteResult::Continue(0, Vec::new())
+        result
       }
       .boxed(),
     }
