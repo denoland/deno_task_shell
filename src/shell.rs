@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use anyhow::bail;
 use anyhow::Result;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -384,16 +385,21 @@ async fn start_command(
       );
     }
 
-    // todo: proper discovery of command names (see deno_vscode)
-    let mut sub_command = if command_name.starts_with("./") {
-      tokio::process::Command::new(state.cwd().join(&command_name))
-    } else {
-      tokio::process::Command::new(&command_name)
+    let command_path = match resolve_command_path(&command_name, &state).await {
+      Ok(command_path) => command_path,
+      Err(err) => {
+        eprintln!("Error launching '{}': {}", command_name, err);
+        return ExecutedTask::from_result(ExecuteResult::Continue(
+          1,
+          Vec::new(),
+        ));
+      }
     };
+    let mut sub_command = tokio::process::Command::new(&command_path);
     let child = sub_command
       .current_dir(state.cwd())
       .args(&args)
-      .envs(&state.env_vars)
+      .envs(state.env_vars())
       .stdout(Stdio::piped())
       .stdin(match &stdin {
         ShellPipe::InheritStdin => Stdio::inherit(),
@@ -443,6 +449,8 @@ async fn start_command(
                 drop(stdout_tx); // close stdout
                 break;
               }
+              // todo: it seems tokio returns immediately and so this
+              // code basically does a spin loop. Need to investigate...
               size = child_stdout.read(&mut buffer) => {
                 let size = match size {
                   Ok(size) => size,
@@ -473,6 +481,73 @@ async fn start_command(
       .boxed(),
     }
   }
+}
+
+async fn resolve_command_path(
+  command_name: &str,
+  state: &EnvState,
+) -> Result<PathBuf> {
+  if command_name.is_empty() {
+    bail!("Command name was empty.");
+  }
+
+  // check for absolute
+  if PathBuf::from(command_name).is_absolute() {
+    return Ok(PathBuf::from(command_name));
+  }
+
+  // then relative
+  if command_name.contains('/')
+    || (cfg!(windows) && command_name.contains('\\'))
+  {
+    return Ok(state.cwd().join(&command_name));
+  }
+
+  // now search based on the current environment state
+  let mut search_dirs = vec![state.cwd().clone()];
+  if let Some(path) = state.get_var("PATH") {
+    for folder in path.split(if cfg!(windows) { ';' } else { ':' }) {
+      search_dirs.push(PathBuf::from(folder));
+    }
+  }
+  let path_exts = if cfg!(windows) {
+    let path_ext = state
+      .get_var("PATHEXT")
+      .map(|s| s.as_str())
+      .unwrap_or(".EXE;.CMD;.BAT;.COM");
+    let command_exts = path_ext
+      .split(';')
+      .map(|s| s.to_string().to_uppercase())
+      .collect::<Vec<_>>();
+    if command_exts.iter().any(|ext| command_name.ends_with(ext)) {
+      None // use the command name as-is
+    } else {
+      Some(command_exts)
+    }
+  } else {
+    None
+  };
+
+  for search_dir in search_dirs {
+    let paths = if let Some(path_exts) = &path_exts {
+      let mut paths = Vec::new();
+      for path_ext in path_exts {
+        paths.push(search_dir.join(format!("{}{}", command_name, path_ext)))
+      }
+      paths
+    } else {
+      vec![search_dir.join(command_name)]
+    };
+    for path in paths {
+      if let Ok(metadata) = tokio::fs::metadata(&path).await {
+        if metadata.is_file() {
+          return Ok(path);
+        }
+      }
+    }
+  }
+
+  bail!("Command not found.")
 }
 
 async fn evaluate_args(
@@ -517,7 +592,7 @@ async fn evaluate_string_parts(
     match part {
       StringPart::Text(text) => final_text.push_str(&text),
       StringPart::Variable(name) => {
-        if let Some(value) = evaluate_string_part_variable(&name, state) {
+        if let Some(value) = state.get_var(&name) {
           final_text.push_str(value);
         }
       }
@@ -527,16 +602,6 @@ async fn evaluate_string_parts(
     }
   }
   final_text
-}
-
-fn evaluate_string_part_variable<'a>(
-  name: &str,
-  state: &'a EnvState,
-) -> Option<&'a String> {
-  state
-    .env_vars
-    .get(name)
-    .or_else(|| state.shell_vars.get(name))
 }
 
 async fn evaluate_string_part_subshell(

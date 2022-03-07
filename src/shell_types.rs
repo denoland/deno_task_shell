@@ -18,10 +18,10 @@ use crate::fs_util;
 pub struct EnvState {
   /// Environment variables that should be passed down to sub commands
   /// and used when evaluating environment variables.
-  pub env_vars: HashMap<String, String>,
+  env_vars: HashMap<String, String>,
   /// Variables that should be evaluated within the shell and
   /// not passed down to any sub commands.
-  pub shell_vars: HashMap<String, String>,
+  shell_vars: HashMap<String, String>,
   cwd: PathBuf,
 }
 
@@ -45,6 +45,17 @@ impl EnvState {
 
   pub fn cwd(&self) -> &PathBuf {
     &self.cwd
+  }
+
+  pub fn env_vars(&self) -> &HashMap<String, String> {
+    &self.env_vars
+  }
+
+  pub fn get_var(&self, name: &str) -> Option<&String> {
+    self
+      .env_vars
+      .get(name)
+      .or_else(|| self.shell_vars.get(name))
   }
 
   pub fn set_cwd(&mut self, cwd: &Path) {
