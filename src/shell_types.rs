@@ -11,11 +11,17 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::parser::EnvVar;
+use crate::StringPart;
+use crate::StringParts;
 
 #[derive(Clone)]
 pub struct EnvState {
+  /// Environment variables that should be passed down to sub commands
+  /// and used when evaluating environment variables.
   pub env_vars: HashMap<String, String>,
+  /// Variables that should be evaluated within the shell and
+  /// not passed down to any sub commands.
+  pub shell_vars: HashMap<String, String>,
   pub cwd: PathBuf,
 }
 
@@ -28,24 +34,54 @@ impl EnvState {
 
   pub fn apply_change(&mut self, change: &EnvChange) {
     match change {
-      EnvChange::SetEnvVar(var) => self.apply_env_var(var),
+      EnvChange::SetEnvVar(name, value) => self.apply_env_var(name, value),
+      EnvChange::SetShellVar(name, value) => {
+        if self.env_vars.contains_key(name) {
+          self.apply_env_var(name, value);
+        } else {
+          self.shell_vars.insert(name.to_string(), value.to_string());
+        }
+      }
       EnvChange::Cd(new_dir) => {
         self.cwd = new_dir.clone();
       }
     }
   }
 
-  pub fn apply_env_var(&mut self, var: &EnvVar) {
-    if var.value.is_empty() {
-      self.env_vars.remove(&var.name);
+  pub fn apply_env_var(&mut self, name: &str, value: &str) {
+    self.shell_vars.remove(name);
+    if value.is_empty() {
+      self.env_vars.remove(name);
     } else {
-      self.env_vars.insert(var.name.clone(), var.value.clone());
+      self.env_vars.insert(name.to_string(), value.to_string());
     }
+  }
+
+  pub fn evaluate_string_parts(&self, parts: &StringParts) -> String {
+    let mut final_text = String::new();
+    for part in &parts.0 {
+      match part {
+        StringPart::Text(text) => final_text.push_str(text),
+        StringPart::Variable(name) => {
+          let maybe_value = self
+            .env_vars
+            .get(name)
+            .or_else(|| self.shell_vars.get(name));
+          if let Some(value) = maybe_value {
+            final_text.push_str(value);
+          }
+        }
+      }
+    }
+    final_text
   }
 }
 
 pub enum EnvChange {
-  SetEnvVar(EnvVar),
+  // `export ENV_VAR=VALUE`
+  SetEnvVar(String, String),
+  // `ENV_VAR=VALUE`
+  SetShellVar(String, String),
   Cd(PathBuf),
 }
 
@@ -140,5 +176,42 @@ impl ShellPipe {
         }
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use crate::parse_string_parts;
+
+  use super::*;
+
+  #[test]
+  fn evaluate_string_parts_test() {
+    run_evaluate_sp_test("$Test", &[], &[], "");
+    run_evaluate_sp_test("$Test", &[("Test", "value")], &[], "value");
+    run_evaluate_sp_test("$Test", &[], &[("Test", "value")], "value");
+    run_evaluate_sp_test("$A a", &[], &[("A", "value")], "value a");
+    run_evaluate_sp_test("\\$A a", &[], &[("A", "value")], "$A a");
+  }
+
+  fn run_evaluate_sp_test(
+    text: &str,
+    shell_vars: &[(&str, &str)],
+    env_vars: &[(&str, &str)],
+    expected: &str,
+  ) {
+    let (_, parts) = parse_string_parts(|_| true)(text).unwrap();
+    let state = EnvState {
+      shell_vars: shell_vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+      env_vars: env_vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+      cwd: PathBuf::from("/current_dir"),
+    };
+    assert_eq!(state.evaluate_string_parts(&parts), expected)
   }
 }

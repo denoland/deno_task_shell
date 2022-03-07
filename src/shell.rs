@@ -30,7 +30,11 @@ pub async fn execute(
 ) -> Result<i32> {
   assert!(cwd.is_absolute());
   let list = append_cli_args(list, additional_cli_args)?;
-  let mut state = EnvState { env_vars, cwd };
+  let mut state = EnvState {
+    env_vars,
+    shell_vars: Default::default(),
+    cwd,
+  };
   let mut async_handles = Vec::new();
   let mut final_exit_code = 0;
   for item in list.items {
@@ -97,14 +101,22 @@ fn execute_sequence(
   stdin: ShellPipe,
 ) -> ExecutedSequence {
   match sequence {
-    Sequence::EnvVar(set_var) => {
+    Sequence::EnvVar(var) => {
       ExecutedSequence::from_result(ExecuteResult::Continue(
         0,
-        if set_var.exported {
-          vec![EnvChange::SetEnvVar(set_var.var)]
-        } else {
-          Vec::new()
-        },
+        vec![EnvChange::SetEnvVar(
+          var.name,
+          state.evaluate_string_parts(&var.value),
+        )],
+      ))
+    }
+    Sequence::ShellVar(var) => {
+      ExecutedSequence::from_result(ExecuteResult::Continue(
+        0,
+        vec![EnvChange::SetShellVar(
+          var.name,
+          state.evaluate_string_parts(&var.value),
+        )],
       ))
     }
     Sequence::Command(command) => start_command(&command, &state, stdin),
@@ -233,20 +245,25 @@ fn start_command(
   state: &EnvState,
   stdin: ShellPipe,
 ) -> ExecutedSequence {
-  if command.args[0] == "cd" {
-    let args = command.args.clone();
+  let command_name = state.evaluate_string_parts(&command.name);
+  let args = command
+    .args
+    .iter()
+    .map(|p| state.evaluate_string_parts(p))
+    .collect::<Vec<_>>();
+  if command_name == "cd" {
     let cwd = state.cwd.clone();
     let (tx, stdout) = ShellPipe::channel();
     ExecutedSequence {
       stdout,
       task: async move {
         drop(tx); // close stdout
-        if args.len() != 2 {
+        if args.len() != 1 {
           eprintln!("cd is expected to have 1 argument.");
           ExecuteResult::Continue(1, Vec::new())
         } else {
           // affects the parent state
-          let new_dir = cwd.join(&args[1]);
+          let new_dir = cwd.join(&args[0]);
           match fs_util::canonicalize_path(&new_dir) {
             Ok(new_dir) => {
               ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)])
@@ -260,14 +277,13 @@ fn start_command(
       }
       .boxed(),
     }
-  } else if command.args[0] == "exit" {
-    let args = command.args.clone();
+  } else if command_name == "exit" {
     let (tx, stdout) = ShellPipe::channel();
     ExecutedSequence {
       stdout,
       task: async move {
         drop(tx); // close stdout
-        if args.len() != 1 {
+        if !args.is_empty() {
           eprintln!("exit had too many arguments.");
           ExecuteResult::Continue(1, Vec::new())
         } else {
@@ -276,29 +292,25 @@ fn start_command(
       }
       .boxed(),
     }
-  } else if command.args[0] == "pwd" {
+  } else if command_name == "pwd" {
     // ignores additional arguments
     ExecutedSequence::with_stdout_text(format!("{}\n", state.cwd.display()))
-  } else if command.args[0] == "echo" {
-    ExecutedSequence::with_stdout_text(format!(
-      "{}\n",
-      command.args[1..].join(" ")
-    ))
-  } else if command.args[0] == "true" {
+  } else if command_name == "echo" {
+    ExecutedSequence::with_stdout_text(format!("{}\n", args.join(" ")))
+  } else if command_name == "true" {
     // ignores additional arguments
     ExecutedSequence::from_exit_code(0)
-  } else if command.args[0] == "false" {
+  } else if command_name == "false" {
     // ignores additional arguments
     ExecutedSequence::from_exit_code(1)
-  } else if command.args[0] == "sleep" {
-    let args = command.args.clone();
+  } else if command_name == "sleep" {
     let (tx, stdout) = ShellPipe::channel();
     ExecutedSequence {
       stdout,
       task: async move {
         // the time to sleep is the sum of all the arguments
         let mut total_time_ms = 0;
-        for arg in args.iter().skip(1) {
+        for arg in args.iter() {
           match arg.parse::<f64>() {
             Ok(value_s) => {
               let ms = (value_s * 1000f64) as u64;
@@ -319,18 +331,21 @@ fn start_command(
   } else {
     let mut state = state.clone();
     for env_var in &command.env_vars {
-      state.apply_env_var(env_var);
+      state.apply_env_var(
+        &env_var.name,
+        &state.evaluate_string_parts(&env_var.value),
+      );
     }
 
     // todo: proper discovery of command names (see deno_vscode)
-    let mut sub_command = if command.args[0].starts_with("./") {
-      tokio::process::Command::new(state.cwd.join(&command.args[0]))
+    let mut sub_command = if command_name.starts_with("./") {
+      tokio::process::Command::new(state.cwd.join(&command_name))
     } else {
-      tokio::process::Command::new(&command.args[0])
+      tokio::process::Command::new(&command_name)
     };
     let child = sub_command
       .current_dir(state.cwd)
-      .args(&command.args[1..])
+      .args(&args)
       .envs(&state.env_vars)
       .stdout(Stdio::piped())
       .stdin(match &stdin {
@@ -343,7 +358,7 @@ fn start_command(
     let mut child = match child {
       Ok(child) => child,
       Err(err) => {
-        eprintln!("Error launching '{}': {}", &command.args[0], err);
+        eprintln!("Error launching '{}': {}", command_name, err);
         return ExecutedSequence::from_result(ExecuteResult::Continue(
           1,
           Vec::new(),
