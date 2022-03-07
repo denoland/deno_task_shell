@@ -1,6 +1,7 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -11,8 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::StringPart;
-use crate::StringParts;
+use crate::fs_util;
 
 #[derive(Clone)]
 pub struct EnvState {
@@ -22,10 +22,36 @@ pub struct EnvState {
   /// Variables that should be evaluated within the shell and
   /// not passed down to any sub commands.
   pub shell_vars: HashMap<String, String>,
-  pub cwd: PathBuf,
+  cwd: PathBuf,
 }
 
 impl EnvState {
+  pub fn new(env_vars: HashMap<String, String>, cwd: PathBuf) -> Self {
+    let mut result = Self {
+      env_vars,
+      shell_vars: Default::default(),
+      cwd,
+    };
+    result.sync_cwd_with_pwd();
+    result
+  }
+
+  /// $PWD holds the current working directory, so we keep cwd and $PWD in sync
+  fn sync_cwd_with_pwd(&mut self) {
+    self
+      .env_vars
+      .insert("PWD".to_string(), self.cwd.display().to_string());
+  }
+
+  pub fn cwd(&self) -> &PathBuf {
+    &self.cwd
+  }
+
+  pub fn set_cwd(&mut self, cwd: &Path) {
+    self.cwd = cwd.to_path_buf();
+    self.sync_cwd_with_pwd();
+  }
+
   pub fn apply_changes(&mut self, changes: &[EnvChange]) {
     for change in changes {
       self.apply_change(change);
@@ -49,31 +75,21 @@ impl EnvState {
   }
 
   pub fn apply_env_var(&mut self, name: &str, value: &str) {
-    self.shell_vars.remove(name);
-    if value.is_empty() {
-      self.env_vars.remove(name);
-    } else {
-      self.env_vars.insert(name.to_string(), value.to_string());
-    }
-  }
-
-  pub fn evaluate_string_parts(&self, parts: &StringParts) -> String {
-    let mut final_text = String::new();
-    for part in &parts.0 {
-      match part {
-        StringPart::Text(text) => final_text.push_str(text),
-        StringPart::Variable(name) => {
-          let maybe_value = self
-            .env_vars
-            .get(name)
-            .or_else(|| self.shell_vars.get(name));
-          if let Some(value) = maybe_value {
-            final_text.push_str(value);
-          }
+    if name == "PWD" {
+      let cwd = PathBuf::from(value);
+      if cwd.is_absolute() {
+        if let Ok(cwd) = fs_util::canonicalize_path(&cwd) {
+          self.set_cwd(&cwd);
         }
       }
+    } else {
+      self.shell_vars.remove(name);
+      if value.is_empty() {
+        self.env_vars.remove(name);
+      } else {
+        self.env_vars.insert(name.to_string(), value.to_string());
+      }
     }
-    final_text
   }
 }
 
@@ -90,12 +106,12 @@ pub enum ExecuteResult {
   Continue(i32, Vec<EnvChange>),
 }
 
-pub struct ExecutedSequence {
+pub struct ExecutedTask {
   pub stdout: ShellPipe,
   pub task: BoxFuture<'static, ExecuteResult>,
 }
 
-impl ExecutedSequence {
+impl ExecutedTask {
   pub fn from_exit_code(exit_code: i32) -> Self {
     Self::from_result(ExecuteResult::Continue(exit_code, Vec::new()))
   }
@@ -179,39 +195,39 @@ impl ShellPipe {
   }
 }
 
-#[cfg(test)]
-mod test {
-  use crate::parse_string_parts;
+// #[cfg(test)]
+// mod test {
+//   use crate::parse_string_parts;
 
-  use super::*;
+//   use super::*;
 
-  #[test]
-  fn evaluate_string_parts_test() {
-    run_evaluate_sp_test("$Test", &[], &[], "");
-    run_evaluate_sp_test("$Test", &[("Test", "value")], &[], "value");
-    run_evaluate_sp_test("$Test", &[], &[("Test", "value")], "value");
-    run_evaluate_sp_test("$A a", &[], &[("A", "value")], "value a");
-    run_evaluate_sp_test("\\$A a", &[], &[("A", "value")], "$A a");
-  }
+//   #[test]
+//   fn evaluate_string_parts_test() {
+//     run_evaluate_sp_test("$Test", &[], &[], "");
+//     run_evaluate_sp_test("$Test", &[("Test", "value")], &[], "value");
+//     run_evaluate_sp_test("$Test", &[], &[("Test", "value")], "value");
+//     run_evaluate_sp_test("$A a", &[], &[("A", "value")], "value a");
+//     run_evaluate_sp_test("\\$A a", &[], &[("A", "value")], "$A a");
+//   }
 
-  fn run_evaluate_sp_test(
-    text: &str,
-    shell_vars: &[(&str, &str)],
-    env_vars: &[(&str, &str)],
-    expected: &str,
-  ) {
-    let (_, parts) = parse_string_parts(|_| true)(text).unwrap();
-    let state = EnvState {
-      shell_vars: shell_vars
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect(),
-      env_vars: env_vars
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect(),
-      cwd: PathBuf::from("/current_dir"),
-    };
-    assert_eq!(state.evaluate_string_parts(&parts), expected)
-  }
-}
+//   fn run_evaluate_sp_test(
+//     text: &str,
+//     shell_vars: &[(&str, &str)],
+//     env_vars: &[(&str, &str)],
+//     expected: &str,
+//   ) {
+//     let (_, parts) = parse_string_parts(|_| true)(text).unwrap();
+//     let state = EnvState {
+//       shell_vars: shell_vars
+//         .iter()
+//         .map(|(k, v)| (k.to_string(), v.to_string()))
+//         .collect(),
+//       env_vars: env_vars
+//         .iter()
+//         .map(|(k, v)| (k.to_string(), v.to_string()))
+//         .collect(),
+//       cwd: PathBuf::from("/current_dir"),
+//     };
+//     assert_eq!(state.evaluate_string_parts(&parts), expected)
+//   }
+// }

@@ -3,25 +3,32 @@
 use anyhow::bail;
 use anyhow::Result;
 
-use super::combinators::assert;
-use super::combinators::assert_exists;
-use super::combinators::char;
-use super::combinators::delimited;
-use super::combinators::if_not;
-use super::combinators::many0;
-use super::combinators::many_till;
-use super::combinators::map;
-use super::combinators::maybe;
-use super::combinators::or;
-use super::combinators::separated_list;
-use super::combinators::skip_whitespace;
-use super::combinators::tag;
-use super::combinators::take_while;
-use super::combinators::terminated;
-use super::combinators::with_error_context;
-use super::combinators::ParseError;
-use super::combinators::ParseErrorFailure;
-use super::combinators::ParseResult;
+use crate::combinators::assert;
+use crate::combinators::assert_exists;
+use crate::combinators::char;
+use crate::combinators::check;
+use crate::combinators::check_not;
+use crate::combinators::delimited;
+use crate::combinators::if_true;
+use crate::combinators::many0;
+use crate::combinators::many_till;
+use crate::combinators::map;
+use crate::combinators::maybe;
+use crate::combinators::next_char;
+use crate::combinators::or;
+use crate::combinators::or3;
+use crate::combinators::or4;
+use crate::combinators::or5;
+use crate::combinators::preceded;
+use crate::combinators::separated_list;
+use crate::combinators::skip_whitespace;
+use crate::combinators::tag;
+use crate::combinators::take_while;
+use crate::combinators::terminated;
+use crate::combinators::with_error_context;
+use crate::combinators::ParseError;
+use crate::combinators::ParseErrorFailure;
+use crate::combinators::ParseResult;
 
 // Shell grammar rules this is loosely based on:
 // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_10_02
@@ -102,32 +109,48 @@ impl BooleanListOperator {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Command {
   pub env_vars: Vec<EnvVar>,
-  pub name: StringParts,
-  pub args: Vec<StringParts>,
+  pub args: Vec<StringOrWord>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct EnvVar {
   pub name: String,
-  pub value: StringParts,
+  pub value: StringOrWord,
 }
 
 impl EnvVar {
-  pub fn new(name: String, value: StringParts) -> Self {
+  pub fn new(name: String, value: StringOrWord) -> Self {
     EnvVar { name, value }
   }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct StringParts(pub Vec<StringPart>);
+pub enum StringOrWord {
+  Word(Vec<StringPart>),
+  String(Vec<StringPart>),
+}
 
-impl StringParts {
-  pub fn new_text(text: &str) -> Self {
-    Self(vec![StringPart::Text(text.to_string())])
+impl StringOrWord {
+  pub fn new_string(text: &str) -> Self {
+    StringOrWord::String(vec![StringPart::Text(text.to_string())])
   }
 
-  pub fn is_empty(&self) -> bool {
-    self.0.is_empty()
+  pub fn new_word(text: &str) -> Self {
+    StringOrWord::Word(vec![StringPart::Text(text.to_string())])
+  }
+
+  pub fn parts(&self) -> &Vec<StringPart> {
+    match self {
+      StringOrWord::String(parts) => parts,
+      StringOrWord::Word(parts) => parts,
+    }
+  }
+
+  pub fn into_parts(self) -> Vec<StringPart> {
+    match self {
+      StringOrWord::String(parts) => parts,
+      StringOrWord::Word(parts) => parts,
+    }
   }
 }
 
@@ -135,6 +158,7 @@ impl StringParts {
 pub enum StringPart {
   Variable(String),
   Text(String),
+  SubShell(SequentialList),
 }
 
 /// Note: Only used to detect redirects in order to give a better error.
@@ -142,7 +166,7 @@ pub enum StringPart {
 pub struct Redirect {
   pub maybe_fd: Option<usize>,
   pub op: RedirectOp,
-  pub word: Option<StringParts>,
+  pub word: Option<Vec<StringPart>>,
 }
 
 pub enum RedirectOp {
@@ -186,7 +210,11 @@ fn parse_sequential_list(input: &str) -> ParseResult<SequentialList> {
     terminated(parse_sequential_list_item, skip_whitespace),
     terminated(
       skip_whitespace,
-      or(parse_sequential_list_op, parse_async_list_op),
+      or3(
+        map(parse_sequential_list_op, |_| ()),
+        map(parse_async_list_op, |_| ()),
+        check(char(')')),
+      ),
     ),
   )(input)?;
   Ok((input, SequentialList { items }))
@@ -274,33 +302,28 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
 
 fn parse_command(input: &str) -> ParseResult<Command> {
   let (input, env_vars) = parse_env_vars(input)?;
-  let (input, mut args) = parse_command_args(input)?;
+  let (input, args) = parse_command_args(input)?;
   if args.is_empty() {
     return ParseError::backtrace();
   }
-  ParseResult::Ok((
-    input,
-    Command {
-      env_vars,
-      name: args.remove(0),
-      args,
-    },
-  ))
+  ParseResult::Ok((input, Command { env_vars, args }))
 }
 
-fn parse_command_args(input: &str) -> ParseResult<Vec<StringParts>> {
+fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
   many_till(
     terminated(parse_shell_arg, assert_whitespace_or_end_and_skip),
-    or(
+    or4(
       parse_list_op,
-      or(map(parse_redirect, |_| ()), parse_pipeline_op),
+      map(parse_redirect, |_| ()),
+      parse_pipeline_op,
+      map(char(')'), |_| ()),
     ),
   )(input)
 }
 
-fn parse_shell_arg(input: &str) -> ParseResult<StringParts> {
-  let (input, value) = or(parse_quoted_string, parse_word)(input)?;
-  if value.is_empty() {
+fn parse_shell_arg(input: &str) -> ParseResult<StringOrWord> {
+  let (input, value) = parse_string_or_word(input)?;
+  if value.parts().is_empty() {
     ParseError::backtrace()
   } else {
     Ok((input, value))
@@ -339,14 +362,14 @@ fn parse_op_str<'a>(
   let operator = operator.to_string();
   terminated(
     tag(operator),
-    terminated(if_not(special_char), skip_whitespace),
+    terminated(check_not(special_char), skip_whitespace),
   )
 }
 
 fn parse_pipeline_op(input: &str) -> ParseResult<()> {
   terminated(
     map(char('|'), |_| ()),
-    terminated(if_not(special_char), skip_whitespace),
+    terminated(check_not(special_char), skip_whitespace),
   )(input)
 }
 
@@ -371,10 +394,7 @@ fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
   let (input, _) = char('=')(input)?;
   let (input, value) = with_error_context(
     terminated(parse_env_var_value, assert_whitespace_or_end),
-    concat!(
-      "Environment variable values may only be assigned quoted strings ",
-      "or a plain string (consisting only of letters, numbers, and underscores)",
-    ),
+    "Invalid environment variable value.",
   )(input)?;
   Ok((input, EnvVar::new(name.to_string(), value)))
 }
@@ -383,11 +403,18 @@ fn parse_env_var_name(input: &str) -> ParseResult<&str> {
   take_while(is_valid_env_var_char)(input)
 }
 
-fn parse_env_var_value(input: &str) -> ParseResult<StringParts> {
-  or(parse_quoted_string, parse_word)(input)
+fn parse_env_var_value(input: &str) -> ParseResult<StringOrWord> {
+  parse_string_or_word(input)
 }
 
-fn parse_word(input: &str) -> ParseResult<StringParts> {
+fn parse_string_or_word(input: &str) -> ParseResult<StringOrWord> {
+  or(
+    map(parse_quoted_string, StringOrWord::String),
+    map(parse_word, StringOrWord::Word),
+  )(input)
+}
+
+fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
   assert(
     parse_string_parts(|c| {
       !c.is_whitespace() && (c == '$' || !is_special_char(c))
@@ -396,8 +423,8 @@ fn parse_word(input: &str) -> ParseResult<StringParts> {
       result
         .ok()
         .map(|(_, parts)| {
-          if parts.0.len() == 1 {
-            if let StringPart::Text(text) = &parts.0[0] {
+          if parts.len() == 1 {
+            if let StringPart::Text(text) = &parts[0] {
               return !is_reserved_word(text);
             }
           }
@@ -411,12 +438,12 @@ fn parse_word(input: &str) -> ParseResult<StringParts> {
 
 fn parse_word_with_text(
   text: &'static str,
-) -> impl Fn(&str) -> ParseResult<StringParts> {
+) -> impl Fn(&str) -> ParseResult<Vec<StringPart>> {
   debug_assert!(!text.contains('$')); // not implemented
   move |input| {
     let (input, word) = parse_word(input)?;
-    if word.0.len() == 1 {
-      if let StringPart::Text(part_text) = &word.0[0] {
+    if word.len() == 1 {
+      if let StringPart::Text(part_text) = &word[0] {
         if part_text == text {
           return ParseResult::Ok((input, word));
         }
@@ -426,9 +453,11 @@ fn parse_word_with_text(
   }
 }
 
-fn parse_quoted_string(input: &str) -> ParseResult<StringParts> {
+fn parse_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   or(
-    map(parse_single_quoted_string, StringParts::new_text),
+    map(parse_single_quoted_string, |text| {
+      vec![StringPart::Text(text.to_string())]
+    }),
     parse_double_quoted_string,
   )(input)
 }
@@ -443,7 +472,7 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
   )(input)
 }
 
-fn parse_double_quoted_string(input: &str) -> ParseResult<StringParts> {
+fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
   // Double quotes may have escaped
   delimited(
@@ -454,71 +483,82 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<StringParts> {
 }
 
 pub(crate) fn parse_string_parts(
-  allow_char: impl Fn(char) -> bool,
-) -> impl Fn(&str) -> ParseResult<StringParts> {
-  move |input| {
-    // this doesn't seem like the nom way of doing things, but it was a
-    // quick implementation
-
-    // todo(dsherret): improve this. This is not good code.
-    let mut parts = Vec::new();
-    let mut current_text = String::new();
-    let mut last_escape = false;
-    let mut index = 0;
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-      if !allow_char(c) && !last_escape {
-        break;
-      }
-
-      if last_escape {
-        if !"\"$`".contains(c) {
-          current_text.push('\\');
-        }
-        current_text.push(c);
-        last_escape = false;
-      } else if c == '\\' {
-        last_escape = true;
-      } else if c == '$'
-        && chars
-          .peek()
-          .map(|c| is_valid_env_var_char(*c))
-          .unwrap_or(false)
-      {
-        if !current_text.is_empty() {
-          parts.push(StringPart::Text(current_text));
-          current_text = String::new();
-        }
-        while chars
-          .peek()
-          .map(|c| is_valid_env_var_char(*c))
-          .unwrap_or(false)
-        {
-          current_text.push(chars.next().unwrap());
-          index += 1;
-        }
-        parts.push(StringPart::Variable(current_text));
-        current_text = String::new();
-      } else if c == '$' && chars.peek().map(|c| *c == '(').unwrap_or(false) {
-        return ParseError::fail(
-          &input[index..],
-          "Subshells are currently not supported.",
-        );
-      } else if c == '`' {
-        return ParseError::fail(
-          &input[index..],
-          "Back ticks in strings is currently not supported.",
-        );
-      } else {
-        current_text.push(c);
-      }
-      index += 1;
-    }
-    if !current_text.is_empty() {
-      parts.push(StringPart::Text(current_text));
-    }
-    Ok((&input[index..], StringParts(parts)))
+  allow_char: impl Fn(char) -> bool + Clone,
+) -> impl Fn(&str) -> ParseResult<Vec<StringPart>> {
+  fn parse_escaped_dollar_sign(input: &str) -> ParseResult<char> {
+    or(
+      parse_escaped_char('$'),
+      terminated(
+        char('$'),
+        check_not(or(map(parse_env_var_name, |_| ()), map(char('('), |_| ()))),
+      ),
+    )(input)
   }
+
+  fn parse_escaped_char<'a>(
+    c: char,
+  ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+    preceded(char('\\'), char(c))
+  }
+
+  fn first_escaped_char<'a>(
+    allow_char: impl Fn(char) -> bool,
+  ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+    or4(
+      parse_escaped_dollar_sign,
+      parse_escaped_char('`'),
+      parse_escaped_char('"'),
+      if_true(parse_escaped_char('\''), move |_| allow_char('"')),
+    )
+  }
+
+  move |input| {
+    enum PendingPart<'a> {
+      Char(char),
+      Variable(&'a str),
+      SubShell(SequentialList),
+    }
+
+    let (input, parts) = many0(or5(
+      map(first_escaped_char(&allow_char), PendingPart::Char),
+      map(parse_subshell, PendingPart::SubShell),
+      map(
+        preceded(char('$'), parse_env_var_name),
+        PendingPart::Variable,
+      ),
+      |input| {
+        let (input, _) = char('`')(input)?;
+        ParseError::fail(
+          input,
+          "Back ticks in strings is currently not supported.",
+        )
+      },
+      map(if_true(next_char, |c| allow_char(*c)), PendingPart::Char),
+    ))(input)?;
+
+    let mut result = Vec::new();
+    for part in parts {
+      match part {
+        PendingPart::Char(c) => {
+          if let Some(StringPart::Text(text)) = result.last_mut() {
+            text.push(c);
+          } else {
+            result.push(StringPart::Text(c.to_string()));
+          }
+        }
+        PendingPart::SubShell(s) => result.push(StringPart::SubShell(s)),
+        PendingPart::Variable(v) => {
+          result.push(StringPart::Variable(v.to_string()))
+        }
+      }
+    }
+
+    Ok((input, result))
+  }
+}
+
+fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
+  delimited(tag("$("), parse_sequential_list, char(')'))(input)
 }
 
 fn parse_usize(input: &str) -> ParseResult<usize> {
@@ -543,7 +583,8 @@ fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<()> {
 
 fn assert_whitespace_or_end(input: &str) -> ParseResult<()> {
   if let Some(next_char) = input.chars().next() {
-    if !next_char.is_whitespace() && !matches!(next_char, ';' | '&' | '|' | '(')
+    if !next_char.is_whitespace()
+      && !matches!(next_char, ';' | '&' | '|' | '(' | ')')
     {
       return Err(ParseError::Failure(fail_for_trailing_input(input)));
     }
@@ -640,19 +681,18 @@ mod test {
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: Sequence::Command(Command {
                 env_vars: vec![
-                  EnvVar::new("Name".to_string(), StringParts::new_text("Value")),
-                  EnvVar::new("OtherVar".to_string(), StringParts::new_text("Other")),
+                  EnvVar::new("Name".to_string(), StringOrWord::new_word("Value")),
+                  EnvVar::new("OtherVar".to_string(), StringOrWord::new_word("Other")),
                 ],
-                name: StringParts::new_text("command"),
-                args: vec![StringParts::new_text("arg1")],
+                args: vec![StringOrWord::new_word("command"), StringOrWord::new_word("arg1")],
               }),
               op: BooleanListOperator::Or,
               next: Sequence::Command(Command {
                 env_vars: vec![],
-                name: StringParts::new_text("command2"),
                 args: vec![
-                  StringParts::new_text("arg12"),
-                  StringParts::new_text("arg13"),
+                  StringOrWord::new_word("command2"),
+                  StringOrWord::new_word("arg12"),
+                  StringOrWord::new_word("arg13"),
                 ],
               }),
             })),
@@ -662,14 +702,12 @@ mod test {
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: Sequence::Command(Command {
                 env_vars: vec![],
-                name: StringParts::new_text("command3"),
-                args: vec![],
+                args: vec![StringOrWord::new_word("command3")],
               }),
               op: BooleanListOperator::And,
               next: Sequence::Command(Command {
                 env_vars: vec![],
-                name: StringParts::new_text("command4"),
-                args: vec![],
+                args: vec![StringOrWord::new_word("command4")],
               }),
             })),
           },
@@ -677,30 +715,27 @@ mod test {
             is_async: false,
             sequence: Sequence::Command(Command {
               env_vars: vec![],
-              name: StringParts::new_text("command5"),
-              args: vec![ ],
+              args: vec![StringOrWord::new_word("command5")],
             }),
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::EnvVar(EnvVar::new("ENV6".to_string(), StringParts::new_text("5"))),
+            sequence: Sequence::EnvVar(EnvVar::new("ENV6".to_string(), StringOrWord::new_word("5"))),
           },
           SequentialListItem {
             is_async: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
-              current: Sequence::ShellVar(EnvVar::new("ENV7".to_string(), StringParts::new_text("other"))),
+              current: Sequence::ShellVar(EnvVar::new("ENV7".to_string(), StringOrWord::new_word("other"))),
               op: BooleanListOperator::And,
               next: Sequence::BooleanList(Box::new(BooleanList {
                 current: Sequence::Command(Command {
                   env_vars: vec![],
-                  name: StringParts::new_text("command8"),
-                  args: vec![],
+                  args: vec![StringOrWord::new_word("command8")],
                 }),
                 op: BooleanListOperator::Or,
                 next: Sequence::Command(Command {
                   env_vars: vec![],
-                  name: StringParts::new_text("command9"),
-                  args: vec![],
+                  args: vec![StringOrWord::new_word("command9")],
                 }),
               })),
             })),
@@ -718,16 +753,14 @@ mod test {
             is_async: false,
             sequence: Sequence::Command(Command {
               env_vars: vec![],
-              name: StringParts::new_text("command1"),
-              args: vec![],
+              args: vec![StringOrWord::new_word("command1")],
             }),
           },
           SequentialListItem {
             is_async: false,
             sequence: Sequence::Command(Command {
               env_vars: vec![],
-              name: StringParts::new_text("command2"),
-              args: vec![],
+              args: vec![StringOrWord::new_word("command2")],
             }),
           },
           SequentialListItem {
@@ -735,10 +768,9 @@ mod test {
             sequence: Sequence::Command(Command {
               env_vars: vec![EnvVar::new(
                 "A".to_string(),
-                StringParts::new_text("b"),
+                StringOrWord::new_string("b"),
               )],
-              name: StringParts::new_text("command3"),
-              args: vec![],
+              args: vec![StringOrWord::new_word("command3")],
             }),
           },
         ],
@@ -759,8 +791,7 @@ mod test {
           is_async: true,
           sequence: Sequence::Command(Command {
             env_vars: vec![],
-            name: StringParts::new_text("command"),
-            args: vec![],
+            args: vec![StringOrWord::new_word("command")],
           }),
         }],
       }),
@@ -775,13 +806,11 @@ mod test {
           sequence: Sequence::Pipeline(Box::new(Pipeline {
             current: Sequence::Command(Command {
               env_vars: vec![],
-              name: StringParts::new_text("test"),
-              args: vec![],
+              args: vec![StringOrWord::new_word("test")],
             }),
             next: Sequence::Command(Command {
               env_vars: vec![],
-              name: StringParts::new_text("other"),
-              args: vec![],
+              args: vec![StringOrWord::new_word("other")],
             }),
           })),
         }],
@@ -802,10 +831,12 @@ mod test {
           is_async: false,
           sequence: Sequence::Command(Command {
             env_vars: vec![],
-            name: StringParts::new_text("echo"),
-            args: vec![StringParts(vec![StringPart::Variable(
-              "MY_ENV".to_string(),
-            )])],
+            args: vec![
+              StringOrWord::new_word("echo"),
+              StringOrWord::Word(vec![StringPart::Variable(
+                "MY_ENV".to_string(),
+              )]),
+            ],
           }),
         }],
       }),
@@ -819,7 +850,7 @@ mod test {
       "Name=Value",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringParts::new_text("Value"),
+        value: StringOrWord::new_word("Value"),
       }),
     );
     run_test(
@@ -827,7 +858,7 @@ mod test {
       "Name='quoted value'",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringParts::new_text("quoted value"),
+        value: StringOrWord::new_string("quoted value"),
       }),
     );
     run_test(
@@ -835,7 +866,7 @@ mod test {
       "Name=\"double quoted value\"",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringParts::new_text("double quoted value"),
+        value: StringOrWord::new_string("double quoted value"),
       }),
     );
     run_test_with_end(
@@ -843,41 +874,71 @@ mod test {
       "Name= command_name",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringParts(vec![]),
+        value: StringOrWord::Word(vec![]),
       }),
       " command_name",
     );
+
     run_test(
       parse_env_var,
       "Name=$(test)",
-      Err(concat!(
-        "Environment variable values may only be assigned quoted strings or a ",
-        "plain string (consisting only of letters, numbers, and underscores)\n\n",
-        "Subshells are currently not supported.")),
+      Ok(EnvVar {
+        name: "Name".to_string(),
+        value: StringOrWord::Word(vec![StringPart::SubShell(SequentialList {
+          items: vec![SequentialListItem {
+            is_async: false,
+            sequence: Sequence::Command(Command {
+              env_vars: vec![],
+              args: vec![StringOrWord::new_word("test")],
+            }),
+          }],
+        })]),
+      }),
+    );
+
+    run_test(
+      parse_env_var,
+      "Name=$(OTHER=5)",
+      Ok(EnvVar {
+        name: "Name".to_string(),
+        value: StringOrWord::Word(vec![StringPart::SubShell(SequentialList {
+          items: vec![SequentialListItem {
+            is_async: false,
+            sequence: Sequence::ShellVar(EnvVar {
+              name: "OTHER".to_string(),
+              value: StringOrWord::new_word("5"),
+            }),
+          }],
+        })]),
+      }),
     );
   }
 
   #[test]
   fn test_single_quotes() {
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       "'test'",
-      Ok(StringParts::new_text("test")),
+      Ok(StringOrWord::new_string("test")),
     );
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#"'te\\'"#,
-      Ok(StringParts::new_text(r#"te\\"#)),
+      Ok(StringOrWord::new_string(r#"te\\"#)),
     );
     run_test_with_end(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#"'te\'st'"#,
-      Ok(StringParts::new_text(r#"te\"#)),
+      Ok(StringOrWord::new_string(r#"te\"#)),
       "st'",
     );
-    run_test(parse_quoted_string, "'  '", Ok(StringParts::new_text("  ")));
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
+      "'  '",
+      Ok(StringOrWord::new_string("  ")),
+    );
+    run_test(
+      map(parse_quoted_string, StringOrWord::String),
       "'  ",
       Err("Expected closing single quote."),
     );
@@ -886,19 +947,19 @@ mod test {
   #[test]
   fn test_double_quotes() {
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""  ""#,
-      Ok(StringParts::new_text("  ")),
+      Ok(StringOrWord::new_string("  ")),
     );
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""test""#,
-      Ok(StringParts::new_text("test")),
+      Ok(StringOrWord::new_string("test")),
     );
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""te\"\$\`st""#,
-      Ok(StringParts::new_text(r#"te"$`st"#)),
+      Ok(StringOrWord::new_string(r#"te"$`st"#)),
     );
     run_test(
       parse_quoted_string,
@@ -906,14 +967,16 @@ mod test {
       Err("Expected closing double quote."),
     );
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""$Test""#,
-      Ok(StringParts(vec![StringPart::Variable("Test".to_string())])),
+      Ok(StringOrWord::String(vec![StringPart::Variable(
+        "Test".to_string(),
+      )])),
     );
     run_test(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""$Test,$Other_Test""#,
-      Ok(StringParts(vec![
+      Ok(StringOrWord::String(vec![
         StringPart::Variable("Test".to_string()),
         StringPart::Text(",".to_string()),
         StringPart::Variable("Other_Test".to_string()),
@@ -926,9 +989,9 @@ mod test {
     );
 
     run_test_with_end(
-      parse_quoted_string,
+      map(parse_quoted_string, StringOrWord::String),
       r#""test" asdf"#,
-      Ok(StringParts::new_text("test")),
+      Ok(StringOrWord::new_string("test")),
       " asdf",
     );
   }
@@ -971,7 +1034,13 @@ mod test {
         assert_eq!("backtrace", expected.err().unwrap());
       }
       Err(ParseError::Failure(err)) => {
-        assert_eq!(err.message, expected.err().unwrap());
+        assert_eq!(
+          err.message,
+          match expected.err() {
+            Some(err) => err,
+            None => panic!("Got error: {}", err.message),
+          }
+        );
       }
     }
   }

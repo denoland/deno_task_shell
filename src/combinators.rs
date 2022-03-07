@@ -41,11 +41,14 @@ pub type ParseResult<'a, O> = Result<(&'a str, O), ParseError<'a>>;
 
 /// Recognizes a character.
 pub fn char<'a>(c: char) -> impl Fn(&'a str) -> ParseResult<'a, char> {
-  move |input| match input.chars().next() {
-    Some(next_char) if next_char == c => {
-      Ok((&input[next_char.len_utf8()..], c))
-    }
-    _ => Err(ParseError::Backtrace),
+  if_true(next_char, move |found_char| *found_char == c)
+}
+
+/// Recognizes a character.
+pub fn next_char(input: &str) -> ParseResult<char> {
+  match input.chars().next() {
+    Some(next_char) => Ok((&input[next_char.len_utf8()..], next_char)),
+    _ => ParseError::backtrace(),
   }
 }
 
@@ -108,6 +111,48 @@ pub fn or<'a, O>(
     Ok(result) => Ok(result),
     Err(ParseError::Backtrace) => b(input),
     Err(err) => Err(err),
+  }
+}
+
+/// Checks for any to match.
+pub fn or3<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or(a, or(b, c))
+}
+
+/// Checks for any to match.
+pub fn or4<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+  d: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or3(a, b, or(c, d))
+}
+
+/// Checks for any to match.
+pub fn or5<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+  d: impl Fn(&'a str) -> ParseResult<'a, O>,
+  e: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or4(a, b, c, or(d, e))
+}
+
+/// Returns the second value and discards the first.
+pub fn preceded<'a, First, Second>(
+  first: impl Fn(&'a str) -> ParseResult<'a, First>,
+  second: impl Fn(&'a str) -> ParseResult<'a, Second>,
+) -> impl Fn(&'a str) -> ParseResult<'a, Second> {
+  move |input| {
+    let (input, _) = first(input)?;
+    let (input, return_value) = second(input)?;
+    Ok((input, return_value))
   }
 }
 
@@ -259,13 +304,52 @@ pub fn skip_whitespace(input: &str) -> ParseResult<()> {
   Ok(("", ()))
 }
 
+/// Checks if a condition is true for a combinator.
+pub fn if_true<'a, O>(
+  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
+  condition: impl Fn(&O) -> bool,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  move |input| {
+    let (input, value) = combinator(input)?;
+    if condition(&value) {
+      Ok((input, value))
+    } else {
+      ParseError::backtrace()
+    }
+  }
+}
+
+/// Checks if a combinator is true without consuming the input.
+pub fn check<'a, O>(
+  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, ()> {
+  move |input| match combinator(input) {
+    Ok(_) => Ok((input, ())),
+    Err(_) => ParseError::backtrace(),
+  }
+}
+
 /// Checks if a combinator is false without consuming the input.
-pub fn if_not<'a, O>(
+pub fn check_not<'a, O>(
   combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
 ) -> impl Fn(&'a str) -> ParseResult<'a, ()> {
   move |input| match combinator(input) {
     Ok(_) => ParseError::backtrace(),
     Err(_) => Ok((input, ())),
+  }
+}
+
+/// Logs the result for quick debugging purposes.
+#[cfg(debug_assertions)]
+#[allow(dead_code)]
+pub fn log_result<'a, O: std::fmt::Debug>(
+  prefix: &'static str,
+  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  move |input| {
+    let result = combinator(input);
+    println!("{}: {:?}", prefix, result);
+    result
   }
 }
 

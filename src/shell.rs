@@ -6,21 +6,23 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures::future::BoxFuture;
 use futures::FutureExt;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 
-use crate::fs_util;
-
-use super::parser::Command;
 use super::parser::Sequence;
 use super::parser::SequentialList;
 use super::shell_types::EnvChange;
 use super::shell_types::EnvState;
 use super::shell_types::ExecuteResult;
-use super::shell_types::ExecutedSequence;
+use super::shell_types::ExecutedTask;
 use super::shell_types::ShellPipe;
 use super::shell_types::ShellPipeSender;
+use crate::fs_util;
+use crate::parser::Command;
+use crate::StringOrWord;
+use crate::StringPart;
 
 pub async fn execute(
   list: SequentialList,
@@ -30,33 +32,18 @@ pub async fn execute(
 ) -> Result<i32> {
   assert!(cwd.is_absolute());
   let list = append_cli_args(list, additional_cli_args)?;
-  let mut state = EnvState {
-    env_vars,
-    shell_vars: Default::default(),
-    cwd,
+  let state = EnvState::new(env_vars, cwd);
+  let executed = execute_sequential_list(list, state, ShellPipe::InheritStdin);
+  // todo: something better at outputting to stdout?
+  let output_task = tokio::task::spawn(async move {
+    executed.stdout.pipe_to_stdout().await;
+  });
+  let result = executed.task.await;
+  output_task.await.unwrap();
+  let final_exit_code = match result {
+    ExecuteResult::Exit => 1,
+    ExecuteResult::Continue(exit_code, _) => exit_code,
   };
-  let mut async_handles = Vec::new();
-  let mut final_exit_code = 0;
-  for item in list.items {
-    if item.is_async {
-      let state = state.clone();
-      async_handles.push(tokio::task::spawn(async move {
-        execute_top_sequence(item.sequence, state).await
-      }));
-    } else {
-      match execute_top_sequence(item.sequence, state.clone()).await {
-        ExecuteResult::Exit => return Ok(0),
-        ExecuteResult::Continue(exit_code, changes) => {
-          state.apply_changes(&changes);
-          // use the final sequential item's exit code
-          final_exit_code = exit_code;
-        }
-      }
-    }
-  }
-
-  // wait for async commands to complete
-  futures::future::join_all(async_handles).await;
 
   Ok(final_exit_code)
 }
@@ -80,18 +67,73 @@ fn append_cli_args(
   Ok(list)
 }
 
-async fn execute_top_sequence(
-  sequence: Sequence,
-  state: EnvState,
-) -> ExecuteResult {
-  let command = execute_sequence(sequence, state, ShellPipe::InheritStdin);
-  // todo: something better at outputting to stdout?
-  let output_task = tokio::task::spawn(async move {
-    command.stdout.pipe_to_stdout().await;
-  });
-  let result = command.task.await;
-  output_task.await.unwrap();
-  result
+fn execute_sequential_list(
+  list: SequentialList,
+  mut state: EnvState,
+  mut stdin: ShellPipe,
+) -> ExecutedTask {
+  let (stdout_tx, stdout) = ShellPipe::channel();
+  ExecutedTask {
+    stdout,
+    task: async move {
+      let mut final_exit_code = 0;
+      let mut final_changes = Vec::new();
+      let mut async_handles = Vec::new();
+      for item in list.items {
+        if item.is_async {
+          let state = state.clone();
+          let stdout_tx = stdout_tx.clone();
+          async_handles.push(tokio::task::spawn(async move {
+            let command = execute_sequence(
+              item.sequence,
+              state,
+              // todo: not correct... should use provided stdin
+              ShellPipe::InheritStdin,
+            )
+            .await;
+            // todo: better code
+            let output_task = tokio::task::spawn(async move {
+              command.stdout.pipe_to_sender(stdout_tx).await;
+            });
+            let result = command.task.await;
+            output_task.await.unwrap();
+            result
+          }));
+        } else {
+          // todo: this doesn't seem correct. I believe all these commands
+          // should use the same stdin and not inherit from the process after
+          // the first item in the sequential list.
+          let stdin = std::mem::replace(&mut stdin, ShellPipe::InheritStdin);
+          let command =
+            execute_sequence(item.sequence, state.clone(), stdin).await;
+          // todo: something better?
+          let output_task = tokio::task::spawn({
+            let stdout_tx = stdout_tx.clone();
+            async move {
+              command.stdout.pipe_to_sender(stdout_tx).await;
+            }
+          });
+          let result = command.task.await;
+          output_task.await.unwrap();
+          match result {
+            ExecuteResult::Exit => return ExecuteResult::Exit,
+            ExecuteResult::Continue(exit_code, changes) => {
+              state.apply_changes(&changes);
+              final_changes.extend(changes);
+              // use the final sequential item's exit code
+              final_exit_code = exit_code;
+            }
+          }
+        }
+      }
+
+      // wait for async commands to complete
+      futures::future::join_all(async_handles).await;
+
+      ExecuteResult::Continue(final_exit_code, final_changes)
+    }
+    .boxed(),
+  }
 }
 
 // todo(THIS PR): clean up this function
@@ -99,127 +141,132 @@ fn execute_sequence(
   sequence: Sequence,
   mut state: EnvState,
   stdin: ShellPipe,
-) -> ExecutedSequence {
-  match sequence {
-    Sequence::EnvVar(var) => {
-      ExecutedSequence::from_result(ExecuteResult::Continue(
-        0,
-        vec![EnvChange::SetEnvVar(
-          var.name,
-          state.evaluate_string_parts(&var.value),
-        )],
-      ))
-    }
-    Sequence::ShellVar(var) => {
-      ExecutedSequence::from_result(ExecuteResult::Continue(
-        0,
-        vec![EnvChange::SetShellVar(
-          var.name,
-          state.evaluate_string_parts(&var.value),
-        )],
-      ))
-    }
-    Sequence::Command(command) => start_command(&command, &state, stdin),
-    Sequence::BooleanList(list) => {
-      let (stdout_tx, stdout) = ShellPipe::channel();
-      ExecutedSequence {
-        stdout,
-        task: async move {
-          // todo(THIS PR): clean this up
-          let mut changes = vec![];
-          let first_result = execute_and_wait_sequence(
-            list.current,
-            state.clone(),
-            stdin,
-            stdout_tx.clone(),
-          )
-          .await;
-          let exit_code = match first_result {
-            ExecuteResult::Exit => return ExecuteResult::Exit,
-            ExecuteResult::Continue(exit_code, sub_changes) => {
-              state.apply_changes(&sub_changes);
-              changes.extend(sub_changes);
-              exit_code
-            }
-          };
-
-          let next = if list.op.moves_next_for_exit_code(exit_code) {
-            Some(list.next)
-          } else {
-            let mut next = list.next;
-            loop {
-              // boolean lists always move right on the tree
-              match next {
-                Sequence::BooleanList(list) => {
-                  if list.op.moves_next_for_exit_code(exit_code) {
-                    break Some(list.next);
-                  }
-                  next = list.next;
-                }
-                _ => break None,
-              }
-            }
-          };
-          if let Some(next) = next {
-            let next_result = execute_and_wait_sequence(
-              next,
+) -> BoxFuture<'static, ExecutedTask> {
+  // requires boxed async because of recursive async
+  async move {
+    match sequence {
+      Sequence::EnvVar(var) => {
+        ExecutedTask::from_result(ExecuteResult::Continue(
+          0,
+          vec![EnvChange::SetEnvVar(
+            var.name,
+            evaluate_string_or_word(var.value, &state).await,
+          )],
+        ))
+      }
+      Sequence::ShellVar(var) => {
+        ExecutedTask::from_result(ExecuteResult::Continue(
+          0,
+          vec![EnvChange::SetShellVar(
+            var.name,
+            evaluate_string_or_word(var.value, &state).await,
+          )],
+        ))
+      }
+      Sequence::Command(command) => start_command(command, &state, stdin).await,
+      Sequence::BooleanList(list) => {
+        let (stdout_tx, stdout) = ShellPipe::channel();
+        ExecutedTask {
+          stdout,
+          task: async move {
+            // todo(THIS PR): clean this up
+            let mut changes = vec![];
+            let first_result = execute_and_wait_sequence(
+              list.current,
               state.clone(),
-              // seems suspect, but good enough for now
-              ShellPipe::InheritStdin,
+              stdin,
               stdout_tx.clone(),
             )
             .await;
-            match next_result {
-              ExecuteResult::Exit => ExecuteResult::Exit,
+            let exit_code = match first_result {
+              ExecuteResult::Exit => return ExecuteResult::Exit,
               ExecuteResult::Continue(exit_code, sub_changes) => {
+                state.apply_changes(&sub_changes);
                 changes.extend(sub_changes);
-                ExecuteResult::Continue(exit_code, changes)
+                exit_code
+              }
+            };
+
+            let next = if list.op.moves_next_for_exit_code(exit_code) {
+              Some(list.next)
+            } else {
+              let mut next = list.next;
+              loop {
+                // boolean lists always move right on the tree
+                match next {
+                  Sequence::BooleanList(list) => {
+                    if list.op.moves_next_for_exit_code(exit_code) {
+                      break Some(list.next);
+                    }
+                    next = list.next;
+                  }
+                  _ => break None,
+                }
+              }
+            };
+            if let Some(next) = next {
+              let next_result = execute_and_wait_sequence(
+                next,
+                state.clone(),
+                // seems suspect, but good enough for now
+                ShellPipe::InheritStdin,
+                stdout_tx.clone(),
+              )
+              .await;
+              match next_result {
+                ExecuteResult::Exit => ExecuteResult::Exit,
+                ExecuteResult::Continue(exit_code, sub_changes) => {
+                  changes.extend(sub_changes);
+                  ExecuteResult::Continue(exit_code, changes)
+                }
+              }
+            } else {
+              ExecuteResult::Continue(exit_code, changes)
+            }
+          }
+          .boxed(),
+        }
+      }
+      Sequence::Pipeline(pipeline) => {
+        let (stdout_tx, stdout) = ShellPipe::channel();
+        ExecutedTask {
+          stdout,
+          task: async move {
+            let sequences = pipeline.into_vec();
+            let mut wait_tasks = vec![];
+            let mut last_input = Some(stdin);
+            for sequence in sequences.into_iter() {
+              let executed_sequence = execute_sequence(
+                sequence,
+                state.clone(),
+                last_input.take().unwrap(),
+              )
+              .await;
+              last_input = Some(executed_sequence.stdout);
+              wait_tasks.push(executed_sequence.task);
+            }
+            // todo: something better
+            let output_task = tokio::task::spawn({
+              async move {
+                last_input.unwrap().pipe_to_sender(stdout_tx).await;
+              }
+            });
+            let mut results = futures::future::join_all(wait_tasks).await;
+            output_task.await.unwrap();
+            let last_result = results.pop().unwrap();
+            match last_result {
+              ExecuteResult::Exit => ExecuteResult::Continue(1, Vec::new()),
+              ExecuteResult::Continue(exit_code, _) => {
+                ExecuteResult::Continue(exit_code, Vec::new())
               }
             }
-          } else {
-            ExecuteResult::Continue(exit_code, changes)
           }
+          .boxed(),
         }
-        .boxed(),
-      }
-    }
-    Sequence::Pipeline(pipeline) => {
-      let (stdout_tx, stdout) = ShellPipe::channel();
-      ExecutedSequence {
-        stdout,
-        task: async move {
-          let sequences = pipeline.into_vec();
-          let mut wait_tasks = vec![];
-          let mut last_input = Some(stdin);
-          for sequence in sequences.into_iter() {
-            let executed_sequence = execute_sequence(
-              sequence,
-              state.clone(),
-              last_input.take().unwrap(),
-            );
-            last_input = Some(executed_sequence.stdout);
-            wait_tasks.push(executed_sequence.task);
-          }
-          // todo: something better
-          let output_task = tokio::task::spawn({
-            async move {
-              last_input.unwrap().pipe_to_sender(stdout_tx).await;
-            }
-          });
-          let mut results = futures::future::join_all(wait_tasks).await;
-          output_task.await.unwrap();
-          let last_result = results.pop().unwrap();
-          match last_result {
-            ExecuteResult::Exit => ExecuteResult::Continue(1, Vec::new()),
-            ExecuteResult::Continue(exit_code, _) => {
-              ExecuteResult::Continue(exit_code, Vec::new())
-            }
-          }
-        }
-        .boxed(),
       }
     }
   }
+  .boxed()
 }
 
 async fn execute_and_wait_sequence(
@@ -228,7 +275,7 @@ async fn execute_and_wait_sequence(
   stdin: ShellPipe,
   sender: ShellPipeSender,
 ) -> ExecuteResult {
-  let command = execute_sequence(sequence, state, stdin);
+  let command = execute_sequence(sequence, state, stdin).await;
   // todo: something better
   let output_task = tokio::task::spawn({
     async move {
@@ -240,21 +287,21 @@ async fn execute_and_wait_sequence(
   result
 }
 
-fn start_command(
-  command: &Command,
+async fn start_command(
+  command: Command,
   state: &EnvState,
   stdin: ShellPipe,
-) -> ExecutedSequence {
-  let command_name = state.evaluate_string_parts(&command.name);
-  let args = command
-    .args
-    .iter()
-    .map(|p| state.evaluate_string_parts(p))
-    .collect::<Vec<_>>();
+) -> ExecutedTask {
+  let mut args = evaluate_args(command.args, state).await;
+  let command_name = if args.is_empty() {
+    String::new()
+  } else {
+    args.remove(0)
+  };
   if command_name == "cd" {
-    let cwd = state.cwd.clone();
+    let cwd = state.cwd().clone();
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedSequence {
+    ExecutedTask {
       stdout,
       task: async move {
         drop(tx); // close stdout
@@ -279,7 +326,7 @@ fn start_command(
     }
   } else if command_name == "exit" {
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedSequence {
+    ExecutedTask {
       stdout,
       task: async move {
         drop(tx); // close stdout
@@ -294,18 +341,18 @@ fn start_command(
     }
   } else if command_name == "pwd" {
     // ignores additional arguments
-    ExecutedSequence::with_stdout_text(format!("{}\n", state.cwd.display()))
+    ExecutedTask::with_stdout_text(format!("{}\n", state.cwd().display()))
   } else if command_name == "echo" {
-    ExecutedSequence::with_stdout_text(format!("{}\n", args.join(" ")))
+    ExecutedTask::with_stdout_text(format!("{}\n", args.join(" ")))
   } else if command_name == "true" {
     // ignores additional arguments
-    ExecutedSequence::from_exit_code(0)
+    ExecutedTask::from_exit_code(0)
   } else if command_name == "false" {
     // ignores additional arguments
-    ExecutedSequence::from_exit_code(1)
+    ExecutedTask::from_exit_code(1)
   } else if command_name == "sleep" {
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedSequence {
+    ExecutedTask {
       stdout,
       task: async move {
         // the time to sleep is the sum of all the arguments
@@ -330,21 +377,21 @@ fn start_command(
     }
   } else {
     let mut state = state.clone();
-    for env_var in &command.env_vars {
+    for env_var in command.env_vars {
       state.apply_env_var(
         &env_var.name,
-        &state.evaluate_string_parts(&env_var.value),
+        &evaluate_string_or_word(env_var.value, &state).await,
       );
     }
 
     // todo: proper discovery of command names (see deno_vscode)
     let mut sub_command = if command_name.starts_with("./") {
-      tokio::process::Command::new(state.cwd.join(&command_name))
+      tokio::process::Command::new(state.cwd().join(&command_name))
     } else {
       tokio::process::Command::new(&command_name)
     };
     let child = sub_command
-      .current_dir(state.cwd)
+      .current_dir(state.cwd())
       .args(&args)
       .envs(&state.env_vars)
       .stdout(Stdio::piped())
@@ -359,7 +406,7 @@ fn start_command(
       Ok(child) => child,
       Err(err) => {
         eprintln!("Error launching '{}': {}", command_name, err);
-        return ExecutedSequence::from_result(ExecuteResult::Continue(
+        return ExecutedTask::from_result(ExecuteResult::Continue(
           1,
           Vec::new(),
         ));
@@ -382,7 +429,7 @@ fn start_command(
     let mut child_stdout = child.stdout.take().unwrap();
     let (stdout_tx, stdout) = ShellPipe::channel();
 
-    ExecutedSequence {
+    ExecutedTask {
       stdout,
       task: async move {
         let (process_exit_tx, mut process_exit_rx) =
@@ -426,4 +473,108 @@ fn start_command(
       .boxed(),
     }
   }
+}
+
+async fn evaluate_args(
+  args: Vec<StringOrWord>,
+  state: &EnvState,
+) -> Vec<String> {
+  let mut result = Vec::new();
+  for arg in args {
+    match arg {
+      StringOrWord::Word(parts) => {
+        // todo: maybe we should have this work like sh and I believe
+        // reparse then continually re-evaluate until there's only strings left
+        let text = evaluate_string_parts(parts, state).await;
+        for part in text.split(' ') {
+          let part = part.trim();
+          if !part.is_empty() {
+            result.push(part.to_string());
+          }
+        }
+      }
+      StringOrWord::String(parts) => {
+        result.push(evaluate_string_parts(parts, state).await);
+      }
+    }
+  }
+  result
+}
+
+async fn evaluate_string_or_word(
+  string_or_word: StringOrWord,
+  state: &EnvState,
+) -> String {
+  evaluate_string_parts(string_or_word.into_parts(), state).await
+}
+
+async fn evaluate_string_parts(
+  parts: Vec<StringPart>,
+  state: &EnvState,
+) -> String {
+  let mut final_text = String::new();
+  for part in parts {
+    match part {
+      StringPart::Text(text) => final_text.push_str(&text),
+      StringPart::Variable(name) => {
+        if let Some(value) = evaluate_string_part_variable(&name, state) {
+          final_text.push_str(value);
+        }
+      }
+      StringPart::SubShell(list) => {
+        final_text.push_str(&evaluate_string_part_subshell(list, state).await)
+      }
+    }
+  }
+  final_text
+}
+
+fn evaluate_string_part_variable<'a>(
+  name: &str,
+  state: &'a EnvState,
+) -> Option<&'a String> {
+  state
+    .env_vars
+    .get(name)
+    .or_else(|| state.shell_vars.get(name))
+}
+
+async fn evaluate_string_part_subshell(
+  list: SequentialList,
+  state: &EnvState,
+) -> String {
+  let task = execute_sequential_list(
+    list,
+    state.clone(),
+    // todo: this is not correct. It should use the current stdin.
+    ShellPipe::InheritStdin,
+  );
+  // todo: something better?
+  let output_task = tokio::task::spawn(async {
+    let mut final_data = Vec::new();
+    match task.stdout {
+      ShellPipe::InheritStdin => unreachable!(),
+      ShellPipe::Channel(mut rx) => {
+        while let Some(data) = rx.recv().await {
+          final_data.extend(data);
+        }
+      }
+    }
+    final_data
+  });
+  let _ = task.task.await;
+  let data = output_task.await.unwrap();
+  let text = String::from_utf8_lossy(&data);
+
+  // Remove the trailing newline and then replace inner newlines with a space
+  // This seems to be what sh does, but I'm not entirely sure:
+  //
+  // > echo $(echo 1 && echo -e "\n2\n")
+  // 1 2
+  text
+    .strip_suffix("\r\n")
+    .or_else(|| text.strip_suffix('\n'))
+    .unwrap_or(&text)
+    .replace("\r\n", " ")
+    .replace('\n', " ")
 }
