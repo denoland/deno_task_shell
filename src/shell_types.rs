@@ -26,7 +26,7 @@ pub struct EnvState {
 }
 
 impl EnvState {
-  pub fn new(env_vars: HashMap<String, String>, cwd: PathBuf) -> Self {
+  pub fn new(env_vars: HashMap<String, String>, cwd: &Path) -> Self {
     let mut result = Self {
       env_vars: Default::default(),
       shell_vars: Default::default(),
@@ -36,7 +36,7 @@ impl EnvState {
     for (name, value) in env_vars {
       result.apply_env_var(&name, &value);
     }
-    result.set_cwd(&cwd);
+    result.set_cwd(cwd);
     result
   }
 

@@ -1,6 +1,7 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -31,11 +32,9 @@ use crate::shell_types::ShellPipeSender;
 pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<String, String>,
-  cwd: PathBuf,
-  additional_cli_args: Vec<String>,
+  cwd: &Path,
 ) -> Result<i32> {
   assert!(cwd.is_absolute());
-  let list = append_cli_args(list, additional_cli_args)?;
   let state = EnvState::new(env_vars, cwd);
   let executed = execute_sequential_list(list, state, ShellPipe::InheritStdin);
   // todo: something better at outputting to stdout?
@@ -49,25 +48,6 @@ pub async fn execute(
     ExecuteResult::Exit => 1,
     ExecuteResult::Continue(exit_code, _) => exit_code,
   })
-}
-
-/// When a user calls `deno task <task-name> -- <args>`, we want
-/// to append those CLI arguments to the last command.
-fn append_cli_args(
-  mut list: SequentialList,
-  args: Vec<String>,
-) -> Result<SequentialList> {
-  if args.is_empty() {
-    return Ok(list);
-  }
-
-  // todo(THIS PR): this part and remove this clippy
-  #[allow(clippy::redundant_pattern_matching)]
-  if let Some(_) = list.items.last_mut() {
-    todo!();
-  }
-
-  Ok(list)
 }
 
 fn execute_sequential_list(
