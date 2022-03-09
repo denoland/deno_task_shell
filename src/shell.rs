@@ -247,6 +247,14 @@ fn execute_sequence(
           .boxed(),
         }
       }
+      Sequence::Subshell(list) => {
+        execute_sequential_list(
+          *list,
+          state.clone(),
+          // todo: this is not correct. It should use the current stdin.
+          ShellPipe::InheritStdin,
+        )
+      }
     }
   }
   .boxed()
@@ -578,15 +586,15 @@ async fn evaluate_string_parts(
           final_text.push_str(value);
         }
       }
-      StringPart::SubShell(list) => {
-        final_text.push_str(&evaluate_string_part_subshell(list, state).await)
+      StringPart::Command(list) => {
+        final_text.push_str(&evaluate_command_substitution(list, state).await)
       }
     }
   }
   final_text
 }
 
-async fn evaluate_string_part_subshell(
+async fn evaluate_command_substitution(
   list: SequentialList,
   state: &EnvState,
 ) -> String {

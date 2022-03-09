@@ -50,12 +50,14 @@ pub enum Sequence {
   EnvVar(EnvVar),
   /// `MY_VAR=5`
   ShellVar(EnvVar),
-  // cmd_name <args...>
+  /// `cmd_name <args...>`
   Command(Command),
-  // cmd1 | cmd2
+  /// `cmd1 | cmd2`
   Pipeline(Box<Pipeline>),
-  // cmd1 && cmd2 || cmd3
+  /// `cmd1 && cmd2 || cmd3`
   BooleanList(Box<BooleanList>),
+  /// `(list)`
+  Subshell(Box<SequentialList>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,9 +158,12 @@ impl StringOrWord {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringPart {
-  Variable(String),
+  /// Text in the string (ex. `some text`)
   Text(String),
-  SubShell(SequentialList),
+  /// Variable substitution (ex. `$MY_VAR`)
+  Variable(String),
+  /// Command substitution (ex. `$(command)`)
+  Command(SequentialList),
 }
 
 /// Note: Only used to detect redirects in order to give a better error.
@@ -232,7 +237,8 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 }
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
-  let (input, current) = or(
+  let (input, current) = or3(
+    map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
     parse_env_or_shell_var_command,
     map(parse_command, Sequence::Command),
   )(input)?;
@@ -516,12 +522,12 @@ pub(crate) fn parse_string_parts(
     enum PendingPart<'a> {
       Char(char),
       Variable(&'a str),
-      SubShell(SequentialList),
+      Command(SequentialList),
     }
 
     let (input, parts) = many0(or5(
       map(first_escaped_char(&allow_char), PendingPart::Char),
-      map(parse_subshell, PendingPart::SubShell),
+      map(parse_command_substitution, PendingPart::Command),
       map(
         preceded(char('$'), parse_env_var_name),
         PendingPart::Variable,
@@ -546,7 +552,7 @@ pub(crate) fn parse_string_parts(
             result.push(StringPart::Text(c.to_string()));
           }
         }
-        PendingPart::SubShell(s) => result.push(StringPart::SubShell(s)),
+        PendingPart::Command(s) => result.push(StringPart::Command(s)),
         PendingPart::Variable(v) => {
           result.push(StringPart::Variable(v.to_string()))
         }
@@ -557,8 +563,12 @@ pub(crate) fn parse_string_parts(
   }
 }
 
-fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
+fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
   delimited(tag("$("), parse_sequential_list, char(')'))(input)
+}
+
+fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
+  delimited(char('('), parse_sequential_list, char(')'))(input)
 }
 
 fn parse_usize(input: &str) -> ParseResult<usize> {
@@ -673,7 +683,12 @@ mod test {
   fn test_sequential_list() {
     run_test(
       parse_sequential_list,
-      "Name=Value OtherVar=Other command arg1 || command2 arg12 arg13 ; command3 && command4 & command5 ; export ENV6=5 ; ENV7=other && command8 || command9",
+      concat!(
+        "Name=Value OtherVar=Other command arg1 || command2 arg12 arg13 ; ",
+        "command3 && command4 & command5 ; export ENV6=5 ; ",
+        "ENV7=other && command8 || command9 ; ",
+        "cmd10 && (cmd11 || cmd12)"
+      ),
       Ok(SequentialList {
         items: vec![
           SequentialListItem {
@@ -681,10 +696,19 @@ mod test {
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: Sequence::Command(Command {
                 env_vars: vec![
-                  EnvVar::new("Name".to_string(), StringOrWord::new_word("Value")),
-                  EnvVar::new("OtherVar".to_string(), StringOrWord::new_word("Other")),
+                  EnvVar::new(
+                    "Name".to_string(),
+                    StringOrWord::new_word("Value"),
+                  ),
+                  EnvVar::new(
+                    "OtherVar".to_string(),
+                    StringOrWord::new_word("Other"),
+                  ),
                 ],
-                args: vec![StringOrWord::new_word("command"), StringOrWord::new_word("arg1")],
+                args: vec![
+                  StringOrWord::new_word("command"),
+                  StringOrWord::new_word("arg1"),
+                ],
               }),
               op: BooleanListOperator::Or,
               next: Sequence::Command(Command {
@@ -720,12 +744,18 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::EnvVar(EnvVar::new("ENV6".to_string(), StringOrWord::new_word("5"))),
+            sequence: Sequence::EnvVar(EnvVar::new(
+              "ENV6".to_string(),
+              StringOrWord::new_word("5"),
+            )),
           },
           SequentialListItem {
             is_async: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
-              current: Sequence::ShellVar(EnvVar::new("ENV7".to_string(), StringOrWord::new_word("other"))),
+              current: Sequence::ShellVar(EnvVar::new(
+                "ENV7".to_string(),
+                StringOrWord::new_word("other"),
+              )),
               op: BooleanListOperator::And,
               next: Sequence::BooleanList(Box::new(BooleanList {
                 current: Sequence::Command(Command {
@@ -740,8 +770,34 @@ mod test {
               })),
             })),
           },
+          SequentialListItem {
+            is_async: false,
+            sequence: Sequence::BooleanList(Box::new(BooleanList {
+              current: Sequence::Command(Command {
+                env_vars: vec![],
+                args: vec![StringOrWord::new_word("cmd10")],
+              }),
+              op: BooleanListOperator::And,
+              next: Sequence::Subshell(Box::new(SequentialList {
+                items: vec![SequentialListItem {
+                  is_async: false,
+                  sequence: Sequence::BooleanList(Box::new(BooleanList {
+                    current: Sequence::Command(Command {
+                      env_vars: vec![],
+                      args: vec![StringOrWord::new_word("cmd11")],
+                    }),
+                    op: BooleanListOperator::Or,
+                    next: Sequence::Command(Command {
+                      env_vars: vec![],
+                      args: vec![StringOrWord::new_word("cmd12")],
+                    }),
+                  })),
+                }],
+              })),
+            })),
+          },
         ],
-      })
+      }),
     );
 
     run_test(
@@ -884,7 +940,7 @@ mod test {
       "Name=$(test)",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringOrWord::Word(vec![StringPart::SubShell(SequentialList {
+        value: StringOrWord::Word(vec![StringPart::Command(SequentialList {
           items: vec![SequentialListItem {
             is_async: false,
             sequence: Sequence::Command(Command {
@@ -901,7 +957,7 @@ mod test {
       "Name=$(OTHER=5)",
       Ok(EnvVar {
         name: "Name".to_string(),
-        value: StringOrWord::Word(vec![StringPart::SubShell(SequentialList {
+        value: StringOrWord::Word(vec![StringPart::Command(SequentialList {
           items: vec![SequentialListItem {
             is_async: false,
             sequence: Sequence::ShellVar(EnvVar {
