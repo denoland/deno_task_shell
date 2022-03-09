@@ -1,4 +1,4 @@
-# deno_ast
+# deno_task_shell
 
 [![](https://img.shields.io/crates/v/deno_task_shell.svg)](https://crates.io/crates/deno_task_shell)
 
