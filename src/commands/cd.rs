@@ -103,7 +103,11 @@ mod test {
         .err()
         .unwrap()
         .to_string(),
-      "The system cannot find the file specified. (os error 2)"
+      if cfg!(windows) {
+        "The system cannot find the file specified. (os error 2)"
+      } else {
+        "No such file or directory (os error 2)"
+      }
     );
 
     // existent file

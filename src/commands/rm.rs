@@ -167,7 +167,10 @@ mod test {
       execute_remove(dir.path(), vec!["non_existent.txt".to_string()]).await;
     assert_eq!(
       result.err().unwrap().to_string(),
-      "cannot remove 'non_existent.txt': The system cannot find the file specified. (os error 2)"
+      format!(
+        "cannot remove 'non_existent.txt': {}",
+        no_such_file_error_text()
+      )
     );
 
     assert!(existent_file.exists());
@@ -190,7 +193,10 @@ mod test {
     .await;
     assert_eq!(
       result.err().unwrap().to_string(),
-      "cannot remove 'non_existent.txt': The system cannot find the file specified. (os error 2)"
+      format!(
+        "cannot remove 'non_existent.txt': {}",
+        no_such_file_error_text()
+      )
     );
 
     // test on a file
@@ -219,10 +225,18 @@ mod test {
         .await;
     assert_eq!(
       result.err().unwrap().to_string(),
-      "cannot remove 'folder': The system cannot find the file specified. (os error 2)"
+      format!("cannot remove 'folder': {}", no_such_file_error_text())
     );
     execute_remove(dir.path(), vec!["-rf".to_string(), "folder".to_string()])
       .await
       .unwrap();
+  }
+
+  fn no_such_file_error_text() -> &'static str {
+    if cfg!(windows) {
+      "The system cannot find the file specified. (os error 2)"
+    } else {
+      "No such file or directory (os error 2)"
+    }
   }
 }
