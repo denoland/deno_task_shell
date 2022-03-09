@@ -10,40 +10,6 @@ use crate::shell_types::ExecuteResult;
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
 
-#[derive(Default, Debug, PartialEq)]
-struct RmFlags {
-  force: bool,
-  recursive: bool,
-  paths: Vec<String>,
-}
-
-fn parse_args(args: Vec<String>) -> Result<RmFlags> {
-  let mut result = RmFlags::default();
-
-  for arg in parse_arg_kinds(&args) {
-    match arg {
-      ArgKind::LongFlag("recursive")
-      | ArgKind::ShortFlag('r')
-      | ArgKind::ShortFlag('R') => {
-        result.recursive = true;
-      }
-      ArgKind::LongFlag("force") | ArgKind::ShortFlag('f') => {
-        result.force = true;
-      }
-      ArgKind::Arg(path) => {
-        result.paths.push(path.to_string());
-      }
-      ArgKind::LongFlag(_) | ArgKind::ShortFlag(_) => arg.bail_unsupported()?,
-    }
-  }
-
-  if result.paths.is_empty() {
-    bail!("missing operand");
-  }
-
-  Ok(result)
-}
-
 pub async fn rm_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
   match execute_remove(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new()),
@@ -86,6 +52,40 @@ async fn remove_file(
     }
   }
   Ok(())
+}
+
+#[derive(Default, Debug, PartialEq)]
+struct RmFlags {
+  force: bool,
+  recursive: bool,
+  paths: Vec<String>,
+}
+
+fn parse_args(args: Vec<String>) -> Result<RmFlags> {
+  let mut result = RmFlags::default();
+
+  for arg in parse_arg_kinds(&args) {
+    match arg {
+      ArgKind::LongFlag("recursive")
+      | ArgKind::ShortFlag('r')
+      | ArgKind::ShortFlag('R') => {
+        result.recursive = true;
+      }
+      ArgKind::LongFlag("force") | ArgKind::ShortFlag('f') => {
+        result.force = true;
+      }
+      ArgKind::Arg(path) => {
+        result.paths.push(path.to_string());
+      }
+      ArgKind::LongFlag(_) | ArgKind::ShortFlag(_) => arg.bail_unsupported()?,
+    }
+  }
+
+  if result.paths.is_empty() {
+    bail!("missing operand");
+  }
+
+  Ok(result)
 }
 
 #[cfg(test)]
