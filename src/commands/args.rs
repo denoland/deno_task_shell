@@ -37,8 +37,12 @@ pub fn parse_arg_kinds(flags: &[String]) -> Vec<ArgKind> {
     } else if let Some(flag) = arg.strip_prefix("--") {
       result.push(ArgKind::LongFlag(flag));
     } else if let Some(flags) = arg.strip_prefix('-') {
-      for c in flags.chars() {
-        result.push(ArgKind::ShortFlag(c));
+      if flags.parse::<f64>().is_ok() {
+        result.push(ArgKind::Arg(arg));
+      } else {
+        for c in flags.chars() {
+          result.push(ArgKind::ShortFlag(c));
+        }
       }
     } else {
       result.push(ArgKind::Arg(arg));
@@ -60,6 +64,8 @@ mod test {
       "--force".to_string(),
       "testing".to_string(),
       "other".to_string(),
+      "-1".to_string(),
+      "-6.4".to_string(),
       "--".to_string(),
       "--test".to_string(),
       "-t".to_string(),
@@ -74,6 +80,8 @@ mod test {
         ArgKind::LongFlag("force"),
         ArgKind::Arg("testing"),
         ArgKind::Arg("other"),
+        ArgKind::Arg("-1"),
+        ArgKind::Arg("-6.4"),
         ArgKind::Arg("--test"),
         ArgKind::Arg("-t"),
       ]

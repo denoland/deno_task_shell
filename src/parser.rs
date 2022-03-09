@@ -3,33 +3,7 @@
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::combinators::assert;
-use crate::combinators::assert_exists;
-use crate::combinators::char;
-use crate::combinators::check_not;
-use crate::combinators::delimited;
-use crate::combinators::if_true;
-use crate::combinators::many0;
-use crate::combinators::many_till;
-use crate::combinators::map;
-use crate::combinators::maybe;
-use crate::combinators::next_char;
-use crate::combinators::one_of;
-use crate::combinators::or;
-use crate::combinators::or3;
-use crate::combinators::or4;
-use crate::combinators::or5;
-use crate::combinators::preceded;
-use crate::combinators::separated_list;
-use crate::combinators::skip_whitespace;
-use crate::combinators::tag;
-use crate::combinators::take_while;
-use crate::combinators::terminated;
-use crate::combinators::with_error_context;
-use crate::combinators::with_failure_input;
-use crate::combinators::ParseError;
-use crate::combinators::ParseErrorFailure;
-use crate::combinators::ParseResult;
+use crate::combinators::*;
 
 // Shell grammar rules this is loosely based on:
 // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_10_02
@@ -237,10 +211,13 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 }
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
-  let (input, current) = or3(
-    map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
-    parse_env_or_shell_var_command,
-    map(parse_command, Sequence::Command),
+  let (input, current) = terminated(
+    or3(
+      map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
+      parse_env_or_shell_var_command,
+      map(parse_command, Sequence::Command),
+    ),
+    skip_whitespace,
   )(input)?;
   let (input, current) = match parse_boolean_list_op(input) {
     Ok((input, op)) => {

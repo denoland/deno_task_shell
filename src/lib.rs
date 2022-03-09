@@ -2,9 +2,15 @@
 
 mod combinators;
 mod commands;
+mod environment;
 mod fs_util;
 pub mod parser;
 mod shell;
 mod shell_types;
 
 pub use shell::*;
+
+#[cfg(test)]
+mod test;
+#[cfg(test)]
+mod test_builder;

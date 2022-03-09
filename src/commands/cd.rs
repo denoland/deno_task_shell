@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Result;
 
+use crate::environment::Environment;
 use crate::fs_util;
 use crate::shell_types::EnvChange;
 use crate::shell_types::ExecuteResult;
@@ -13,11 +14,15 @@ use crate::shell_types::ExecuteResult;
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
 
-pub fn cd_command(cwd: &Path, args: Vec<String>) -> ExecuteResult {
+pub fn cd_command(
+  cwd: &Path,
+  args: Vec<String>,
+  environment: impl Environment,
+) -> ExecuteResult {
   match execute_cd(cwd, args) {
     Ok(new_dir) => ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)]),
     Err(err) => {
-      eprintln!("cd: {}", err);
+      environment.eprintln(&format!("cd: {}", err));
       ExecuteResult::Continue(1, Vec::new())
     }
   }

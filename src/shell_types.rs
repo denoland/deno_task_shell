@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use futures::future::BoxFuture;
+use futures::Future;
 use futures::FutureExt;
 use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
@@ -122,7 +123,7 @@ pub enum EnvChange {
 
 #[derive(Debug, PartialEq)]
 pub enum ExecuteResult {
-  Exit,
+  Exit(i32),
   Continue(i32, Vec<EnvChange>),
 }
 
@@ -160,6 +161,40 @@ impl ExecutedStep {
       .boxed(),
     }
   }
+
+  pub fn from_fn(
+    func: impl FnOnce() -> ExecuteResult + Sync + Send + 'static,
+  ) -> Self {
+    Self::from_future(async move { func() })
+  }
+
+  pub fn from_future(
+    future: impl Future<Output = ExecuteResult> + Send + 'static,
+  ) -> Self {
+    let (tx, stdout) = ShellPipe::channel();
+    ExecutedStep {
+      stdout,
+      task: async move {
+        let result = future.await;
+        drop(tx); // close stdout
+        result
+      }
+      .boxed(),
+    }
+  }
+
+  pub async fn wait_with_stdout<T>(
+    self,
+    action: impl FnOnce(ShellPipe) -> T,
+  ) -> ExecuteResult
+  where
+    T: Future<Output = ()> + Send + 'static,
+  {
+    let output_task = tokio::task::spawn(action(self.stdout));
+    let result = self.task.await;
+    output_task.await.unwrap();
+    result
+  }
 }
 
 pub type ShellPipeReceiver = UnboundedReceiver<Vec<u8>>;
@@ -182,7 +217,7 @@ impl ShellPipe {
   /// Write everything to the specified writer
   pub async fn write_all(
     self,
-    mut writer: impl AsyncWrite + std::marker::Unpin,
+    mut writer: Box<dyn AsyncWrite + std::marker::Unpin + Send + Sync>,
   ) -> Result<()> {
     match self {
       ShellPipe::InheritStdin => unreachable!(),
@@ -195,9 +230,12 @@ impl ShellPipe {
     Ok(())
   }
 
-  /// Pipes this pipe to the current process' stdout.
-  pub async fn pipe_to_stdout(self) {
-    let _ = self.write_all(tokio::io::stdout()).await;
+  /// Pipes this pipe to the specified writer.
+  pub async fn pipe_to_writer(
+    self,
+    writer: Box<dyn AsyncWrite + Unpin + Send + Sync>,
+  ) {
+    let _ = self.write_all(writer).await;
   }
 
   /// Pipes this pipe to the specified sender.
