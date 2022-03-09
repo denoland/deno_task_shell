@@ -52,6 +52,20 @@ pub fn next_char(input: &str) -> ParseResult<char> {
   }
 }
 
+/// Recognizes any character in the provided string.
+pub fn one_of<'a>(
+  value: &'static str,
+) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+  move |input| {
+    let (input, c) = next_char(input)?;
+    if value.contains(c) {
+      Ok((input, c))
+    } else {
+      ParseError::backtrace()
+    }
+  }
+}
+
 /// Recognizes a string.
 pub fn tag<'a>(
   value: impl AsRef<str>,
@@ -215,6 +229,24 @@ pub fn assert<'a, O>(
   }
 }
 
+/// Changes the input on a failure in order to provide
+/// a better error message.
+pub fn with_failure_input<'a, O>(
+  new_input: &'a str,
+  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  move |input| {
+    let result = combinator(input);
+    match result {
+      Err(ParseError::Failure(mut err)) => {
+        err.input = new_input;
+        Err(ParseError::Failure(err))
+      }
+      _ => result,
+    }
+  }
+}
+
 /// Provides some context to a failure.
 pub fn with_error_context<'a, O>(
   combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
@@ -320,6 +352,7 @@ pub fn if_true<'a, O>(
 }
 
 /// Checks if a combinator is true without consuming the input.
+#[allow(dead_code)]
 pub fn check<'a, O>(
   combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
 ) -> impl Fn(&'a str) -> ParseResult<'a, ()> {

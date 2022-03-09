@@ -6,7 +6,6 @@ use anyhow::Result;
 use crate::combinators::assert;
 use crate::combinators::assert_exists;
 use crate::combinators::char;
-use crate::combinators::check;
 use crate::combinators::check_not;
 use crate::combinators::delimited;
 use crate::combinators::if_true;
@@ -15,6 +14,7 @@ use crate::combinators::many_till;
 use crate::combinators::map;
 use crate::combinators::maybe;
 use crate::combinators::next_char;
+use crate::combinators::one_of;
 use crate::combinators::or;
 use crate::combinators::or3;
 use crate::combinators::or4;
@@ -26,6 +26,7 @@ use crate::combinators::tag;
 use crate::combinators::take_while;
 use crate::combinators::terminated;
 use crate::combinators::with_error_context;
+use crate::combinators::with_failure_input;
 use crate::combinators::ParseError;
 use crate::combinators::ParseErrorFailure;
 use crate::combinators::ParseResult;
@@ -215,10 +216,9 @@ fn parse_sequential_list(input: &str) -> ParseResult<SequentialList> {
     terminated(parse_sequential_list_item, skip_whitespace),
     terminated(
       skip_whitespace,
-      or3(
+      or(
         map(parse_sequential_list_op, |_| ()),
         map(parse_async_list_op, |_| ()),
-        check(char(')')),
       ),
     ),
   )(input)?;
@@ -355,7 +355,7 @@ fn parse_boolean_list_op(input: &str) -> ParseResult<BooleanListOperator> {
 }
 
 fn parse_sequential_list_op(input: &str) -> ParseResult<&str> {
-  parse_op_str(";")(input)
+  terminated(tag(";"), skip_whitespace)(input)
 }
 
 fn parse_async_list_op(input: &str) -> ParseResult<&str> {
@@ -365,17 +365,18 @@ fn parse_async_list_op(input: &str) -> ParseResult<&str> {
 fn parse_op_str<'a>(
   operator: &str,
 ) -> impl Fn(&'a str) -> ParseResult<'a, &'a str> {
+  debug_assert!(operator == "&&" || operator == "||" || operator == "&");
   let operator = operator.to_string();
   terminated(
     tag(operator),
-    terminated(check_not(special_char), skip_whitespace),
+    terminated(check_not(one_of("|&")), skip_whitespace),
   )
 }
 
 fn parse_pipeline_op(input: &str) -> ParseResult<()> {
   terminated(
     map(char('|'), |_| ()),
-    terminated(check_not(special_char), skip_whitespace),
+    terminated(check_not(char('|')), skip_whitespace),
   )(input)
 }
 
@@ -421,9 +422,10 @@ fn parse_string_or_word(input: &str) -> ParseResult<StringOrWord> {
 }
 
 fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
+  const SPECIAL_CHARS: &str = "*~(){}<>$|&;\"'";
   assert(
     parse_string_parts(|c| {
-      !c.is_whitespace() && (c == '$' || !is_special_char(c))
+      !c.is_whitespace() && (c == '$' || !SPECIAL_CHARS.contains(c))
     }),
     |result| {
       result
@@ -474,7 +476,10 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
   delimited(
     char('\''),
     take_while(|c| c != '\''),
-    assert_exists(char('\''), "Expected closing single quote."),
+    with_failure_input(
+      input,
+      assert_exists(char('\''), "Expected closing single quote."),
+    ),
   )(input)
 }
 
@@ -484,7 +489,10 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   delimited(
     char('"'),
     parse_string_parts(|c| c != '"'),
-    assert_exists(char('"'), "Expected closing double quote."),
+    with_failure_input(
+      input,
+      assert_exists(char('"'), "Expected closing double quote."),
+    ),
   )(input)
 }
 
@@ -568,7 +576,14 @@ fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
 }
 
 fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
-  delimited(char('('), parse_sequential_list, char(')'))(input)
+  delimited(
+    terminated(char('('), skip_whitespace),
+    parse_sequential_list,
+    with_failure_input(
+      input,
+      assert_exists(char(')'), "Expected closing parenthesis on subshell."),
+    ),
+  )(input)
 }
 
 fn parse_usize(input: &str) -> ParseResult<usize> {
@@ -600,19 +615,6 @@ fn assert_whitespace_or_end(input: &str) -> ParseResult<()> {
     }
   }
   Ok((input, ()))
-}
-
-fn special_char(input: &str) -> ParseResult<char> {
-  if let Some((index, next_char)) = input.char_indices().next() {
-    if is_special_char(next_char) {
-      return Ok((&input[index..], next_char));
-    }
-  }
-  ParseError::backtrace()
-}
-
-fn is_special_char(c: char) -> bool {
-  "*~(){}<>$|&;\"'".contains(c)
 }
 
 fn is_valid_env_var_char(c: char) -> bool {
@@ -677,6 +679,24 @@ mod test {
       parse("cp test/* other").err().unwrap().to_string(),
       concat!("Globs are currently not supported.\n", "  * other\n", "  ~",),
     );
+    assert_eq!(
+      parse("(test").err().unwrap().to_string(),
+      concat!(
+        "Expected closing parenthesis on subshell.\n",
+        "  (test\n",
+        "  ~"
+      ),
+    );
+    assert_eq!(
+      parse("cmd \"test").err().unwrap().to_string(),
+      concat!("Expected closing double quote.\n", "  \"test\n", "  ~"),
+    );
+    assert_eq!(
+      parse("cmd 'test").err().unwrap().to_string(),
+      concat!("Expected closing single quote.\n", "  'test\n", "  ~"),
+    );
+
+    assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
   }
 
   #[test]
