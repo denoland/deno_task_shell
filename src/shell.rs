@@ -25,7 +25,7 @@ use crate::parser::StringPart;
 use crate::shell_types::EnvChange;
 use crate::shell_types::EnvState;
 use crate::shell_types::ExecuteResult;
-use crate::shell_types::ExecutedTask;
+use crate::shell_types::ExecutedStep;
 use crate::shell_types::ShellPipe;
 use crate::shell_types::ShellPipeSender;
 
@@ -54,9 +54,9 @@ fn execute_sequential_list(
   list: SequentialList,
   mut state: EnvState,
   mut stdin: ShellPipe,
-) -> ExecutedTask {
+) -> ExecutedStep {
   let (stdout_tx, stdout) = ShellPipe::channel();
-  ExecutedTask {
+  ExecutedStep {
     stdout,
     task: async move {
       let mut final_exit_code = 0;
@@ -124,12 +124,12 @@ fn execute_sequence(
   sequence: Sequence,
   mut state: EnvState,
   stdin: ShellPipe,
-) -> BoxFuture<'static, ExecutedTask> {
+) -> BoxFuture<'static, ExecutedStep> {
   // requires boxed async because of recursive async
   async move {
     match sequence {
       Sequence::EnvVar(var) => {
-        ExecutedTask::from_result(ExecuteResult::Continue(
+        ExecutedStep::from_result(ExecuteResult::Continue(
           0,
           vec![EnvChange::SetEnvVar(
             var.name,
@@ -138,7 +138,7 @@ fn execute_sequence(
         ))
       }
       Sequence::ShellVar(var) => {
-        ExecutedTask::from_result(ExecuteResult::Continue(
+        ExecutedStep::from_result(ExecuteResult::Continue(
           0,
           vec![EnvChange::SetShellVar(
             var.name,
@@ -149,7 +149,7 @@ fn execute_sequence(
       Sequence::Command(command) => start_command(command, &state, stdin).await,
       Sequence::BooleanList(list) => {
         let (stdout_tx, stdout) = ShellPipe::channel();
-        ExecutedTask {
+        ExecutedStep {
           stdout,
           task: async move {
             // todo(THIS PR): clean this up
@@ -212,7 +212,7 @@ fn execute_sequence(
       }
       Sequence::Pipeline(pipeline) => {
         let (stdout_tx, stdout) = ShellPipe::channel();
-        ExecutedTask {
+        ExecutedStep {
           stdout,
           task: async move {
             let sequences = pipeline.into_vec();
@@ -282,7 +282,7 @@ async fn start_command(
   command: Command,
   state: &EnvState,
   stdin: ShellPipe,
-) -> ExecutedTask {
+) -> ExecutedStep {
   // todo: reduce code duplication in here
   let mut args = evaluate_args(command.args, state).await;
   let command_name = if args.is_empty() {
@@ -293,7 +293,7 @@ async fn start_command(
   if command_name == "cd" {
     let cwd = state.cwd().clone();
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         let result = cd_command(&cwd, args);
@@ -304,7 +304,7 @@ async fn start_command(
     }
   } else if command_name == "exit" {
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         drop(tx); // close stdout
@@ -319,19 +319,19 @@ async fn start_command(
     }
   } else if command_name == "pwd" {
     // ignores additional arguments
-    ExecutedTask::with_stdout_text(format!("{}\n", state.cwd().display()))
+    ExecutedStep::with_stdout_text(format!("{}\n", state.cwd().display()))
   } else if command_name == "echo" {
-    ExecutedTask::with_stdout_text(format!("{}\n", args.join(" ")))
+    ExecutedStep::with_stdout_text(format!("{}\n", args.join(" ")))
   } else if command_name == "true" {
     // ignores additional arguments
-    ExecutedTask::from_exit_code(0)
+    ExecutedStep::from_exit_code(0)
   } else if command_name == "false" {
     // ignores additional arguments
-    ExecutedTask::from_exit_code(1)
+    ExecutedStep::from_exit_code(1)
   } else if command_name == "cp" {
     let cwd = state.cwd().clone();
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         let result = cp_command(&cwd, args).await;
@@ -343,7 +343,7 @@ async fn start_command(
   } else if command_name == "mv" {
     let cwd = state.cwd().clone();
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         let result = mv_command(&cwd, args).await;
@@ -355,7 +355,7 @@ async fn start_command(
   } else if command_name == "rm" {
     let cwd = state.cwd().clone();
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         let result = rm_command(&cwd, args).await;
@@ -366,7 +366,7 @@ async fn start_command(
     }
   } else if command_name == "sleep" {
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         let result = sleep_command(args).await;
@@ -388,7 +388,7 @@ async fn start_command(
       Ok(command_path) => command_path,
       Err(err) => {
         eprintln!("Error launching '{}': {}", command_name, err);
-        return ExecutedTask::from_result(ExecuteResult::Continue(
+        return ExecutedStep::from_result(ExecuteResult::Continue(
           1,
           Vec::new(),
         ));
@@ -412,7 +412,7 @@ async fn start_command(
       Ok(child) => child,
       Err(err) => {
         eprintln!("Error launching '{}': {}", command_name, err);
-        return ExecutedTask::from_result(ExecuteResult::Continue(
+        return ExecutedStep::from_result(ExecuteResult::Continue(
           1,
           Vec::new(),
         ));
@@ -435,7 +435,7 @@ async fn start_command(
     let mut child_stdout = child.stdout.take().unwrap();
     let (stdout_tx, stdout) = ShellPipe::channel();
 
-    ExecutedTask {
+    ExecutedStep {
       stdout,
       task: async move {
         // spawn a task to pipe the messages from the process' stdout to the channel

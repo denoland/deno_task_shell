@@ -126,12 +126,12 @@ pub enum ExecuteResult {
   Continue(i32, Vec<EnvChange>),
 }
 
-pub struct ExecutedTask {
+pub struct ExecutedStep {
   pub stdout: ShellPipe,
   pub task: BoxFuture<'static, ExecuteResult>,
 }
 
-impl ExecutedTask {
+impl ExecutedStep {
   pub fn from_exit_code(exit_code: i32) -> Self {
     Self::from_result(ExecuteResult::Continue(exit_code, Vec::new()))
   }
