@@ -96,10 +96,11 @@ mod test {
   #[test]
   fn gets_new_cd() {
     let dir = tempdir().unwrap();
+    let dir_path = fs_util::canonicalize_path(dir.path()).unwrap();
 
     // non-existent
     assert_eq!(
-      execute_cd(dir.path(), vec!["non-existent".to_string()])
+      execute_cd(&dir_path, vec!["non-existent".to_string()])
         .err()
         .unwrap()
         .to_string(),
@@ -111,9 +112,9 @@ mod test {
     );
 
     // existent file
-    fs::write(dir.path().join("file.txt"), "").unwrap();
+    fs::write(dir_path.join("file.txt"), "").unwrap();
     assert_eq!(
-      execute_cd(dir.path(), vec!["file.txt".to_string()])
+      execute_cd(&dir_path, vec!["file.txt".to_string()])
         .err()
         .unwrap()
         .to_string(),
@@ -121,7 +122,7 @@ mod test {
     );
 
     // existent dir
-    let sub_dir_path = dir.path().join("sub_dir");
+    let sub_dir_path = dir_path.join("sub_dir");
     fs::create_dir(&sub_dir_path).unwrap();
     assert_eq!(
       execute_cd(dir.path(), vec!["sub_dir".to_string()]).unwrap(),
