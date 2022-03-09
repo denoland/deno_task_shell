@@ -111,6 +111,7 @@ impl EnvState {
   }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum EnvChange {
   // `export ENV_VAR=VALUE`
   SetEnvVar(String, String),
@@ -119,6 +120,7 @@ pub enum EnvChange {
   Cd(PathBuf),
 }
 
+#[derive(Debug, PartialEq)]
 pub enum ExecuteResult {
   Exit,
   Continue(i32, Vec<EnvChange>),
