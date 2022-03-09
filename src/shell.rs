@@ -397,8 +397,7 @@ async fn start_command(
     let command_path = match resolve_command_path(&command_name, &state).await {
       Ok(command_path) => command_path,
       Err(err) => {
-        environment
-          .eprintln(&format!("Error launching '{}': {}", command_name, err));
+        environment.eprintln(&err.to_string());
         return ExecutedStep::from_result(ExecuteResult::Continue(
           1,
           Vec::new(),
@@ -490,7 +489,7 @@ async fn resolve_command_path(
   state: &EnvState,
 ) -> Result<PathBuf> {
   if command_name.is_empty() {
-    bail!("Command name was empty.");
+    bail!("command name was empty");
   }
 
   // check for absolute
@@ -549,7 +548,7 @@ async fn resolve_command_path(
     }
   }
 
-  bail!("Command not found.")
+  bail!("{}: command not found", command_name)
 }
 
 async fn evaluate_args(

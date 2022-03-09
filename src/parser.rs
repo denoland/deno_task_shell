@@ -624,7 +624,7 @@ fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
   } else if input.starts_with('*') {
     ParseErrorFailure::new(input, "Globs are currently not supported.")
   } else {
-    ParseErrorFailure::new(input, "Unsupported character.")
+    ParseErrorFailure::new(input, "Unexpected character.")
   }
 }
 
@@ -638,11 +638,11 @@ mod test {
     assert_eq!(parse("").err().unwrap().to_string(), "Empty command.");
     assert_eq!(
       parse("&& testing").err().unwrap().to_string(),
-      concat!("Unsupported character.\n", "  && testing\n", "  ~",),
+      concat!("Unexpected character.\n", "  && testing\n", "  ~",),
     );
     assert_eq!(
       parse("test { test").err().unwrap().to_string(),
-      concat!("Unsupported character.\n", "  { test\n", "  ~",),
+      concat!("Unexpected character.\n", "  { test\n", "  ~",),
     );
     assert_eq!(
       parse("test > redirect").err().unwrap().to_string(),
