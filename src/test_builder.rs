@@ -1,3 +1,5 @@
+// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;

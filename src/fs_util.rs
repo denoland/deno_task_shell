@@ -14,6 +14,10 @@ pub fn canonicalize_path(path: &Path) -> Result<PathBuf> {
   return Ok(path);
 }
 
+// todo(dsherret): This function was copy and pasted from deno
+// so maybe we could extract it out to a separate crate in order
+// to share the code.
+
 #[cfg(windows)]
 fn strip_unc_prefix(path: PathBuf) -> PathBuf {
   use std::path::Component;

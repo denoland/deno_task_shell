@@ -1,3 +1,5 @@
+// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+
 use crate::test_builder::TestBuilder;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
@@ -170,8 +172,14 @@ pub async fn shell_variables() {
     .await;
 
   TestBuilder::new()
-    .command(r#"VAR=1 && echo Test$VAR && echo $(echo "Test: $VAR") ; echo Final$($VAR)"#)
-    .assert_stdout("Test1\nTest: 1\nFinal\n")
+    .command(r#"VAR=1 && echo $VAR$VAR"#)
+    .assert_stdout("11\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"VAR=1 && echo Test$VAR && echo $(echo "Test: $VAR") ; echo CommandSub$($VAR); echo $ ; echo \$VAR"#)
+    .assert_stdout("Test1\nTest: 1\nCommandSub\n$\n$VAR\n")
     .assert_stderr("1: command not found\n")
     .run()
     .await;

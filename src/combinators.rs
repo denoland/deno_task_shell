@@ -381,7 +381,8 @@ pub fn log_result<'a, O: std::fmt::Debug>(
 ) -> impl Fn(&'a str) -> ParseResult<'a, O> {
   move |input| {
     let result = combinator(input);
-    println!("{}: {:?}", prefix, result);
+    println!("{} (input):  {:?}", prefix, input);
+    println!("{} (result): {:#?}", prefix, result);
     result
   }
 }

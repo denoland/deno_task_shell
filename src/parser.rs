@@ -384,7 +384,12 @@ fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
 }
 
 fn parse_env_var_name(input: &str) -> ParseResult<&str> {
-  take_while(is_valid_env_var_char)(input)
+  let (input, name) = take_while(is_valid_env_var_char)(input)?;
+  if name.is_empty() {
+    ParseError::backtrace()
+  } else {
+    Ok((input, name))
+  }
 }
 
 fn parse_env_var_value(input: &str) -> ParseResult<StringOrWord> {
@@ -486,6 +491,25 @@ pub(crate) fn parse_string_parts(
     )(input)
   }
 
+  fn parse_special_shell_var(input: &str) -> ParseResult<char> {
+    // for now, these hard error
+    preceded(char('$'), |input| {
+      if let Some(char) = input.chars().next() {
+        // $$ - process id
+        // $? - last exit code
+        // $# - number of arguments in $*
+        // $* - list of arguments passed to the current process
+        if "$?#*".contains(char) {
+          return ParseError::fail(
+            input,
+            format!("${} is currently not supported.", char),
+          );
+        }
+      }
+      ParseError::backtrace()
+    })(input)
+  }
+
   fn parse_escaped_char<'a>(
     c: char,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
@@ -495,7 +519,8 @@ pub(crate) fn parse_string_parts(
   fn first_escaped_char<'a>(
     allow_char: impl Fn(char) -> bool,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
-    or4(
+    or5(
+      parse_special_shell_var,
       parse_escaped_dollar_sign,
       parse_escaped_char('`'),
       parse_escaped_char('"'),
@@ -1062,6 +1087,12 @@ mod test {
   #[test]
   fn test_parse_word() {
     run_test(parse_word, "if", Err("Unsupported reserved word."));
+    run_test(parse_word, "$", Ok(vec![StringPart::Text("$".to_string())]));
+    // unsupported shell variables
+    run_test(parse_word, "$$", Err("$$ is currently not supported."));
+    run_test(parse_word, "$?", Err("$? is currently not supported."));
+    run_test(parse_word, "$#", Err("$# is currently not supported."));
+    run_test(parse_word, "$*", Err("$* is currently not supported."));
   }
 
   #[test]
