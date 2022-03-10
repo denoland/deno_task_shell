@@ -310,6 +310,8 @@ mod test {
   fn directory_not_empty_text() -> &'static str {
     if cfg!(windows) {
       "The directory is not empty. (os error 145)"
+    } else if cfg!(target_os = "macos") {
+      "Directory not empty (os error 66)"
     } else {
       "Directory not empty (os error 39)"
     }

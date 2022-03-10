@@ -114,7 +114,7 @@ fn spawn_sequential_list(
             let spawned_step = spawn_sequence(
               item.sequence,
               state,
-              // todo: not correct... should use provided stdin
+              // todo(#2): not correct... should use provided stdin
               ShellPipe::InheritStdin,
               environment,
             )
@@ -127,9 +127,7 @@ fn spawn_sequential_list(
             futures::future::join_all(result.into_handles()).await;
           }));
         } else {
-          // todo: this is not exactly correct. All these commands
-          // should use the same stdin and not inherit from the process after
-          // the first item in the sequential list.
+          // todo(#2): not correct... should share the provided stdin
           let stdin = std::mem::replace(&mut stdin, ShellPipe::InheritStdin);
           let command = spawn_sequence(
             item.sequence,
@@ -168,7 +166,6 @@ fn spawn_sequential_list(
   }
 }
 
-// todo(THIS PR): clean up this function
 fn spawn_sequence(
   sequence: Sequence,
   mut state: ShellState,
@@ -249,7 +246,7 @@ fn spawn_sequence(
               let next_result = spawn_and_wait_sequence(
                 next,
                 state.clone(),
-                // seems suspect, but good enough for now
+                // todo(#2): share stdin
                 ShellPipe::InheritStdin,
                 stdout_tx.clone(),
                 environment,
@@ -328,8 +325,7 @@ fn spawn_sequence(
             let step = spawn_sequential_list(
               *list,
               state.clone(),
-              // todo: this is not correct. It should use the current stdin.
-              ShellPipe::InheritStdin,
+              stdin,
               environment,
               // yield async commands to the parent
               AsyncCommandBehavior::Yield,
@@ -377,7 +373,6 @@ async fn start_command(
   stdin: ShellPipe,
   environment: impl Environment,
 ) -> SpawnedStep {
-  // todo: reduce code duplication in here
   let mut args = evaluate_args(command.args, state, environment.clone()).await;
   let command_name = if args.is_empty() {
     String::new()
@@ -603,8 +598,8 @@ async fn evaluate_args(
   for arg in args {
     match arg {
       StringOrWord::Word(parts) => {
-        // todo: maybe we should have this work like sh and I believe
-        // reparse then continually re-evaluate until there's only strings left
+        // todo(dsherret): maybe we should have this work like sh and I believe
+        // reparse then continually re-evaluate until there's only strings left.
         let text =
           evaluate_string_parts(parts, state, environment.clone()).await;
         for part in text.split(' ') {
@@ -664,11 +659,12 @@ async fn evaluate_command_substitution(
     {
       // command substitution needs to capture even the async
       // output, so set the current state's shell_stdout_tx
+      // in order to capture it
       let mut state = state.clone();
       state.set_shell_stdout_tx(shell_tx);
       state
     },
-    // todo: this is not correct. It should use the current stdin.
+    // todo(#2): this is not correct. It should use the current stdin.
     ShellPipe::InheritStdin,
     environment,
     AsyncCommandBehavior::Wait,
