@@ -3,7 +3,7 @@ use crate::test_builder::TestBuilder;
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
 #[tokio::test]
-pub async fn test_commands() {
+pub async fn commands() {
   TestBuilder::new()
     .command("echo 1")
     .assert_stdout("1\n")
@@ -32,7 +32,7 @@ pub async fn test_commands() {
 }
 
 #[tokio::test]
-pub async fn test_boolean_logic() {
+pub async fn boolean_logic() {
   TestBuilder::new()
     .command("echo 1 && echo 2 || echo 3")
     .assert_stdout("1\n2\n")
@@ -59,7 +59,7 @@ pub async fn test_boolean_logic() {
 }
 
 #[tokio::test]
-pub async fn test_exit() {
+pub async fn exit() {
   TestBuilder::new()
     .command("exit 1")
     .assert_exit_code(1)
@@ -105,7 +105,7 @@ pub async fn test_exit() {
 }
 
 #[tokio::test]
-pub async fn test_async_commands() {
+pub async fn async_commands() {
   TestBuilder::new()
     .command("sleep 0.1 && echo 2 & echo 1")
     .assert_stdout("1\n2\n")
@@ -134,7 +134,7 @@ pub async fn test_async_commands() {
 }
 
 #[tokio::test]
-pub async fn test_command_substition() {
+pub async fn command_substition() {
   TestBuilder::new()
     .command("echo $(echo 1)")
     .assert_stdout("1\n")
@@ -162,7 +162,7 @@ pub async fn test_command_substition() {
 }
 
 #[tokio::test]
-pub async fn test_shell_variables() {
+pub async fn shell_variables() {
   TestBuilder::new()
     .command(r#"echo $VAR && VAR=1 && echo $VAR && deno eval 'console.log(Deno.env.get("VAR"))'"#)
     .assert_stdout("\n1\nundefined\n")
@@ -178,7 +178,7 @@ pub async fn test_shell_variables() {
 }
 
 #[tokio::test]
-pub async fn test_env_variables() {
+pub async fn env_variables() {
   TestBuilder::new()
     .command(r#"echo $VAR && export VAR=1 && echo $VAR && deno eval 'console.log(Deno.env.get("VAR"))'"#)
     .assert_stdout("\n1\n1\n")
@@ -187,7 +187,7 @@ pub async fn test_env_variables() {
 }
 
 #[tokio::test]
-pub async fn test_sequential_lists() {
+pub async fn sequential_lists() {
   TestBuilder::new()
     .command(r#"echo 1 ; sleep 0.1 && echo 4 & echo 2 ; echo 3;"#)
     .assert_stdout("1\n2\n3\n4\n")
@@ -196,7 +196,28 @@ pub async fn test_sequential_lists() {
 }
 
 #[tokio::test]
-pub async fn test_pwd() {
+pub async fn pipeline() {
+  TestBuilder::new()
+    .command(r#"echo 1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo $(sleep 0.1 && echo 2 & echo 1) | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 2 | echo 1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+pub async fn pwd() {
   TestBuilder::new()
     .command("mkdir sub_dir && pwd && cd sub_dir && pwd && cd ../ && pwd")
     .file("file.txt", "test")
@@ -211,7 +232,7 @@ pub async fn test_pwd() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn test_mv() {
+pub async fn mv() {
   // single file
   TestBuilder::new()
     .command("mv file1.txt file2.txt")
@@ -247,7 +268,7 @@ pub async fn test_mv() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn test_cp() {
+pub async fn cp() {
   // single file
   TestBuilder::new()
     .command("cp file1.txt file2.txt")
@@ -283,7 +304,7 @@ pub async fn test_cp() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn test_mkdir() {
+pub async fn mkdir() {
   TestBuilder::new()
     .command("mkdir sub_dir")
     .assert_exists("sub_dir")
@@ -302,7 +323,7 @@ pub async fn test_mkdir() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn test_rm() {
+pub async fn rm() {
   TestBuilder::new()
     .command("mkdir sub_dir && rm -d sub_dir && rm file.txt")
     .file("file.txt", "")
