@@ -351,17 +351,6 @@ pub fn if_true<'a, O>(
   }
 }
 
-/// Checks if a combinator is true without consuming the input.
-#[allow(dead_code)]
-pub fn check<'a, O>(
-  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
-) -> impl Fn(&'a str) -> ParseResult<'a, ()> {
-  move |input| match combinator(input) {
-    Ok(_) => Ok((input, ())),
-    Err(_) => ParseError::backtrace(),
-  }
-}
-
 /// Checks if a combinator is false without consuming the input.
 pub fn check_not<'a, O>(
   combinator: impl Fn(&'a str) -> ParseResult<'a, O>,

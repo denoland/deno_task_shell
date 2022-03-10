@@ -55,4 +55,4 @@ jobs:
           github.repository == 'denoland/deno_task_shell' &&
           github.ref == 'refs/heads/main' &&
           contains(matrix.os, 'ubuntu')
-        run: deno run -A --no-check https://raw.githubusercontent.com/denoland/automation/0.3.0/tasks/release_on_crate_version_change.ts --publish
+        run: deno run -A --no-check https://raw.githubusercontent.com/denoland/automation/0.4.0/tasks/release_on_crate_version_change.ts --publish
