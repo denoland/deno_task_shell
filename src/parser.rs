@@ -620,9 +620,15 @@ fn is_reserved_word(text: &str) -> bool {
 
 fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
   if parse_redirect(input).is_ok() {
-    ParseErrorFailure::new(input, "Redirects are currently not supported.")
+    ParseErrorFailure::new(
+      input,
+      "Redirects are currently not supported, but will be soon.",
+    )
   } else if input.starts_with('*') {
-    ParseErrorFailure::new(input, "Globs are currently not supported.")
+    ParseErrorFailure::new(
+      input,
+      "Globs are currently not supported, but will be soon.",
+    )
   } else {
     ParseErrorFailure::new(input, "Unexpected character.")
   }
@@ -647,14 +653,18 @@ mod test {
     assert_eq!(
       parse("test > redirect").err().unwrap().to_string(),
       concat!(
-        "Redirects are currently not supported.\n",
+        "Redirects are currently not supported, but will be soon.\n",
         "  > redirect\n",
         "  ~",
       ),
     );
     assert_eq!(
       parse("cp test/* other").err().unwrap().to_string(),
-      concat!("Globs are currently not supported.\n", "  * other\n", "  ~",),
+      concat!(
+        "Globs are currently not supported, but will be soon.\n",
+        "  * other\n",
+        "  ~",
+      ),
     );
     assert_eq!(
       parse("(test").err().unwrap().to_string(),

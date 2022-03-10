@@ -14,6 +14,11 @@ use crate::execute_with_environment;
 use crate::fs_util;
 use crate::parser::parse;
 
+enum TestAssertion {
+  FileExists(String),
+  FileNotExists(String),
+}
+
 struct TempDir {
   // hold to keep it alive until drop
   _inner: tempfile::TempDir,
@@ -40,6 +45,7 @@ pub struct TestBuilder {
   expected_exit_code: i32,
   expected_stderr: String,
   expected_stdout: String,
+  assertions: Vec<TestAssertion>,
 }
 
 impl TestBuilder {
@@ -54,10 +60,11 @@ impl TestBuilder {
       expected_exit_code: 0,
       expected_stderr: String::new(),
       expected_stdout: String::new(),
+      assertions: Vec::new(),
     }
   }
 
-  fn get_temp_dir(&mut self) -> &mut TempDir {
+  fn ensure_temp_dir(&mut self) -> &mut TempDir {
     if self.temp_dir.is_none() {
       self.temp_dir = Some(TempDir::new());
     }
@@ -70,23 +77,39 @@ impl TestBuilder {
   }
 
   pub fn file(&mut self, path: &str, text: &str) -> &mut Self {
-    let temp_dir = self.get_temp_dir();
+    let temp_dir = self.ensure_temp_dir();
     fs::write(temp_dir.cwd.join(path), text).unwrap();
     self
   }
 
-  pub fn exit_code(&mut self, code: i32) -> &mut Self {
+  pub fn assert_exit_code(&mut self, code: i32) -> &mut Self {
     self.expected_exit_code = code;
     self
   }
 
-  pub fn stderr(&mut self, output: &str) -> &mut Self {
+  pub fn assert_stderr(&mut self, output: &str) -> &mut Self {
     self.expected_stderr.push_str(output);
     self
   }
 
-  pub fn stdout(&mut self, output: &str) -> &mut Self {
+  pub fn assert_stdout(&mut self, output: &str) -> &mut Self {
     self.expected_stdout.push_str(output);
+    self
+  }
+
+  pub fn assert_exists(&mut self, path: &str) -> &mut Self {
+    self.ensure_temp_dir();
+    self
+      .assertions
+      .push(TestAssertion::FileExists(path.to_string()));
+    self
+  }
+
+  pub fn assert_not_exists(&mut self, path: &str) -> &mut Self {
+    self.ensure_temp_dir();
+    self
+      .assertions
+      .push(TestAssertion::FileNotExists(path.to_string()));
     self
   }
 
@@ -95,7 +118,7 @@ impl TestBuilder {
     let cwd = if let Some(temp_dir) = &self.temp_dir {
       temp_dir.cwd.clone()
     } else {
-      std::env::current_dir().unwrap()
+      std::env::temp_dir()
     };
     let exit_code = execute_with_environment(
       list,
@@ -104,15 +127,20 @@ impl TestBuilder {
       self.environment.clone(),
     )
     .await;
+    let temp_dir = if let Some(temp_dir) = &self.temp_dir {
+      temp_dir.cwd.display().to_string()
+    } else {
+      "NO_TEMP_DIR".to_string()
+    };
     assert_eq!(
       self.environment.take_stdout(),
-      self.expected_stdout,
+      self.expected_stdout.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
     );
     assert_eq!(
       self.environment.take_stderr(),
-      self.expected_stderr,
+      self.expected_stderr.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
     );
@@ -121,6 +149,27 @@ impl TestBuilder {
       "\n\nFailed for: {}",
       self.command
     );
+
+    for assertion in &self.assertions {
+      match assertion {
+        TestAssertion::FileExists(path) => {
+          assert!(
+            cwd.join(&path).exists(),
+            "\n\nFailed for: {}\nExpected '{}' to exist.",
+            self.command,
+            path,
+          )
+        }
+        TestAssertion::FileNotExists(path) => {
+          assert!(
+            !cwd.join(&path).exists(),
+            "\n\nFailed for: {}\nExpected '{}' to not exist.",
+            self.command,
+            path,
+          )
+        }
+      }
+    }
   }
 }
 

@@ -37,21 +37,26 @@ async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
           }
         }
       } else {
-        remove_file(&path, specified_path, &flags).await?;
+        remove_file_or_dir(&path, specified_path, &flags).await?;
       }
     } else {
-      remove_file(&path, specified_path, &flags).await?;
+      remove_file_or_dir(&path, specified_path, &flags).await?;
     }
   }
   Ok(())
 }
 
-async fn remove_file(
+async fn remove_file_or_dir(
   path: &Path,
   specified_path: &str,
   flags: &RmFlags,
 ) -> Result<()> {
-  if let Err(err) = tokio::fs::remove_file(path).await {
+  let result = if flags.dir && path.is_dir() {
+    tokio::fs::remove_dir(path).await
+  } else {
+    tokio::fs::remove_file(path).await
+  };
+  if let Err(err) = result {
     if err.kind() != ErrorKind::NotFound || !flags.force {
       bail!("cannot remove '{}': {}", specified_path, err);
     }
@@ -63,6 +68,7 @@ async fn remove_file(
 struct RmFlags {
   force: bool,
   recursive: bool,
+  dir: bool,
   paths: Vec<String>,
 }
 
@@ -75,6 +81,9 @@ fn parse_args(args: Vec<String>) -> Result<RmFlags> {
       | ArgKind::ShortFlag('r')
       | ArgKind::ShortFlag('R') => {
         result.recursive = true;
+      }
+      ArgKind::LongFlag("dir") | ArgKind::ShortFlag('d') => {
+        result.dir = true;
       }
       ArgKind::LongFlag("force") | ArgKind::ShortFlag('f') => {
         result.force = true;
@@ -105,12 +114,14 @@ mod test {
     assert_eq!(
       parse_args(vec![
         "--recursive".to_string(),
+        "--dir".to_string(),
         "a".to_string(),
         "b".to_string(),
       ])
       .unwrap(),
       RmFlags {
         recursive: true,
+        dir: true,
         paths: vec!["a".to_string(), "b".to_string()],
         ..Default::default()
       }
@@ -121,7 +132,17 @@ mod test {
       RmFlags {
         recursive: true,
         force: true,
+        dir: false,
         paths: vec!["a".to_string(), "b".to_string()],
+      }
+    );
+    assert_eq!(
+      parse_args(vec!["-d".to_string(), "a".to_string()]).unwrap(),
+      RmFlags {
+        recursive: false,
+        force: false,
+        dir: true,
+        paths: vec!["a".to_string()],
       }
     );
     assert_eq!(
@@ -237,11 +258,60 @@ mod test {
       .unwrap();
   }
 
+  #[tokio::test]
+  async fn test_dir() {
+    let dir = tempdir().unwrap();
+    let existent_file = dir.path().join("existent.txt");
+    let existent_dir = dir.path().join("sub_dir");
+    let existent_dir_files = dir.path().join("sub_dir_files");
+    fs::write(&existent_file, "").unwrap();
+    fs::create_dir(&existent_dir).unwrap();
+    fs::create_dir(&existent_dir_files).unwrap();
+    fs::write(&existent_dir_files.join("file.txt"), "").unwrap();
+
+    assert!(execute_remove(
+      dir.path(),
+      vec!["-d".to_string(), "existent.txt".to_string()],
+    )
+    .await
+    .is_ok());
+
+    assert!(execute_remove(
+      dir.path(),
+      vec!["-d".to_string(), "sub_dir".to_string()],
+    )
+    .await
+    .is_ok());
+    assert!(!existent_dir.exists());
+
+    let result = execute_remove(
+      dir.path(),
+      vec!["-d".to_string(), "sub_dir_files".to_string()],
+    )
+    .await;
+    assert_eq!(
+      result.err().unwrap().to_string(),
+      format!(
+        "cannot remove 'sub_dir_files': {}",
+        directory_not_empty_text()
+      ),
+    );
+    assert!(existent_dir_files.exists());
+  }
+
   fn no_such_file_error_text() -> &'static str {
     if cfg!(windows) {
       "The system cannot find the file specified. (os error 2)"
     } else {
       "No such file or directory (os error 2)"
+    }
+  }
+
+  fn directory_not_empty_text() -> &'static str {
+    if cfg!(windows) {
+      "The directory is not empty. (os error 145)"
+    } else {
+      "Directory not empty (os error 39)"
     }
   }
 }

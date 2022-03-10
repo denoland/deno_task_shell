@@ -29,11 +29,11 @@ pub async fn cp_command(
 async fn execute_cp(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(cwd, args)?;
   for (from, to) in flags.operations {
-    if let Err(err) = tokio::fs::copy(&from, &to).await {
+    if let Err(err) = tokio::fs::copy(&from.path, &to.path).await {
       bail!(
         "could not copy {} to {}: {}",
-        from.display(),
-        to.display(),
+        from.specified,
+        to.specified,
         err
       );
     }
@@ -58,11 +58,11 @@ pub async fn mv_command(
 async fn execute_mv(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(cwd, args)?;
   for (from, to) in flags.operations {
-    if let Err(err) = tokio::fs::rename(&from, &to).await {
+    if let Err(err) = tokio::fs::rename(&from.path, &to.path).await {
       bail!(
         "could not move {} to {}: {}",
-        from.display(),
-        to.display(),
+        from.specified,
+        to.specified,
         err
       );
     }
@@ -71,7 +71,7 @@ async fn execute_mv(cwd: &Path, args: Vec<String>) -> Result<()> {
 }
 
 struct CpMvFlags {
-  operations: Vec<(PathBuf, PathBuf)>,
+  operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
 fn parse_args(cwd: &Path, args: Vec<String>) -> Result<CpMvFlags> {
@@ -95,30 +95,55 @@ fn parse_args(cwd: &Path, args: Vec<String>) -> Result<CpMvFlags> {
   })
 }
 
+struct PathWithSpecified {
+  path: PathBuf,
+  specified: String,
+}
+
 fn get_copy_and_move_operations(
   cwd: &Path,
   mut paths: Vec<&str>,
-) -> Result<Vec<(PathBuf, PathBuf)>> {
+) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>> {
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
   let destination = cwd.join(&specified_destination);
-  let from_args = paths.into_iter().map(|a| cwd.join(a)).collect::<Vec<_>>();
+  let from_args = paths; //.into_iter().map(|a| cwd.join(a)).collect::<Vec<_>>();
   let mut operations = Vec::new();
   if from_args.len() > 1 {
     if !destination.is_dir() {
       bail!("target '{}' is not a directory", specified_destination);
     }
     for from in from_args {
-      let to = destination.join(from.file_name().unwrap());
-      operations.push((from, to));
+      let from_path = cwd.join(from);
+      let to_path = destination.join(from_path.file_name().unwrap());
+      operations.push((
+        PathWithSpecified {
+          specified: from.to_string(),
+          path: from_path,
+        },
+        PathWithSpecified {
+          specified: specified_destination.to_string(),
+          path: to_path,
+        },
+      ));
     }
   } else {
-    let to = if destination.is_dir() {
-      destination.join(from_args[0].file_name().unwrap())
+    let from_path = cwd.join(from_args[0]);
+    let to_path = if destination.is_dir() {
+      destination.join(from_path.file_name().unwrap())
     } else {
       destination
     };
-    operations.push((from_args[0].clone(), to));
+    operations.push((
+      PathWithSpecified {
+        specified: from_args[0].to_string(),
+        path: from_path,
+      },
+      PathWithSpecified {
+        specified: specified_destination.to_string(),
+        path: to_path,
+      },
+    ));
   }
   Ok(operations)
 }
