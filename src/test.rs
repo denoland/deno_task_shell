@@ -105,8 +105,28 @@ pub async fn test_exit() {
 #[tokio::test]
 pub async fn test_async_commands() {
   TestBuilder::new()
-    .command("sleep 0.25 && echo 2 & echo 1")
+    .command("sleep 0.1 && echo 2 & echo 1")
     .stdout("1\n2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("(sleep 0.1 && echo 2 &) ; echo 1")
+    .stdout("1\n2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("(sleep 0.1 && echo 2) & echo 1")
+    .stdout("1\n2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(
+      "$(sleep 0.1 && echo 1 & $(sleep 0.2 && echo 2 & echo echo) & echo echo)",
+    )
+    .stdout("1 2\n")
     .run()
     .await;
 }
@@ -129,6 +149,12 @@ pub async fn test_command_substition() {
   TestBuilder::new()
     .command("$(sleep 0.1 && echo 1 & echo echo) 2")
     .stdout("1 2\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("$(sleep 0.1 && echo 1 & exit 1) ; echo 2")
+    .stdout("2\n")
+    .stderr("1: command not found\n")
     .run()
     .await;
 }

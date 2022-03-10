@@ -20,10 +20,12 @@ pub fn cd_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_cd(cwd, args) {
-    Ok(new_dir) => ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)]),
+    Ok(new_dir) => {
+      ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
+    }
     Err(err) => {
       environment.eprintln(&format!("cd: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }

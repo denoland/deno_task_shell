@@ -16,10 +16,10 @@ pub async fn sleep_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_sleep(args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new()),
+    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
       environment.eprintln(&format!("sleep: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }

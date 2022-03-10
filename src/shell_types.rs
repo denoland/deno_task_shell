@@ -12,11 +12,12 @@ use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::task::JoinHandle;
 
 use crate::fs_util;
 
 #[derive(Clone)]
-pub struct EnvState {
+pub struct ShellState {
   /// Environment variables that should be passed down to sub commands
   /// and used when evaluating environment variables.
   env_vars: HashMap<String, String>,
@@ -24,14 +25,24 @@ pub struct EnvState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
+  /// The current shell or subshell's stdout sender.
+  /// This is used by async commands in order to avoid
+  /// other steps waiting on the async commands to finish
+  /// their output.
+  shell_stdout_tx: ShellPipeSender,
 }
 
-impl EnvState {
-  pub fn new(env_vars: HashMap<String, String>, cwd: &Path) -> Self {
+impl ShellState {
+  pub fn new(
+    env_vars: HashMap<String, String>,
+    cwd: &Path,
+    shell_stdout_tx: ShellPipeSender,
+  ) -> Self {
     let mut result = Self {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
+      shell_stdout_tx,
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -110,6 +121,14 @@ impl EnvState {
       }
     }
   }
+
+  pub fn shell_stdout_tx(&self) -> ShellPipeSender {
+    self.shell_stdout_tx.clone()
+  }
+
+  pub fn set_shell_stdout_tx(&mut self, tx: ShellPipeSender) {
+    self.shell_stdout_tx = tx;
+  }
 }
 
 #[derive(Debug, PartialEq)]
@@ -121,20 +140,33 @@ pub enum EnvChange {
   Cd(PathBuf),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ExecuteResult {
-  Exit(i32),
-  Continue(i32, Vec<EnvChange>),
+  Exit(i32, Vec<JoinHandle<()>>),
+  Continue(i32, Vec<EnvChange>, Vec<JoinHandle<()>>),
 }
 
-pub struct ExecutedStep {
+impl ExecuteResult {
+  pub fn into_handles(self) -> Vec<JoinHandle<()>> {
+    match self {
+      ExecuteResult::Exit(_, handles) => handles,
+      ExecuteResult::Continue(_, _, handles) => handles,
+    }
+  }
+}
+
+pub struct SpawnedStep {
   pub stdout: ShellPipe,
   pub task: BoxFuture<'static, ExecuteResult>,
 }
 
-impl ExecutedStep {
+impl SpawnedStep {
   pub fn from_exit_code(exit_code: i32) -> Self {
-    Self::from_result(ExecuteResult::Continue(exit_code, Vec::new()))
+    Self::from_result(ExecuteResult::Continue(
+      exit_code,
+      Vec::new(),
+      Vec::new(),
+    ))
   }
 
   pub fn from_result(execute_result: ExecuteResult) -> Self {
@@ -156,7 +188,7 @@ impl ExecutedStep {
       task: async move {
         let _ = tx.send(text.into_bytes());
         drop(tx); // close stdout
-        ExecuteResult::Continue(0, Vec::new())
+        ExecuteResult::Continue(0, Vec::new(), Vec::new())
       }
       .boxed(),
     }
@@ -172,7 +204,7 @@ impl ExecutedStep {
     future: impl Future<Output = ExecuteResult> + Send + 'static,
   ) -> Self {
     let (tx, stdout) = ShellPipe::channel();
-    ExecutedStep {
+    SpawnedStep {
       stdout,
       task: async move {
         let result = future.await;
@@ -214,18 +246,22 @@ impl ShellPipe {
     (data_tx, ShellPipe::Channel(data_rx))
   }
 
+  /// Unwraps the pipe to a channel.
+  pub fn unwrap_channel(self) -> ShellPipeReceiver {
+    match self {
+      ShellPipe::InheritStdin => unreachable!(),
+      ShellPipe::Channel(rx) => rx,
+    }
+  }
+
   /// Write everything to the specified writer
   pub async fn write_all(
     self,
     mut writer: Box<dyn AsyncWrite + std::marker::Unpin + Send + Sync>,
   ) -> Result<()> {
-    match self {
-      ShellPipe::InheritStdin => unreachable!(),
-      ShellPipe::Channel(mut rx) => {
-        while let Some(data) = rx.recv().await {
-          writer.write(&data).await?;
-        }
-      }
+    let mut rx = self.unwrap_channel();
+    while let Some(data) = rx.recv().await {
+      writer.write(&data).await?;
     }
     Ok(())
   }

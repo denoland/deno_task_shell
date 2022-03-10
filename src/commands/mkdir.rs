@@ -16,10 +16,10 @@ pub async fn mkdir_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_mkdir(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new()),
+    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
       environment.eprintln(&format!("mkdir: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }

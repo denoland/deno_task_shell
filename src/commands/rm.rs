@@ -17,10 +17,10 @@ pub async fn rm_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_remove(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new()),
+    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
       environment.eprintln(&format!("rm: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }

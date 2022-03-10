@@ -18,10 +18,10 @@ pub async fn cp_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_cp(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new()),
+    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
       environment.eprintln(&format!("cp: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }
@@ -47,10 +47,10 @@ pub async fn mv_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_mv(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new()),
+    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
       environment.eprintln(&format!("mv: {}", err));
-      ExecuteResult::Continue(1, Vec::new())
+      ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
 }

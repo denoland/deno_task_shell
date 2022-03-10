@@ -14,11 +14,11 @@ pub fn exit_command(
   environment: impl Environment,
 ) -> ExecuteResult {
   match execute_exit(args) {
-    Ok(code) => ExecuteResult::Exit(code),
+    Ok(code) => ExecuteResult::Exit(code, Vec::new()),
     Err(err) => {
       // even if parsing args fails `exit` always exits
       environment.eprintln(&format!("exit: {}", err));
-      ExecuteResult::Exit(1)
+      ExecuteResult::Exit(1, Vec::new())
     }
   }
 }
