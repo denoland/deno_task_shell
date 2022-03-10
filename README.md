@@ -11,7 +11,7 @@ let env_vars = HashMap::from(&[
   ("SOME_VAR", "value"),
 ]);
 let cwd = std::env::current_dir()?;
-deno_task_shell::execute(
+let exit_code = deno_task_shell::execute(
   list,
   env_vars,
   &cwd,
