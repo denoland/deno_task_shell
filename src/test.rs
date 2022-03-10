@@ -31,6 +31,12 @@ pub async fn commands() {
     .assert_stdout("12\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command(r#""echo" "1""#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]
