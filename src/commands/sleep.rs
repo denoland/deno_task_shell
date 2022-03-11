@@ -5,20 +5,20 @@ use std::time::Duration;
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::environment::Environment;
 use crate::shell_types::ExecuteResult;
+use crate::shell_types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
 
 pub async fn sleep_command(
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_sleep(args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      environment.eprintln(&format!("sleep: {}", err));
+      stderr.write_line(&format!("sleep: {}", err)).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

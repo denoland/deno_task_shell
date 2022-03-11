@@ -3,21 +3,21 @@
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::environment::Environment;
 use crate::shell_types::ExecuteResult;
+use crate::shell_types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
 
 pub fn exit_command(
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_exit(args) {
     Ok(code) => ExecuteResult::Exit(code, Vec::new()),
     Err(err) => {
       // even if parsing args fails `exit` always exits
-      environment.eprintln(&format!("exit: {}", err));
+      stderr.write_line(&format!("exit: {}", err)).unwrap();
       ExecuteResult::Exit(1, Vec::new())
     }
   }

@@ -16,8 +16,6 @@ use crate::commands::mkdir_command;
 use crate::commands::mv_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
-use crate::environment::Environment;
-use crate::environment::RealEnvironment;
 use crate::parser::Command;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
@@ -27,8 +25,8 @@ use crate::shell_types::pipe;
 use crate::shell_types::EnvChange;
 use crate::shell_types::ExecuteResult;
 use crate::shell_types::FutureExecuteResult;
-use crate::shell_types::ShellPipeReceiver;
-use crate::shell_types::ShellPipeSender;
+use crate::shell_types::ShellPipeReader;
+use crate::shell_types::ShellPipeWriter;
 use crate::shell_types::ShellState;
 
 pub async fn execute(
@@ -36,15 +34,24 @@ pub async fn execute(
   env_vars: HashMap<String, String>,
   cwd: &Path,
 ) -> i32 {
-  let environment = RealEnvironment::default();
-  execute_with_environment(list, env_vars, cwd, environment).await
+  execute_with_pipes(
+    list,
+    env_vars,
+    cwd,
+    ShellPipeReader::stdin(),
+    ShellPipeWriter::stdout(),
+    ShellPipeWriter::stderr(),
+  )
+  .await
 }
 
-pub(crate) async fn execute_with_environment(
+pub(crate) async fn execute_with_pipes(
   list: SequentialList,
   env_vars: HashMap<String, String>,
   cwd: &Path,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
 ) -> i32 {
   assert!(cwd.is_absolute());
   let state = ShellState::new(env_vars, cwd);
@@ -53,9 +60,9 @@ pub(crate) async fn execute_with_environment(
   let result = spawn_sequential_list(
     list,
     state,
-    environment.stdin(),
-    environment.stdout(),
-    environment.clone(),
+    stdin,
+    stdout,
+    stderr,
     AsyncCommandBehavior::Wait,
   )
   .await;
@@ -75,9 +82,9 @@ enum AsyncCommandBehavior {
 fn spawn_sequential_list(
   list: SequentialList,
   mut state: ShellState,
-  stdin: ShellPipeReceiver,
-  stdout: ShellPipeSender,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
   async_command_behavior: AsyncCommandBehavior,
 ) -> FutureExecuteResult {
   async move {
@@ -87,13 +94,12 @@ fn spawn_sequential_list(
     for item in list.items {
       if item.is_async {
         let state = state.clone();
-        let environment = environment.clone();
         let stdin = stdin.clone();
         let stdout = stdout.clone();
+        let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn(async move {
           let result =
-            spawn_sequence(item.sequence, state, stdin, stdout, environment)
-              .await;
+            spawn_sequence(item.sequence, state, stdin, stdout, stderr).await;
           futures::future::join_all(result.into_handles()).await;
         }));
       } else {
@@ -102,7 +108,7 @@ fn spawn_sequential_list(
           state.clone(),
           stdin.clone(),
           stdout.clone(),
-          environment.clone(),
+          stderr.clone(),
         )
         .await;
         match result {
@@ -131,9 +137,9 @@ fn spawn_sequential_list(
 fn spawn_sequence(
   sequence: Sequence,
   mut state: ShellState,
-  stdin: ShellPipeReceiver,
-  stdout: ShellPipeSender,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
   // requires boxed async because of recursive async
   async move {
@@ -142,7 +148,7 @@ fn spawn_sequence(
         0,
         vec![EnvChange::SetEnvVar(
           var.name,
-          evaluate_string_or_word(var.value, &state, stdin, environment).await,
+          evaluate_string_or_word(var.value, &state, stdin, stderr).await,
         )],
         Vec::new(),
       ),
@@ -150,12 +156,12 @@ fn spawn_sequence(
         0,
         vec![EnvChange::SetShellVar(
           var.name,
-          evaluate_string_or_word(var.value, &state, stdin, environment).await,
+          evaluate_string_or_word(var.value, &state, stdin, stderr).await,
         )],
         Vec::new(),
       ),
       Sequence::Command(command) => {
-        start_command(command, state, stdin, stdout, environment).await
+        start_command(command, state, stdin, stdout, stderr).await
       }
       Sequence::BooleanList(list) => {
         let mut changes = vec![];
@@ -164,7 +170,7 @@ fn spawn_sequence(
           state.clone(),
           stdin.clone(),
           stdout.clone(),
-          environment.clone(),
+          stderr.clone(),
         )
         .await;
         let (exit_code, mut async_handles) = match first_result {
@@ -195,7 +201,7 @@ fn spawn_sequence(
         };
         if let Some(next) = next {
           let next_result =
-            spawn_sequence(next, state, stdin, stdout, environment).await;
+            spawn_sequence(next, state, stdin, stdout, stderr).await;
           match next_result {
             ExecuteResult::Exit(code, sub_handles) => {
               async_handles.extend(sub_handles);
@@ -216,13 +222,13 @@ fn spawn_sequence(
         let mut wait_tasks = vec![];
         let mut last_input = Some(stdin);
         for sequence in sequences.into_iter() {
-          let (stdout, stdin) = pipe();
+          let (stdin, stdout) = pipe();
           let spawned_sequence = spawn_sequence(
             sequence,
             state.clone(),
             last_input.take().unwrap(),
             stdout,
-            environment.clone(),
+            stderr.clone(),
           );
           last_input = Some(stdin);
           wait_tasks.push(spawned_sequence);
@@ -251,7 +257,7 @@ fn spawn_sequence(
           state.clone(),
           stdin,
           stdout,
-          environment,
+          stderr,
           // yield async commands to the parent
           AsyncCommandBehavior::Yield,
         )
@@ -270,115 +276,111 @@ fn spawn_sequence(
   .boxed()
 }
 
-fn start_command(
+async fn start_command(
   command: Command,
   state: ShellState,
-  stdin: ShellPipeReceiver,
-  stdout: ShellPipeSender,
-  environment: impl Environment,
-) -> FutureExecuteResult {
-  async move {
-    let mut args =
-      evaluate_args(command.args, &state, stdin.clone(), environment.clone())
-        .await;
-    let command_name = if args.is_empty() {
-      String::new()
-    } else {
-      args.remove(0)
-    };
-    if command_name == "cd" {
-      let cwd = state.cwd().clone();
-      cd_command(&cwd, args, environment)
-    } else if command_name == "exit" {
-      exit_command(args, environment)
-    } else if command_name == "pwd" {
-      // ignores additional arguments
-      ExecuteResult::with_stdout_text(
-        stdout,
-        format!("{}\n", state.cwd().display()),
-      )
-    } else if command_name == "echo" {
-      ExecuteResult::with_stdout_text(stdout, format!("{}\n", args.join(" ")))
-    } else if command_name == "true" {
-      // ignores additional arguments
-      ExecuteResult::from_exit_code(0)
-    } else if command_name == "false" {
-      // ignores additional arguments
-      ExecuteResult::from_exit_code(1)
-    } else if command_name == "cp" {
-      let cwd = state.cwd().clone();
-      cp_command(&cwd, args, environment).await
-    } else if command_name == "mkdir" {
-      let cwd = state.cwd().clone();
-      mkdir_command(&cwd, args, environment).await
-    } else if command_name == "mv" {
-      let cwd = state.cwd().clone();
-      mv_command(&cwd, args, environment).await
-    } else if command_name == "rm" {
-      let cwd = state.cwd().clone();
-      rm_command(&cwd, args, environment).await
-    } else if command_name == "sleep" {
-      sleep_command(args, environment).await
-    } else {
-      let mut state = state.clone();
-      for env_var in command.env_vars {
-        state.apply_env_var(
-          &env_var.name,
-          &evaluate_string_or_word(
-            env_var.value,
-            &state,
-            stdin.clone(),
-            environment.clone(),
-          )
-          .await,
-        );
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  let mut args =
+    evaluate_args(command.args, &state, stdin.clone(), stderr.clone()).await;
+  let command_name = if args.is_empty() {
+    String::new()
+  } else {
+    args.remove(0)
+  };
+  if command_name == "cd" {
+    let cwd = state.cwd().clone();
+    cd_command(&cwd, args, stderr)
+  } else if command_name == "exit" {
+    exit_command(args, stderr)
+  } else if command_name == "pwd" {
+    // ignores additional arguments
+    ExecuteResult::with_stdout_text(
+      stdout,
+      format!("{}\n", state.cwd().display()),
+    )
+  } else if command_name == "echo" {
+    ExecuteResult::with_stdout_text(stdout, format!("{}\n", args.join(" ")))
+  } else if command_name == "true" {
+    // ignores additional arguments
+    ExecuteResult::from_exit_code(0)
+  } else if command_name == "false" {
+    // ignores additional arguments
+    ExecuteResult::from_exit_code(1)
+  } else if command_name == "cp" {
+    let cwd = state.cwd().clone();
+    cp_command(&cwd, args, stderr).await
+  } else if command_name == "mkdir" {
+    let cwd = state.cwd().clone();
+    mkdir_command(&cwd, args, stderr).await
+  } else if command_name == "mv" {
+    let cwd = state.cwd().clone();
+    mv_command(&cwd, args, stderr).await
+  } else if command_name == "rm" {
+    let cwd = state.cwd().clone();
+    rm_command(&cwd, args, stderr).await
+  } else if command_name == "sleep" {
+    sleep_command(args, stderr).await
+  } else {
+    let mut state = state.clone();
+    for env_var in command.env_vars {
+      state.apply_env_var(
+        &env_var.name,
+        &evaluate_string_or_word(
+          env_var.value,
+          &state,
+          stdin.clone(),
+          stderr.clone(),
+        )
+        .await,
+      );
+    }
+
+    let command_path = match resolve_command_path(&command_name, &state).await {
+      Ok(command_path) => command_path,
+      Err(err) => {
+        stderr.write_line(&err.to_string()).unwrap();
+        return ExecuteResult::Continue(1, Vec::new(), Vec::new());
       }
+    };
+    let mut sub_command = tokio::process::Command::new(&command_path);
+    let child = sub_command
+      .current_dir(state.cwd())
+      .args(&args)
+      .env_clear()
+      .envs(state.env_vars())
+      .stdout(stdout.into_raw())
+      .stdin(stdin.into_raw())
+      .stderr(Stdio::inherit())
+      .spawn();
 
-      let command_path = match resolve_command_path(&command_name, &state).await
-      {
-        Ok(command_path) => command_path,
-        Err(err) => {
-          environment.eprintln(&err.to_string());
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-        }
-      };
-      let mut sub_command = tokio::process::Command::new(&command_path);
-      let child = sub_command
-        .current_dir(state.cwd())
-        .args(&args)
-        .env_clear()
-        .envs(state.env_vars())
-        .stdout(stdout.into_raw())
-        .stdin(stdin.into_raw())
-        .stderr(Stdio::inherit())
-        .spawn();
+    let mut child = match child {
+      Ok(child) => child,
+      Err(err) => {
+        stderr
+          .write_line(&format!("Error launching '{}': {}", command_name, err))
+          .unwrap();
+        return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+      }
+    };
 
-      let mut child = match child {
-        Ok(child) => child,
-        Err(err) => {
-          environment
-            .eprintln(&format!("Error launching '{}': {}", command_name, err));
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-        }
-      };
+    // avoid deadlock since this is holding onto the pipes
+    drop(sub_command);
 
-      // avoid deadlock since this is holding onto the pipes
-      drop(sub_command);
-
-      match child.wait().await {
-        Ok(status) => ExecuteResult::Continue(
-          status.code().unwrap_or(1),
-          Vec::new(),
-          Vec::new(),
-        ),
-        Err(err) => {
-          environment.eprintln(&format!("{}", err));
-          ExecuteResult::Continue(1, Vec::new(), Vec::new())
-        }
+    match child.wait().await {
+      Ok(status) => ExecuteResult::Continue(
+        status.code().unwrap_or(1),
+        Vec::new(),
+        Vec::new(),
+      ),
+      Err(err) => {
+        stderr.write_line(&format!("{}", err)).unwrap();
+        ExecuteResult::Continue(1, Vec::new(), Vec::new())
       }
     }
   }
-  .boxed()
 }
 
 async fn resolve_command_path(
@@ -451,8 +453,8 @@ async fn resolve_command_path(
 async fn evaluate_args(
   args: Vec<StringOrWord>,
   state: &ShellState,
-  stdin: ShellPipeReceiver,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stderr: ShellPipeWriter,
 ) -> Vec<String> {
   let mut result = Vec::new();
   for arg in args {
@@ -460,13 +462,9 @@ async fn evaluate_args(
       StringOrWord::Word(parts) => {
         // todo(dsherret): maybe we should have this work like sh and I believe
         // reparse then continually re-evaluate until there's only strings left.
-        let text = evaluate_string_parts(
-          parts,
-          state,
-          stdin.clone(),
-          environment.clone(),
-        )
-        .await;
+        let text =
+          evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
+            .await;
         for part in text.split(' ') {
           let part = part.trim();
           if !part.is_empty() {
@@ -476,13 +474,8 @@ async fn evaluate_args(
       }
       StringOrWord::String(parts) => {
         result.push(
-          evaluate_string_parts(
-            parts,
-            state,
-            stdin.clone(),
-            environment.clone(),
-          )
-          .await,
+          evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
+            .await,
         );
       }
     }
@@ -493,18 +486,17 @@ async fn evaluate_args(
 async fn evaluate_string_or_word(
   string_or_word: StringOrWord,
   state: &ShellState,
-  stdin: ShellPipeReceiver,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stderr: ShellPipeWriter,
 ) -> String {
-  evaluate_string_parts(string_or_word.into_parts(), state, stdin, environment)
-    .await
+  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr).await
 }
 
 async fn evaluate_string_parts(
   parts: Vec<StringPart>,
   state: &ShellState,
-  stdin: ShellPipeReceiver,
-  environment: impl Environment,
+  stdin: ShellPipeReader,
+  stderr: ShellPipeWriter,
 ) -> String {
   let mut final_text = String::new();
   for part in parts {
@@ -519,8 +511,8 @@ async fn evaluate_string_parts(
         &evaluate_command_substitution(
           list,
           state,
-          environment.clone(),
           stdin.clone(),
+          stderr.clone(),
         )
         .await,
       ),
@@ -532,21 +524,21 @@ async fn evaluate_string_parts(
 async fn evaluate_command_substitution(
   list: SequentialList,
   state: &ShellState,
-  environment: impl Environment,
-  stdin: ShellPipeReceiver,
+  stdin: ShellPipeReader,
+  stderr: ShellPipeWriter,
 ) -> String {
-  let (shell_tx, shell_stdout) = pipe();
+  let (shell_stdout_reader, shell_stdout_writer) = pipe();
   let spawned_step = spawn_sequential_list(
     list,
     state.clone(),
     stdin,
-    shell_tx,
-    environment,
+    shell_stdout_writer,
+    stderr,
     AsyncCommandBehavior::Wait,
   );
   let output_handle = tokio::task::spawn_blocking(move || {
     let mut final_data = Vec::new();
-    shell_stdout.write_all(&mut final_data).unwrap();
+    shell_stdout_reader.write_all(&mut final_data).unwrap();
 
     final_data
   });

@@ -4,8 +4,8 @@ use anyhow::bail;
 use anyhow::Result;
 use std::path::Path;
 
-use crate::environment::Environment;
 use crate::shell_types::ExecuteResult;
+use crate::shell_types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
@@ -13,12 +13,12 @@ use super::args::ArgKind;
 pub async fn mkdir_command(
   cwd: &Path,
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mkdir(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      environment.eprintln(&format!("mkdir: {}", err));
+      stderr.write_line(&format!("mkdir: {}", err)).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

@@ -364,6 +364,23 @@ pub async fn rm() {
     .await;
 }
 
+#[tokio::test]
+pub async fn stdin() {
+  TestBuilder::new()
+    .command(r#"deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)""#)
+    .stdin("12345")
+    .assert_stdout("Uint8Array(1) [ 49 ]\nUint8Array(1) [ 50 ]\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo "12345" | (deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)")"#)
+    .stdin("55555") // should not use this because stdin is piped from the echo
+    .assert_stdout("Uint8Array(1) [ 49 ]\nUint8Array(1) [ 50 ]\n")
+    .run()
+    .await;
+}
+
 fn no_such_file_error_text() -> &'static str {
   if cfg!(windows) {
     "The system cannot find the file specified. (os error 2)"
