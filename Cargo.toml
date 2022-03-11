@@ -1,6 +1,6 @@
 [package]
 name = "deno_task_shell"
-version = "0.1.7"
+version = "0.1.8"
 authors = ["the Deno authors"]
 documentation = "https://docs.rs/deno_task_shell"
 edition = "2021"
@@ -12,10 +12,10 @@ description = "Cross platform scripting for deno task"
 [dependencies]
 anyhow = "1.0.55"
 futures = "0.3.16"
-pretty_assertions = "1"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 os_pipe = "1.0.1"
 
 [dev-dependencies]
 parking_lot = "0.12.0"
+pretty_assertions = "1"
 tempfile = "3.2.0"
