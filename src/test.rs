@@ -37,6 +37,12 @@ pub async fn commands() {
     .assert_stdout("1\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("echo test-dashes")
+    .assert_stdout("test-dashes\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]

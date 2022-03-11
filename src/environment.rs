@@ -1,9 +1,11 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
-use tokio::io::AsyncWrite;
+use crate::shell_types::ShellPipeReceiver;
+use crate::shell_types::ShellPipeSender;
 
 pub trait Environment: Clone + Send + Sync + 'static {
-  fn async_stdout(&self) -> Box<dyn AsyncWrite + Unpin + Send + Sync>;
+  fn stdout(&self) -> ShellPipeSender;
+  fn stdin(&self) -> ShellPipeReceiver;
   fn eprintln(&self, text: &str);
 }
 
@@ -11,8 +13,12 @@ pub trait Environment: Clone + Send + Sync + 'static {
 pub struct RealEnvironment {}
 
 impl Environment for RealEnvironment {
-  fn async_stdout(&self) -> Box<dyn AsyncWrite + Unpin + Send + Sync> {
-    Box::new(tokio::io::stdout())
+  fn stdout(&self) -> ShellPipeSender {
+    ShellPipeSender::from_raw(os_pipe::dup_stdout().unwrap())
+  }
+
+  fn stdin(&self) -> ShellPipeReceiver {
+    ShellPipeReceiver::from_raw(os_pipe::dup_stdin().unwrap())
   }
 
   fn eprintln(&self, text: &str) {
