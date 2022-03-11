@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::environment::Environment;
 use crate::shell_types::ExecuteResult;
+use crate::shell_types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
@@ -15,12 +15,12 @@ use super::args::ArgKind;
 pub async fn cp_command(
   cwd: &Path,
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_cp(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      environment.eprintln(&format!("cp: {}", err));
+      stderr.write_line(&format!("cp: {}", err)).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
@@ -44,12 +44,12 @@ async fn execute_cp(cwd: &Path, args: Vec<String>) -> Result<()> {
 pub async fn mv_command(
   cwd: &Path,
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mv(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      environment.eprintln(&format!("mv: {}", err));
+      stderr.write_line(&format!("mv: {}", err)).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

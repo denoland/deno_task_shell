@@ -139,7 +139,7 @@ impl ExecuteResult {
   }
 
   pub fn with_stdout_text(
-    mut stdout: ShellPipeSender,
+    mut stdout: ShellPipeWriter,
     text: String,
   ) -> ExecuteResult {
     let _ = stdout.write(&text.into_bytes());
@@ -147,15 +147,20 @@ impl ExecuteResult {
   }
 }
 
-pub struct ShellPipeReceiver(os_pipe::PipeReader);
+/// Reader side of a pipe.
+pub struct ShellPipeReader(os_pipe::PipeReader);
 
-impl Clone for ShellPipeReceiver {
+impl Clone for ShellPipeReader {
   fn clone(&self) -> Self {
     Self(self.0.try_clone().unwrap())
   }
 }
 
-impl ShellPipeReceiver {
+impl ShellPipeReader {
+  pub fn stdin() -> ShellPipeReader {
+    ShellPipeReader::from_raw(os_pipe::dup_stdin().unwrap())
+  }
+
   pub fn from_raw(reader: os_pipe::PipeReader) -> Self {
     Self(reader)
   }
@@ -178,20 +183,32 @@ impl ShellPipeReceiver {
   }
 
   /// Pipes this pipe to the specified sender.
-  pub fn pipe_to_sender(self, mut sender: ShellPipeSender) -> Result<()> {
+  pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> Result<()> {
     self.write_all(&mut sender.0)
   }
 }
 
-pub struct ShellPipeSender(os_pipe::PipeWriter);
+/// Writer side of a pipe.
+///
+/// Ensure that all of these are dropped when complete in order to
+/// prevent deadlocks where the reader hangs waiting for a read.
+pub struct ShellPipeWriter(os_pipe::PipeWriter);
 
-impl Clone for ShellPipeSender {
+impl Clone for ShellPipeWriter {
   fn clone(&self) -> Self {
     Self(self.0.try_clone().unwrap())
   }
 }
 
-impl ShellPipeSender {
+impl ShellPipeWriter {
+  pub fn stdout() -> ShellPipeWriter {
+    ShellPipeWriter::from_raw(os_pipe::dup_stdout().unwrap())
+  }
+
+  pub fn stderr() -> ShellPipeWriter {
+    ShellPipeWriter::from_raw(os_pipe::dup_stderr().unwrap())
+  }
+
   pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
     Self(writer)
   }
@@ -203,10 +220,15 @@ impl ShellPipeSender {
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
     Ok(self.0.write_all(bytes)?)
   }
+
+  pub fn write_line(&mut self, line: &str) -> Result<()> {
+    let bytes = format!("{}\n", line);
+    self.write(bytes.as_bytes())
+  }
 }
 
 /// Used to communicate between commands.
-pub fn pipe() -> (ShellPipeSender, ShellPipeReceiver) {
+pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
   let (reader, writer) = os_pipe::pipe().unwrap();
-  (ShellPipeSender(writer), ShellPipeReceiver(reader))
+  (ShellPipeReader(reader), ShellPipeWriter(writer))
 }

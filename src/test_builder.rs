@@ -4,18 +4,13 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::task::JoinHandle;
 
-use parking_lot::Mutex;
-
-use crate::environment::Environment;
-use crate::execute_with_environment;
+use crate::execute_with_pipes;
 use crate::fs_util;
 use crate::parser::parse;
 use crate::shell_types::pipe;
-use crate::shell_types::ShellPipeReceiver;
-use crate::shell_types::ShellPipeSender;
+use crate::shell_types::ShellPipeWriter;
 
 enum TestAssertion {
   FileExists(String),
@@ -44,7 +39,7 @@ pub struct TestBuilder {
   temp_dir: Option<TempDir>,
   env_vars: HashMap<String, String>,
   command: String,
-  environment: TestEnvironment,
+  stdin: Vec<u8>,
   expected_exit_code: i32,
   expected_stderr: String,
   expected_stdout: String,
@@ -59,7 +54,7 @@ impl TestBuilder {
       temp_dir: None,
       env_vars,
       command: String::new(),
-      environment: TestEnvironment::new(),
+      stdin: Vec::new(),
       expected_exit_code: 0,
       expected_stderr: String::new(),
       expected_stdout: String::new(),
@@ -76,6 +71,11 @@ impl TestBuilder {
 
   pub fn command(&mut self, command: &str) -> &mut Self {
     self.command = command.to_string();
+    self
+  }
+
+  pub fn stdin(&mut self, stdin: &str) -> &mut Self {
+    self.stdin = stdin.as_bytes().to_vec();
     self
   }
 
@@ -123,11 +123,19 @@ impl TestBuilder {
     } else {
       std::env::temp_dir()
     };
-    let exit_code = execute_with_environment(
+    let (stdin, mut stdin_writer) = pipe();
+    stdin_writer.write(&self.stdin).unwrap();
+    drop(stdin_writer); // prevent a deadlock by dropping the writer
+    let (stdout, stdout_handle) = get_output_writer_and_handle();
+    let (stderr, stderr_handle) = get_output_writer_and_handle();
+
+    let exit_code = execute_with_pipes(
       list,
       self.env_vars.clone(),
       &cwd,
-      self.environment.clone(),
+      stdin,
+      stdout,
+      stderr,
     )
     .await;
     let temp_dir = if let Some(temp_dir) = &self.temp_dir {
@@ -136,13 +144,13 @@ impl TestBuilder {
       "NO_TEMP_DIR".to_string()
     };
     assert_eq!(
-      self.environment.take_stdout().await,
+      stdout_handle.await.unwrap(),
       self.expected_stdout.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
     );
     assert_eq!(
-      self.environment.take_stderr(),
+      stderr_handle.await.unwrap(),
       self.expected_stderr.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
@@ -176,72 +184,12 @@ impl TestBuilder {
   }
 }
 
-#[derive(Clone)]
-pub struct TestEnvironment(Arc<TestEnvironmentInner>);
-
-impl TestEnvironment {
-  pub fn new() -> Self {
-    let (stdout_writer, stdout_reader) = pipe();
-    let output_handle = tokio::task::spawn_blocking(|| {
-      let mut buf = Vec::new();
-      stdout_reader.write_all(&mut buf).unwrap();
-      String::from_utf8_lossy(&buf).to_string()
-    });
-    let test_env_inner = TestEnvironmentInner {
-      stderr: Default::default(),
-      stdout: Mutex::new(Some((stdout_writer, output_handle))),
-    };
-
-    Self(Arc::new(test_env_inner))
-  }
-  pub fn take_stderr(&self) -> String {
-    self.0.take_stderr()
-  }
-
-  pub async fn take_stdout(&self) -> String {
-    let (stdout_writer, stdout_handle) = self.0.stdout.lock().take().unwrap();
-    drop(stdout_writer); // drop the writer to prevent deadlocks
-    stdout_handle.await.unwrap()
-  }
-}
-
-impl Environment for TestEnvironment {
-  fn stdout(&self) -> crate::shell_types::ShellPipeSender {
-    self.0.stdout.lock().as_ref().unwrap().0.clone()
-  }
-
-  fn stdin(&self) -> ShellPipeReceiver {
-    // todo: test this properly
-    ShellPipeReceiver::from_raw(os_pipe::dup_stdin().unwrap())
-  }
-
-  fn eprintln(&self, text: &str) {
-    self.0.stderr.write_text(&format!("{}\n", text));
-  }
-}
-
-struct TestEnvironmentInner {
-  stderr: MemoryWriter,
-  stdout: Mutex<Option<(ShellPipeSender, JoinHandle<String>)>>,
-}
-
-impl TestEnvironmentInner {
-  pub fn take_stderr(&self) -> String {
-    self.stderr.take_string()
-  }
-}
-
-#[derive(Clone, Default)]
-struct MemoryWriter(Arc<Mutex<Vec<u8>>>);
-
-impl MemoryWriter {
-  pub fn write_text(&self, text: &str) {
-    self.0.lock().extend(text.as_bytes());
-  }
-
-  pub fn take_string(&self) -> String {
-    let mut data = self.0.lock();
-    let buffer = std::mem::take(&mut *data);
-    String::from_utf8_lossy(&buffer).to_string()
-  }
+fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
+  let (stdout_reader, stdout_writer) = pipe();
+  let stdout_handle = tokio::task::spawn_blocking(|| {
+    let mut buf = Vec::new();
+    stdout_reader.write_all(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf).to_string()
+  });
+  (stdout_writer, stdout_handle)
 }

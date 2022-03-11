@@ -5,8 +5,8 @@ use anyhow::Result;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::environment::Environment;
 use crate::shell_types::ExecuteResult;
+use crate::shell_types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
@@ -14,12 +14,12 @@ use super::args::ArgKind;
 pub async fn rm_command(
   cwd: &Path,
   args: Vec<String>,
-  environment: impl Environment,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_remove(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      environment.eprintln(&format!("rm: {}", err));
+      stderr.write_line(&format!("rm: {}", err)).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
