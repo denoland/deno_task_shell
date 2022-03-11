@@ -4,17 +4,18 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
+use tokio::task::JoinHandle;
 
 use parking_lot::Mutex;
-use tokio::io::AsyncWrite;
 
 use crate::environment::Environment;
 use crate::execute_with_environment;
 use crate::fs_util;
 use crate::parser::parse;
+use crate::shell_types::pipe;
+use crate::shell_types::ShellPipeReceiver;
+use crate::shell_types::ShellPipeSender;
 
 enum TestAssertion {
   FileExists(String),
@@ -58,7 +59,7 @@ impl TestBuilder {
       temp_dir: None,
       env_vars,
       command: String::new(),
-      environment: TestEnvironment::default(),
+      environment: TestEnvironment::new(),
       expected_exit_code: 0,
       expected_stderr: String::new(),
       expected_stdout: String::new(),
@@ -135,7 +136,7 @@ impl TestBuilder {
       "NO_TEMP_DIR".to_string()
     };
     assert_eq!(
-      self.environment.take_stdout(),
+      self.environment.take_stdout().await,
       self.expected_stdout.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
@@ -175,24 +176,43 @@ impl TestBuilder {
   }
 }
 
-#[derive(Default, Clone)]
-pub struct TestEnvironment(Arc<InnerTestEnvironment>);
+#[derive(Clone)]
+pub struct TestEnvironment(Arc<TestEnvironmentInner>);
 
 impl TestEnvironment {
+  pub fn new() -> Self {
+    let (stdout_writer, stdout_reader) = pipe();
+    let output_handle = tokio::task::spawn_blocking(|| {
+      let mut buf = Vec::new();
+      stdout_reader.write_all(&mut buf).unwrap();
+      String::from_utf8_lossy(&buf).to_string()
+    });
+    let test_env_inner = TestEnvironmentInner {
+      stderr: Default::default(),
+      stdout: Mutex::new(Some((stdout_writer, output_handle))),
+    };
+
+    Self(Arc::new(test_env_inner))
+  }
   pub fn take_stderr(&self) -> String {
     self.0.take_stderr()
   }
 
-  pub fn take_stdout(&self) -> String {
-    self.0.take_stdout()
+  pub async fn take_stdout(&self) -> String {
+    let (stdout_writer, stdout_handle) = self.0.stdout.lock().take().unwrap();
+    drop(stdout_writer); // drop the writer to prevent deadlocks
+    stdout_handle.await.unwrap()
   }
 }
 
 impl Environment for TestEnvironment {
-  fn async_stdout(
-    &self,
-  ) -> Box<dyn tokio::io::AsyncWrite + Unpin + Send + Sync> {
-    Box::new(self.0.stdout.clone())
+  fn stdout(&self) -> crate::shell_types::ShellPipeSender {
+    self.0.stdout.lock().as_ref().unwrap().0.clone()
+  }
+
+  fn stdin(&self) -> ShellPipeReceiver {
+    // todo: test this properly
+    ShellPipeReceiver::from_raw(os_pipe::dup_stdin().unwrap())
   }
 
   fn eprintln(&self, text: &str) {
@@ -200,28 +220,14 @@ impl Environment for TestEnvironment {
   }
 }
 
-#[derive(Default)]
-struct InnerTestEnvironment {
+struct TestEnvironmentInner {
   stderr: MemoryWriter,
-  stdout: MemoryWriter,
+  stdout: Mutex<Option<(ShellPipeSender, JoinHandle<String>)>>,
 }
 
-impl InnerTestEnvironment {
+impl TestEnvironmentInner {
   pub fn take_stderr(&self) -> String {
     self.stderr.take_string()
-  }
-
-  pub fn take_stdout(&self) -> String {
-    self.stdout.take_string()
-  }
-}
-
-impl Drop for InnerTestEnvironment {
-  fn drop(&mut self) {
-    if !std::thread::panicking() {
-      assert_eq!(self.take_stderr(), String::new());
-      assert_eq!(self.take_stdout(), String::new());
-    }
   }
 }
 
@@ -237,30 +243,5 @@ impl MemoryWriter {
     let mut data = self.0.lock();
     let buffer = std::mem::take(&mut *data);
     String::from_utf8_lossy(&buffer).to_string()
-  }
-}
-
-impl AsyncWrite for MemoryWriter {
-  fn poll_write(
-    self: Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
-    buf: &[u8],
-  ) -> Poll<Result<usize, std::io::Error>> {
-    self.0.lock().extend(buf);
-    Poll::Ready(Ok(buf.len()))
-  }
-
-  fn poll_flush(
-    self: Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
-  ) -> Poll<Result<(), std::io::Error>> {
-    Poll::Ready(Ok(()))
-  }
-
-  fn poll_shutdown(
-    self: Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
-  ) -> Poll<Result<(), std::io::Error>> {
-    Poll::Ready(Ok(()))
   }
 }

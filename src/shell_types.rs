@@ -1,17 +1,13 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
 use std::collections::HashMap;
+use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
 use futures::future::BoxFuture;
-use futures::Future;
-use futures::FutureExt;
-use tokio::io::AsyncWrite;
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 
 use crate::fs_util;
@@ -25,24 +21,14 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
-  /// The current shell or subshell's stdout sender.
-  /// This is used by async commands in order to avoid
-  /// other steps waiting on the async commands to finish
-  /// their output.
-  shell_stdout_tx: ShellPipeSender,
 }
 
 impl ShellState {
-  pub fn new(
-    env_vars: HashMap<String, String>,
-    cwd: &Path,
-    shell_stdout_tx: ShellPipeSender,
-  ) -> Self {
+  pub fn new(env_vars: HashMap<String, String>, cwd: &Path) -> Self {
     let mut result = Self {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
-      shell_stdout_tx,
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -121,14 +107,6 @@ impl ShellState {
       }
     }
   }
-
-  pub fn shell_stdout_tx(&self) -> ShellPipeSender {
-    self.shell_stdout_tx.clone()
-  }
-
-  pub fn set_shell_stdout_tx(&mut self, tx: ShellPipeSender) {
-    self.shell_stdout_tx = tx;
-  }
 }
 
 #[derive(Debug, PartialEq)]
@@ -139,6 +117,8 @@ pub enum EnvChange {
   SetShellVar(String, String),
   Cd(PathBuf),
 }
+
+pub type FutureExecuteResult = BoxFuture<'static, ExecuteResult>;
 
 #[derive(Debug)]
 pub enum ExecuteResult {
@@ -153,138 +133,80 @@ impl ExecuteResult {
       ExecuteResult::Continue(_, _, handles) => handles,
     }
   }
-}
 
-pub struct SpawnedStep {
-  pub stdout: ShellPipe,
-  pub task: BoxFuture<'static, ExecuteResult>,
-}
-
-impl SpawnedStep {
-  pub fn from_exit_code(exit_code: i32) -> Self {
-    Self::from_result(ExecuteResult::Continue(
-      exit_code,
-      Vec::new(),
-      Vec::new(),
-    ))
+  pub fn from_exit_code(exit_code: i32) -> ExecuteResult {
+    ExecuteResult::Continue(exit_code, Vec::new(), Vec::new())
   }
 
-  pub fn from_result(execute_result: ExecuteResult) -> Self {
-    let (tx, stdout) = ShellPipe::channel();
-    Self {
-      stdout,
-      task: async move {
-        drop(tx); // close stdout
-        execute_result
-      }
-      .boxed(),
-    }
-  }
-
-  pub fn with_stdout_text(text: String) -> Self {
-    let (tx, stdout) = ShellPipe::channel();
-    Self {
-      stdout,
-      task: async move {
-        let _ = tx.send(text.into_bytes());
-        drop(tx); // close stdout
-        ExecuteResult::Continue(0, Vec::new(), Vec::new())
-      }
-      .boxed(),
-    }
-  }
-
-  pub fn from_fn(
-    func: impl FnOnce() -> ExecuteResult + Sync + Send + 'static,
-  ) -> Self {
-    Self::from_future(async move { func() })
-  }
-
-  pub fn from_future(
-    future: impl Future<Output = ExecuteResult> + Send + 'static,
-  ) -> Self {
-    let (tx, stdout) = ShellPipe::channel();
-    SpawnedStep {
-      stdout,
-      task: async move {
-        let result = future.await;
-        drop(tx); // close stdout
-        result
-      }
-      .boxed(),
-    }
-  }
-
-  pub async fn wait_with_stdout<T>(
-    self,
-    action: impl FnOnce(ShellPipe) -> T,
-  ) -> ExecuteResult
-  where
-    T: Future<Output = ()> + Send + 'static,
-  {
-    let output_task = tokio::task::spawn(action(self.stdout));
-    let result = self.task.await;
-    output_task.await.unwrap();
-    result
+  pub fn with_stdout_text(
+    mut stdout: ShellPipeSender,
+    text: String,
+  ) -> ExecuteResult {
+    let _ = stdout.write(&text.into_bytes());
+    ExecuteResult::Continue(0, Vec::new(), Vec::new())
   }
 }
 
-pub type ShellPipeReceiver = UnboundedReceiver<Vec<u8>>;
-pub type ShellPipeSender = UnboundedSender<Vec<u8>>;
+pub struct ShellPipeReceiver(os_pipe::PipeReader);
 
-/// Used to communicate between commands.
-pub enum ShellPipe {
-  /// Pull messages from stdin.
-  InheritStdin,
-  /// Receives pushed messages from a channel.
-  Channel(ShellPipeReceiver),
+impl Clone for ShellPipeReceiver {
+  fn clone(&self) -> Self {
+    Self(self.0.try_clone().unwrap())
+  }
 }
 
-impl ShellPipe {
-  pub fn channel() -> (ShellPipeSender, ShellPipe) {
-    let (data_tx, data_rx) = tokio::sync::mpsc::unbounded_channel();
-    (data_tx, ShellPipe::Channel(data_rx))
+impl ShellPipeReceiver {
+  pub fn from_raw(reader: os_pipe::PipeReader) -> Self {
+    Self(reader)
   }
 
-  /// Unwraps the pipe to a channel.
-  pub fn unwrap_channel(self) -> ShellPipeReceiver {
-    match self {
-      ShellPipe::InheritStdin => unreachable!(),
-      ShellPipe::Channel(rx) => rx,
-    }
+  pub fn into_raw(self) -> os_pipe::PipeReader {
+    self.0
   }
 
   /// Write everything to the specified writer
-  pub async fn write_all(
-    self,
-    mut writer: Box<dyn AsyncWrite + std::marker::Unpin + Send + Sync>,
-  ) -> Result<()> {
-    let mut rx = self.unwrap_channel();
-    while let Some(data) = rx.recv().await {
-      writer.write(&data).await?;
+  pub fn write_all(mut self, writer: &mut dyn Write) -> Result<()> {
+    loop {
+      let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
+      let size = self.0.read(&mut buffer)?;
+      if size == 0 {
+        break;
+      }
+      writer.write_all(&buffer[0..size])?;
     }
     Ok(())
   }
 
-  /// Pipes this pipe to the specified writer.
-  pub async fn pipe_to_writer(
-    self,
-    writer: Box<dyn AsyncWrite + Unpin + Send + Sync>,
-  ) {
-    let _ = self.write_all(writer).await;
+  /// Pipes this pipe to the specified sender.
+  pub fn pipe_to_sender(self, mut sender: ShellPipeSender) -> Result<()> {
+    self.write_all(&mut sender.0)
+  }
+}
+
+pub struct ShellPipeSender(os_pipe::PipeWriter);
+
+impl Clone for ShellPipeSender {
+  fn clone(&self) -> Self {
+    Self(self.0.try_clone().unwrap())
+  }
+}
+
+impl ShellPipeSender {
+  pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
+    Self(writer)
   }
 
-  /// Pipes this pipe to the specified sender.
-  pub async fn pipe_to_sender(self, sender: ShellPipeSender) {
-    match self {
-      ShellPipe::InheritStdin => unreachable!(),
-      ShellPipe::Channel(mut rx) => {
-        while let Some(data) = rx.recv().await {
-          if sender.send(data).is_err() {
-            break;
-          }
-        }
-      }
-    }
+  pub fn into_raw(self) -> os_pipe::PipeWriter {
+    self.0
   }
+
+  pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+    Ok(self.0.write_all(bytes)?)
+  }
+}
+
+/// Used to communicate between commands.
+pub fn pipe() -> (ShellPipeSender, ShellPipeReceiver) {
+  let (reader, writer) = os_pipe::pipe().unwrap();
+  (ShellPipeSender(writer), ShellPipeReceiver(reader))
 }
