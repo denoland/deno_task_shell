@@ -57,7 +57,7 @@ pub(crate) async fn execute_with_pipes(
   let state = ShellState::new(env_vars, cwd);
 
   // spawn a sequential list and pipe its output to the environment
-  let result = spawn_sequential_list(
+  let result = execute_sequential_list(
     list,
     state,
     stdin,
@@ -79,7 +79,7 @@ enum AsyncCommandBehavior {
   Yield,
 }
 
-fn spawn_sequential_list(
+fn execute_sequential_list(
   list: SequentialList,
   mut state: ShellState,
   stdin: ShellPipeReader,
@@ -99,11 +99,11 @@ fn spawn_sequential_list(
         let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn(async move {
           let result =
-            spawn_sequence(item.sequence, state, stdin, stdout, stderr).await;
+            execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
           futures::future::join_all(result.into_handles()).await;
         }));
       } else {
-        let result = spawn_sequence(
+        let result = execute_sequence(
           item.sequence,
           state.clone(),
           stdin.clone(),
@@ -134,7 +134,7 @@ fn spawn_sequential_list(
   .boxed()
 }
 
-fn spawn_sequence(
+fn execute_sequence(
   sequence: Sequence,
   mut state: ShellState,
   stdin: ShellPipeReader,
@@ -161,11 +161,11 @@ fn spawn_sequence(
         Vec::new(),
       ),
       Sequence::Command(command) => {
-        start_command(command, state, stdin, stdout, stderr).await
+        execute_command(command, state, stdin, stdout, stderr).await
       }
       Sequence::BooleanList(list) => {
         let mut changes = vec![];
-        let first_result = spawn_sequence(
+        let first_result = execute_sequence(
           list.current,
           state.clone(),
           stdin.clone(),
@@ -201,7 +201,7 @@ fn spawn_sequence(
         };
         if let Some(next) = next {
           let next_result =
-            spawn_sequence(next, state, stdin, stdout, stderr).await;
+            execute_sequence(next, state, stdin, stdout, stderr).await;
           match next_result {
             ExecuteResult::Exit(code, sub_handles) => {
               async_handles.extend(sub_handles);
@@ -223,15 +223,14 @@ fn spawn_sequence(
         let mut last_input = Some(stdin);
         for sequence in sequences.into_iter() {
           let (stdin, stdout) = pipe();
-          let spawned_sequence = spawn_sequence(
+          wait_tasks.push(execute_sequence(
             sequence,
             state.clone(),
             last_input.take().unwrap(),
             stdout,
             stderr.clone(),
-          );
+          ));
           last_input = Some(stdin);
-          wait_tasks.push(spawned_sequence);
         }
         let output_handle = tokio::task::spawn_blocking(|| {
           last_input.unwrap().pipe_to_sender(stdout).unwrap();
@@ -252,7 +251,7 @@ fn spawn_sequence(
         }
       }
       Sequence::Subshell(list) => {
-        let result = spawn_sequential_list(
+        let result = execute_sequential_list(
           *list,
           state.clone(),
           stdin,
@@ -276,7 +275,7 @@ fn spawn_sequence(
   .boxed()
 }
 
-async fn start_command(
+async fn execute_command(
   command: Command,
   state: ShellState,
   stdin: ShellPipeReader,
@@ -527,24 +526,17 @@ async fn evaluate_command_substitution(
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> String {
-  let (shell_stdout_reader, shell_stdout_writer) = pipe();
-  let spawned_step = spawn_sequential_list(
-    list,
-    state.clone(),
-    stdin,
-    shell_stdout_writer,
-    stderr,
-    AsyncCommandBehavior::Wait,
-  );
-  let output_handle = tokio::task::spawn_blocking(move || {
-    let mut final_data = Vec::new();
-    shell_stdout_reader.write_all(&mut final_data).unwrap();
-
-    final_data
-  });
-  let _ = spawned_step.await;
-  let data = output_handle.await.unwrap();
-  let text = String::from_utf8_lossy(&data);
+  let text = execute_with_stdout_as_text(|shell_stdout_writer| {
+    execute_sequential_list(
+      list,
+      state.clone(),
+      stdin,
+      shell_stdout_writer,
+      stderr,
+      AsyncCommandBehavior::Wait,
+    )
+  })
+  .await;
 
   // Remove the trailing newline and then replace inner newlines with a space
   // This seems to be what sh does, but I'm not entirely sure:
@@ -557,4 +549,19 @@ async fn evaluate_command_substitution(
     .unwrap_or(&text)
     .replace("\r\n", " ")
     .replace('\n', " ")
+}
+
+async fn execute_with_stdout_as_text(
+  execute: impl FnOnce(ShellPipeWriter) -> FutureExecuteResult,
+) -> String {
+  let (shell_stdout_reader, shell_stdout_writer) = pipe();
+  let spawned_output = execute(shell_stdout_writer);
+  let output_handle = tokio::task::spawn_blocking(move || {
+    let mut final_data = Vec::new();
+    shell_stdout_reader.write_all(&mut final_data).unwrap();
+    final_data
+  });
+  let _ = spawned_output.await;
+  let data = output_handle.await.unwrap();
+  String::from_utf8_lossy(&data).to_string()
 }
