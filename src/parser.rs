@@ -404,10 +404,9 @@ fn parse_string_or_word(input: &str) -> ParseResult<StringOrWord> {
 }
 
 fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
-  const SPECIAL_CHARS: &str = "*~(){}<>$|&;\"'";
   assert(
     parse_string_parts(|c| {
-      !c.is_whitespace() && (c == '$' || !SPECIAL_CHARS.contains(c))
+      !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
     }),
     |result| {
       result
@@ -649,7 +648,7 @@ fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
       input,
       "Redirects are currently not supported, but will be soon.",
     )
-  } else if input.starts_with('*') {
+  } else if input.starts_with('*') || input.starts_with('?') {
     ParseErrorFailure::new(
       input,
       "Globs are currently not supported, but will be soon.",
@@ -688,6 +687,14 @@ mod test {
       concat!(
         "Globs are currently not supported, but will be soon.\n",
         "  * other\n",
+        "  ~",
+      ),
+    );
+    assert_eq!(
+      parse("cp test/? other").err().unwrap().to_string(),
+      concat!(
+        "Globs are currently not supported, but will be soon.\n",
+        "  ? other\n",
         "  ~",
       ),
     );
