@@ -39,6 +39,12 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command(r#""echo" "*""#)
+    .assert_stdout("*\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command("echo test-dashes")
     .assert_stdout("test-dashes\n")
     .run()
