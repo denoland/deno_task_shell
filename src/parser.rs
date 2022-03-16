@@ -542,7 +542,7 @@ pub(crate) fn parse_string_parts(
         PendingPart::Variable,
       ),
       |input| {
-        let (input, _) = char('`')(input)?;
+        let (_, _) = char('`')(input)?;
         ParseError::fail(
           input,
           "Back ticks in strings is currently not supported.",
@@ -716,6 +716,18 @@ mod test {
     );
 
     assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
+
+    assert_eq!(
+      parse("echo `echo 1`").err().unwrap().to_string(),
+      concat!(
+        "Back ticks in strings is currently not supported.\n",
+        "  `echo 1`\n",
+        "  ~",
+      ),
+    );
+    assert!(
+      parse("deno run --allow-read=. --allow-write=./testing main.ts").is_ok(),
+    );
   }
 
   #[test]
