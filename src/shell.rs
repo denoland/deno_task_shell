@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Stdio;
 
 use anyhow::bail;
 use anyhow::Result;
@@ -17,6 +16,7 @@ use crate::commands::mv_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
+use crate::parser::PipelineOperator;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::StringOrWord;
@@ -218,22 +218,35 @@ fn execute_sequence(
         }
       }
       Sequence::Pipeline(pipeline) => {
-        let sequences = pipeline.into_vec();
         let mut wait_tasks = vec![];
-        let mut last_input = Some(stdin);
-        for sequence in sequences.into_iter() {
-          let (stdin, stdout) = pipe();
+        let mut last_output = Some(stdin);
+        let mut next_sequence = Some(Sequence::Pipeline(pipeline));
+        while let Some(sequence) = next_sequence.take() {
+          let (output_reader, output_writer) = pipe();
+          let (stderr, sequence) = match sequence {
+            Sequence::Pipeline(pipeline) => {
+              next_sequence = Some(pipeline.next);
+              (
+                match pipeline.op {
+                  PipelineOperator::Stdout => stderr.clone(),
+                  PipelineOperator::StdoutStderr => output_writer.clone(),
+                },
+                pipeline.current,
+              )
+            }
+            _ => (stderr.clone(), sequence),
+          };
           wait_tasks.push(execute_sequence(
             sequence,
             state.clone(),
-            last_input.take().unwrap(),
-            stdout,
+            last_output.take().unwrap(),
+            output_writer.clone(),
             stderr.clone(),
           ));
-          last_input = Some(stdin);
+          last_output = Some(output_reader);
         }
         let output_handle = tokio::task::spawn_blocking(|| {
-          last_input.unwrap().pipe_to_sender(stdout).unwrap();
+          last_output.unwrap().pipe_to_sender(stdout).unwrap();
         });
         let mut results = futures::future::join_all(wait_tasks).await;
         output_handle.await.unwrap();
@@ -352,7 +365,7 @@ async fn execute_command(
       .envs(state.env_vars())
       .stdout(stdout.into_raw())
       .stdin(stdin.into_raw())
-      .stderr(Stdio::inherit())
+      .stderr(stderr.clone().into_raw())
       .spawn();
 
     let mut child = match child {
