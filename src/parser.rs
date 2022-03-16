@@ -35,32 +35,6 @@ pub enum Sequence {
   Subshell(Box<SequentialList>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct BooleanList {
-  pub current: Sequence,
-  pub op: BooleanListOperator,
-  pub next: Sequence,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Pipeline {
-  pub current: Sequence,
-  pub next: Sequence,
-}
-
-impl Pipeline {
-  pub fn into_vec(self) -> Vec<Sequence> {
-    let mut sequences = vec![self.current];
-    match self.next {
-      Sequence::Pipeline(pipeline) => {
-        sequences.extend(pipeline.into_vec());
-      }
-      next => sequences.push(next),
-    }
-    sequences
-  }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BooleanListOperator {
   // &&
@@ -81,6 +55,28 @@ impl BooleanListOperator {
     *self == BooleanListOperator::Or && exit_code != 0
       || *self == BooleanListOperator::And && exit_code == 0
   }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanList {
+  pub current: Sequence,
+  pub op: BooleanListOperator,
+  pub next: Sequence,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PipelineOperator {
+  // |
+  Stdout,
+  // |&
+  StdoutStderr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pipeline {
+  pub current: Sequence,
+  pub op: PipelineOperator,
+  pub next: Sequence,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,7 +215,8 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
     ),
     skip_whitespace,
   )(input)?;
-  let (input, current) = match parse_boolean_list_op(input) {
+
+  Ok(match parse_boolean_list_op(input) {
     Ok((input, op)) => {
       let (input, next_sequence) = assert_exists(
         &parse_sequence,
@@ -235,7 +232,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
       )
     }
     Err(ParseError::Backtrace) => match parse_pipeline_op(input) {
-      Ok((input, _)) => {
+      Ok((input, op)) => {
         let (input, next_sequence) = assert_exists(
           &parse_sequence,
           "Expected command following pipeline operator.",
@@ -244,6 +241,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
           input,
           Sequence::Pipeline(Box::new(Pipeline {
             current,
+            op,
             next: next_sequence,
           })),
         )
@@ -252,9 +250,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
       Err(err) => return Err(err),
     },
     Err(err) => return Err(err),
-  };
-
-  Ok((input, current))
+  })
 }
 
 fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
@@ -298,7 +294,7 @@ fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
     or4(
       parse_list_op,
       map(parse_redirect, |_| ()),
-      parse_pipeline_op,
+      map(parse_pipeline_op, |_| ()),
       map(char(')'), |_| ()),
     ),
   )(input)
@@ -350,10 +346,13 @@ fn parse_op_str<'a>(
   )
 }
 
-fn parse_pipeline_op(input: &str) -> ParseResult<()> {
+fn parse_pipeline_op(input: &str) -> ParseResult<PipelineOperator> {
   terminated(
-    map(char('|'), |_| ()),
-    terminated(check_not(char('|')), skip_whitespace),
+    or(
+      map(tag("|&"), |_| PipelineOperator::StdoutStderr),
+      map(char('|'), |_| PipelineOperator::Stdout),
+    ),
+    terminated(check_not(one_of("|&")), skip_whitespace),
   )(input)
 }
 
@@ -915,6 +914,28 @@ mod test {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
             }),
+            op: PipelineOperator::Stdout,
+            next: Sequence::Command(Command {
+              env_vars: vec![],
+              args: vec![StringOrWord::new_word("other")],
+            }),
+          })),
+        }],
+      }),
+    );
+
+    run_test(
+      parse_sequential_list,
+      "test |& other",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Pipeline(Box::new(Pipeline {
+            current: Sequence::Command(Command {
+              env_vars: vec![],
+              args: vec![StringOrWord::new_word("test")],
+            }),
+            op: PipelineOperator::StdoutStderr,
             next: Sequence::Command(Command {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],

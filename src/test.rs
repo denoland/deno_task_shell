@@ -240,6 +240,35 @@ pub async fn pipeline() {
     .assert_stdout("1\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .assert_stderr("2\n")
+    .run()
+    .await;
+
+  // stdout and stderr pipeline
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(2);' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    // still outputs 2 because the first command didn't pipe stderr
+    .assert_stderr("2\n1\n")
+    .run()
+    .await;
+
+  // |& pipeline should still pipe stdout
+  TestBuilder::new()
+    .command(r#"echo 1 |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]
