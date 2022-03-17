@@ -13,6 +13,7 @@ use crate::commands::cp_command;
 use crate::commands::exit_command;
 use crate::commands::mkdir_command;
 use crate::commands::mv_command;
+use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
@@ -292,7 +293,7 @@ async fn execute_command(
   command: Command,
   state: ShellState,
   stdin: ShellPipeReader,
-  stdout: ShellPipeWriter,
+  mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   let mut args =
@@ -308,13 +309,10 @@ async fn execute_command(
   } else if command_name == "exit" {
     exit_command(args, stderr)
   } else if command_name == "pwd" {
-    // ignores additional arguments
-    ExecuteResult::with_stdout_text(
-      stdout,
-      format!("{}\n", state.cwd().display()),
-    )
+    pwd_command(state.cwd(), args, stdout, stderr)
   } else if command_name == "echo" {
-    ExecuteResult::with_stdout_text(stdout, format!("{}\n", args.join(" ")))
+    let _ = stdout.write_line(&args.join(" "));
+    ExecuteResult::from_exit_code(0)
   } else if command_name == "true" {
     // ignores additional arguments
     ExecuteResult::from_exit_code(0)
