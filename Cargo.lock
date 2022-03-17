@@ -53,7 +53,7 @@ dependencies = [
  "futures",
  "os_pipe",
  "parking_lot",
- "path-absolutize",
+ "path-dedot",
  "pretty_assertions",
  "tempfile",
  "tokio",
@@ -298,15 +298,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-sys",
-]
-
-[[package]]
-name = "path-absolutize"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b288298a7a3a7b42539e3181ba590d32f2d91237b0691ed5f103875c754b3bf5"
-dependencies = [
- "path-dedot",
 ]
 
 [[package]]

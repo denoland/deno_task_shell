@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::Result;
-use path_absolutize::Absolutize;
+use path_dedot::ParseDot;
 
 use crate::fs_util;
 use crate::shell_types::EnvChange;
@@ -34,7 +34,7 @@ pub fn cd_command(
 fn execute_cd(cwd: &Path, args: Vec<String>) -> Result<PathBuf> {
   let path = parse_args(args)?;
   let new_dir = cwd.join(&path);
-  let new_dir = match new_dir.absolutize() {
+  let new_dir = match new_dir.parse_dot() {
     Ok(path) => path.to_path_buf(),
     // fallback to canonicalize path just in case
     Err(_) => fs_util::canonicalize_path(&new_dir)?,
