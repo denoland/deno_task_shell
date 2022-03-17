@@ -361,12 +361,19 @@ mod test {
     // try copying to a file
     let result = execute_cp(
       dir.path(),
-      vec!["-r".to_string(), "dest".to_string(), "dest2/file1.txt".to_string()],
+      vec![
+        "-r".to_string(),
+        "dest".to_string(),
+        "dest2/file1.txt".to_string(),
+      ],
     )
     .await
     .err()
     .unwrap();
-    assert_eq!(result.to_string(), "could not copy dest to dest2/file1.txt: destination was a file")
+    assert_eq!(
+      result.to_string(),
+      "could not copy dest to dest2/file1.txt: destination was a file"
+    )
   }
 
   #[tokio::test]
