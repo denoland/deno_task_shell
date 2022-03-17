@@ -79,6 +79,12 @@ impl TestBuilder {
     self
   }
 
+  pub fn directory(&mut self, path: &str) -> &mut Self {
+    let temp_dir = self.ensure_temp_dir();
+    fs::create_dir_all(temp_dir.cwd.join(path)).unwrap();
+    self
+  }
+
   pub fn file(&mut self, path: &str, text: &str) -> &mut Self {
     let temp_dir = self.ensure_temp_dir();
     fs::write(temp_dir.cwd.join(path), text).unwrap();

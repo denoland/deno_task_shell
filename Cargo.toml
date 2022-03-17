@@ -12,6 +12,7 @@ description = "Cross platform scripting for deno task"
 [dependencies]
 anyhow = "1.0.55"
 futures = "0.3.16"
+path-absolutize = "3.0.11"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 os_pipe = "1.0.1"
 

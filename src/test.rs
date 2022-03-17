@@ -274,8 +274,9 @@ pub async fn pipeline() {
 #[tokio::test]
 pub async fn pwd() {
   TestBuilder::new()
-    .command("mkdir sub_dir && pwd && cd sub_dir && pwd && cd ../ && pwd")
+    .directory("sub_dir")
     .file("file.txt", "test")
+    .command("pwd && cd sub_dir && pwd && cd ../ && pwd")
     // the actual temp directory will get replaced here
     .assert_stdout(&format!(
       "$TEMP_DIR\n$TEMP_DIR{}sub_dir\n$TEMP_DIR\n",
@@ -285,9 +286,20 @@ pub async fn pwd() {
     .await;
 
   TestBuilder::new()
-    .command("pwd -L")
-    .assert_stderr("pwd: flags are currently not supported: -L\n")
+    .command("pwd -M")
+    .assert_stderr("pwd: unsupported flag: -M\n")
     .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+pub async fn pwd_logical() {
+  TestBuilder::new()
+    .directory("main")
+    .command("ln -s main symlinked_main && cd symlinked_main && pwd && pwd -L")
+    .assert_stdout("$TEMP_DIR/symlinked_main\n$TEMP_DIR/main\n")
     .run()
     .await;
 }

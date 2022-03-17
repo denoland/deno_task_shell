@@ -1,9 +1,10 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
-use anyhow::bail;
+use anyhow::Context;
 use anyhow::Result;
 use std::path::Path;
 
+use crate::fs_util;
 use crate::shell_types::ExecuteResult;
 use crate::shell_types::ShellPipeWriter;
 
@@ -16,9 +17,9 @@ pub fn pwd_command(
   mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
-  match parse_args(args) {
-    Ok(()) => {
-      let _ = stdout.write_line(&cwd.display().to_string());
+  match execute_pwd(cwd, args) {
+    Ok(output) => {
+      let _ = stdout.write_line(&output);
       ExecuteResult::from_exit_code(0)
     }
     Err(err) => {
@@ -28,22 +29,40 @@ pub fn pwd_command(
   }
 }
 
-fn parse_args(args: Vec<String>) -> Result<()> {
-  if let Some(arg) = parse_arg_kinds(&args).into_iter().next() {
+fn execute_pwd(cwd: &Path, args: Vec<String>) -> Result<String> {
+  let flags = parse_args(args)?;
+  let cwd = if flags.logical {
+    fs_util::canonicalize_path(cwd)
+      .with_context(|| format!("error canonicalizing: {}", cwd.display()))?
+  } else {
+    cwd.to_path_buf()
+  };
+  Ok(cwd.display().to_string())
+}
+
+#[derive(Debug, PartialEq)]
+struct PwdFlags {
+  logical: bool,
+}
+
+fn parse_args(args: Vec<String>) -> Result<PwdFlags> {
+  let mut logical = false;
+  for arg in parse_arg_kinds(&args) {
     match arg {
-      ArgKind::LongFlag(flag) => {
-        bail!("flags are currently not supported: --{}", flag)
+      ArgKind::ShortFlag('L') => {
+        logical = true;
       }
-      ArgKind::ShortFlag(flag) => {
-        bail!("flags are currently not supported: -{}", flag)
+      ArgKind::ShortFlag('P') => {
+        // ignore, this is the default
       }
-      ArgKind::Arg(arg) => {
-        bail!("args are currently not supported: {}", arg)
+      ArgKind::Arg(_) => {
+        // args are ignored by pwd
       }
+      _ => arg.bail_unsupported()?,
     }
   }
 
-  Ok(())
+  Ok(PwdFlags { logical })
 }
 
 #[cfg(test)]
@@ -53,27 +72,29 @@ mod test {
 
   #[test]
   fn parses_args() {
-    assert!(parse_args(vec![]).is_ok());
+    assert_eq!(parse_args(vec![]).unwrap(), PwdFlags { logical: false });
     assert_eq!(
-      parse_args(vec!["test".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
-      "args are currently not supported: test"
+      parse_args(vec!["-P".to_string()]).unwrap(),
+      PwdFlags { logical: false }
     );
+    assert_eq!(
+      parse_args(vec!["-L".to_string()]).unwrap(),
+      PwdFlags { logical: true }
+    );
+    assert!(parse_args(vec!["test".to_string()]).is_ok());
     assert_eq!(
       parse_args(vec!["--flag".to_string()])
         .err()
         .unwrap()
         .to_string(),
-      "flags are currently not supported: --flag"
+      "unsupported flag: --flag"
     );
     assert_eq!(
       parse_args(vec!["-t".to_string()])
         .err()
         .unwrap()
         .to_string(),
-      "flags are currently not supported: -t"
+      "unsupported flag: -t"
     );
   }
 }
