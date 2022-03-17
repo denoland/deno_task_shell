@@ -283,6 +283,13 @@ pub async fn pwd() {
     ))
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("pwd -L")
+    .assert_stderr("pwd: flags are currently not supported: -L\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 // Basic integration tests as there are unit tests in the commands
