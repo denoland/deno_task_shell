@@ -133,7 +133,7 @@ mod test {
     let sub_dir_path = dir_path.join("sub_dir");
     fs::create_dir(&sub_dir_path).unwrap();
     assert_eq!(
-      execute_cd(dir.path(), vec!["sub_dir".to_string()]).unwrap(),
+      execute_cd(&dir_path, vec!["sub_dir".to_string()]).unwrap(),
       sub_dir_path
     );
   }
