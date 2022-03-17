@@ -4,7 +4,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::bail;
+use anyhow::Context;
 use anyhow::Result;
+use futures::future::BoxFuture;
+use futures::FutureExt;
 
 use crate::shell_types::ExecuteResult;
 use crate::shell_types::ShellPipeWriter;
@@ -27,9 +30,9 @@ pub async fn cp_command(
 }
 
 async fn execute_cp(cwd: &Path, args: Vec<String>) -> Result<()> {
-  let flags = parse_args(cwd, args)?;
-  for (from, to) in flags.operations {
-    if let Err(err) = tokio::fs::copy(&from.path, &to.path).await {
+  let flags = parse_cp_args(cwd, args)?;
+  for (from, to) in &flags.operations {
+    if let Err(err) = do_copy_operation(&flags, from, to).await {
       bail!(
         "could not copy {} to {}: {}",
         from.specified,
@@ -39,6 +42,102 @@ async fn execute_cp(cwd: &Path, args: Vec<String>) -> Result<()> {
     }
   }
   Ok(())
+}
+
+async fn do_copy_operation(
+  flags: &CpFlags,
+  from: &PathWithSpecified,
+  to: &PathWithSpecified,
+) -> Result<()> {
+  // These are racy with the file system, but that's ok.
+  // They only exists to give better error messages.
+  if from.path.is_dir() {
+    if flags.recursive {
+      if to.path.exists() && to.path.is_file() {
+        bail!("destination was a file");
+      } else if to.path.is_symlink() {
+        bail!("no support for copying to symlinks")
+      } else if from.path.is_symlink() {
+        bail!("no support for copying from symlinks")
+      } else {
+        copy_dir_recursively(from.path.clone(), to.path.clone()).await?;
+      }
+    } else {
+      bail!("source was a directory; maybe specify -r")
+    }
+  } else {
+    tokio::fs::copy(&from.path, &to.path).await?;
+  }
+  Ok(())
+}
+
+fn copy_dir_recursively(
+  from: PathBuf,
+  to: PathBuf,
+) -> BoxFuture<'static, Result<()>> {
+  // recursive, so box it
+  async move {
+    tokio::fs::create_dir_all(&to)
+      .await
+      .with_context(|| format!("Creating {}", to.display()))?;
+    let mut read_dir = tokio::fs::read_dir(&from)
+      .await
+      .with_context(|| format!("Reading {}", from.display()))?;
+
+    while let Some(entry) = read_dir.next_entry().await? {
+      let file_type = entry.file_type().await?;
+      let new_from = from.join(entry.file_name());
+      let new_to = to.join(entry.file_name());
+
+      if file_type.is_dir() {
+        copy_dir_recursively(new_from.clone(), new_to.clone())
+          .await
+          .with_context(|| {
+            format!("Dir {} to {}", new_from.display(), new_to.display())
+          })?;
+      } else if file_type.is_file() {
+        tokio::fs::copy(&new_from, &new_to).await.with_context(|| {
+          format!("Copying {} to {}", new_from.display(), new_to.display())
+        })?;
+      }
+    }
+
+    Ok(())
+  }
+  .boxed()
+}
+
+struct CpFlags {
+  recursive: bool,
+  operations: Vec<(PathWithSpecified, PathWithSpecified)>,
+}
+
+fn parse_cp_args(cwd: &Path, args: Vec<String>) -> Result<CpFlags> {
+  let mut paths = Vec::new();
+  let mut recursive = false;
+  for arg in parse_arg_kinds(&args) {
+    match arg {
+      ArgKind::Arg(arg) => {
+        paths.push(arg);
+      }
+      ArgKind::LongFlag("recursive")
+      | ArgKind::ShortFlag('r')
+      | ArgKind::ShortFlag('R') => {
+        recursive = true;
+      }
+      _ => arg.bail_unsupported()?,
+    }
+  }
+  if paths.is_empty() {
+    bail!("missing file operand");
+  } else if paths.len() == 1 {
+    bail!("missing destination file operand after '{}'", paths[0]);
+  }
+
+  Ok(CpFlags {
+    recursive,
+    operations: get_copy_and_move_operations(cwd, paths)?,
+  })
 }
 
 pub async fn mv_command(
@@ -56,7 +155,7 @@ pub async fn mv_command(
 }
 
 async fn execute_mv(cwd: &Path, args: Vec<String>) -> Result<()> {
-  let flags = parse_args(cwd, args)?;
+  let flags = parse_mv_args(cwd, args)?;
   for (from, to) in flags.operations {
     if let Err(err) = tokio::fs::rename(&from.path, &to.path).await {
       bail!(
@@ -70,11 +169,11 @@ async fn execute_mv(cwd: &Path, args: Vec<String>) -> Result<()> {
   Ok(())
 }
 
-struct CpMvFlags {
+struct MvFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_args(cwd: &Path, args: Vec<String>) -> Result<CpMvFlags> {
+fn parse_mv_args(cwd: &Path, args: Vec<String>) -> Result<MvFlags> {
   let mut paths = Vec::new();
   for arg in parse_arg_kinds(&args) {
     match arg {
@@ -90,7 +189,7 @@ fn parse_args(cwd: &Path, args: Vec<String>) -> Result<CpMvFlags> {
     bail!("missing destination file operand after '{}'", paths[0]);
   }
 
-  Ok(CpMvFlags {
+  Ok(MvFlags {
     operations: get_copy_and_move_operations(cwd, paths)?,
   })
 }
@@ -107,7 +206,7 @@ fn get_copy_and_move_operations(
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
   let destination = cwd.join(&specified_destination);
-  let from_args = paths; //.into_iter().map(|a| cwd.join(a)).collect::<Vec<_>>();
+  let from_args = paths;
   let mut operations = Vec::new();
   if from_args.len() > 1 {
     if !destination.is_dir() {
@@ -223,6 +322,51 @@ mod test {
       result.to_string(),
       "missing destination file operand after 'file1.txt'"
     );
+
+    // test recursive flag
+    fs::create_dir_all(dest_dir.join("sub_dir")).unwrap();
+    fs::write(dest_dir.join("sub_dir").join("sub.txt"), "test").unwrap();
+    let dest_dir2 = dir.path().join("dest2");
+
+    let result =
+      execute_cp(dir.path(), vec!["dest".to_string(), "dest2".to_string()])
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "could not copy dest to dest2: source was a directory; maybe specify -r"
+    );
+    assert!(!dest_dir2.exists());
+
+    execute_cp(
+      dir.path(),
+      vec!["-r".to_string(), "dest".to_string(), "dest2".to_string()],
+    )
+    .await
+    .unwrap();
+    assert!(dest_dir2.exists());
+    assert!(dest_dir2.join("file1.txt").exists());
+    assert!(dest_dir2.join("file2.txt").exists());
+    assert!(dest_dir2.join("sub_dir").join("sub.txt").exists());
+
+    // copy again
+    execute_cp(
+      dir.path(),
+      vec!["-r".to_string(), "dest".to_string(), "dest2".to_string()],
+    )
+    .await
+    .unwrap();
+
+    // try copying to a file
+    let result = execute_cp(
+      dir.path(),
+      vec!["-r".to_string(), "dest".to_string(), "dest2/file1.txt".to_string()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(result.to_string(), "could not copy dest to dest2/file1.txt: destination was a file")
   }
 
   #[tokio::test]
