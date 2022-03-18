@@ -284,6 +284,19 @@ fn execute_sequence(
           ExecuteResult::Continue(_, _, _) => result,
         }
       }
+      Sequence::Negated(sequence) => {
+        let result =
+          execute_sequence(*sequence, state, stdin, stdout, stderr).await;
+        match result {
+          ExecuteResult::Exit(code, handles) => {
+            ExecuteResult::Exit(code, handles)
+          }
+          ExecuteResult::Continue(code, changes, handles) => {
+            let new_code = if code == 0 { 1 } else { 0 };
+            ExecuteResult::Continue(new_code, changes, handles)
+          }
+        }
+      }
     }
   }
   .boxed()
@@ -303,7 +316,18 @@ async fn execute_command(
   } else {
     args.remove(0)
   };
-  if command_name == "cd" {
+  if let Some(stripped_name) = command_name.strip_prefix('!') {
+    let _ = stderr.write_line(
+      &format!(concat!(
+        "History expansion is not supported:\n",
+        "  {}\n",
+        "  ~\n\n",
+        "Perhaps you meant to add a space after the exclamation point to negate the command?\n",
+        "  ! {}",
+      ), command_name, stripped_name)
+    );
+    ExecuteResult::from_exit_code(1)
+  } else if command_name == "cd" {
     let cwd = state.cwd().clone();
     cd_command(&cwd, args, stderr)
   } else if command_name == "exit" {
