@@ -158,6 +158,18 @@ pub fn or5<'a, O>(
   or4(a, b, c, or(d, e))
 }
 
+/// Checks for any to match.
+pub fn or6<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+  d: impl Fn(&'a str) -> ParseResult<'a, O>,
+  e: impl Fn(&'a str) -> ParseResult<'a, O>,
+  f: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or5(a, b, c, d, or(e, f))
+}
+
 /// Returns the second value and discards the first.
 pub fn preceded<'a, First, Second>(
   first: impl Fn(&'a str) -> ParseResult<'a, First>,

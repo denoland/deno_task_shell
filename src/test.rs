@@ -19,6 +19,36 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command(r#"echo "1 2   3""#)
+    .assert_stdout("1 2   3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 2\ \ \ 3"#)
+    .assert_stdout("1 2   3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo "1 2\ \ \ 3""#)
+    .assert_stdout("1 2\\ \\ \\ 3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo test$(echo "1    2")"#)
+    .assert_stdout("test1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"TEST="1   2" ; echo $TEST"#)
+    .assert_stdout("1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command(
       r#"VAR=1 deno eval 'console.log(Deno.env.get("VAR"))' && echo $VAR"#,
     )
