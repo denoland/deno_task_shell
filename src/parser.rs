@@ -321,7 +321,7 @@ fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
       parse_list_op,
       map(parse_redirect, |_| ()),
       map(parse_pipeline_op, |_| ()),
-      map(char(')'), |_| ()),
+      map(ch(')'), |_| ()),
     ),
   )(input)
 }
@@ -384,7 +384,7 @@ fn parse_pipeline_op(input: &str) -> ParseResult<PipelineOperator> {
   terminated(
     or(
       map(tag("|&"), |_| PipelineOperator::StdoutStderr),
-      map(char('|'), |_| PipelineOperator::Stdout),
+      map(ch('|'), |_| PipelineOperator::Stdout),
     ),
     terminated(check_not(one_of("|&")), skip_whitespace),
   )(input)
@@ -408,7 +408,7 @@ fn parse_env_vars(input: &str) -> ParseResult<Vec<EnvVar>> {
 
 fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
   let (input, name) = parse_env_var_name(input)?;
-  let (input, _) = char('=')(input)?;
+  let (input, _) = ch('=')(input)?;
   let (input, value) = with_error_context(
     terminated(parse_env_var_value, assert_whitespace_or_end),
     "Invalid environment variable value.",
@@ -486,11 +486,11 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
   // single quoted strings cannot contain a single quote
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_02
   delimited(
-    char('\''),
+    ch('\''),
     take_while(|c| c != '\''),
     with_failure_input(
       input,
-      assert_exists(char('\''), "Expected closing single quote."),
+      assert_exists(ch('\''), "Expected closing single quote."),
     ),
   )(input)
 }
@@ -499,11 +499,11 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
   // Double quotes may have escaped
   delimited(
-    char('"'),
+    ch('"'),
     parse_string_parts(ParseStringPartsMode::DoubleQuotes),
     with_failure_input(
       input,
-      assert_exists(char('"'), "Expected closing double quote."),
+      assert_exists(ch('"'), "Expected closing double quote."),
     ),
   )(input)
 }
@@ -521,15 +521,15 @@ fn parse_string_parts(
     or(
       parse_escaped_char('$'),
       terminated(
-        char('$'),
-        check_not(or(map(parse_env_var_name, |_| ()), map(char('('), |_| ()))),
+        ch('$'),
+        check_not(or(map(parse_env_var_name, |_| ()), map(ch('('), |_| ()))),
       ),
     )(input)
   }
 
   fn parse_special_shell_var(input: &str) -> ParseResult<char> {
     // for now, these hard error
-    preceded(char('$'), |input| {
+    preceded(ch('$'), |input| {
       if let Some(char) = input.chars().next() {
         // $$ - process id
         // $? - last exit code
@@ -549,7 +549,7 @@ fn parse_string_parts(
   fn parse_escaped_char<'a>(
     c: char,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
-    preceded(char('\\'), char(c))
+    preceded(ch('\\'), ch(c))
   }
 
   fn first_escaped_char<'a>(
@@ -576,12 +576,9 @@ fn parse_string_parts(
     let (input, parts) = many0(or6(
       map(first_escaped_char(mode), PendingPart::Char),
       map(parse_command_substitution, PendingPart::Command),
-      map(
-        preceded(char('$'), parse_env_var_name),
-        PendingPart::Variable,
-      ),
+      map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
-        let (_, _) = char('`')(input)?;
+        let (_, _) = ch('`')(input)?;
         ParseError::fail(
           input,
           "Back ticks in strings is currently not supported.",
@@ -589,7 +586,7 @@ fn parse_string_parts(
       },
       // words can have escaped spaces
       map(
-        if_true(preceded(char('\\'), char(' ')), |_| {
+        if_true(preceded(ch('\\'), ch(' ')), |_| {
           mode == ParseStringPartsMode::Word
         }),
         PendingPart::Char,
@@ -627,16 +624,16 @@ fn parse_string_parts(
 }
 
 fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
-  delimited(tag("$("), parse_sequential_list, char(')'))(input)
+  delimited(tag("$("), parse_sequential_list, ch(')'))(input)
 }
 
 fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
   delimited(
-    terminated(char('('), skip_whitespace),
+    terminated(ch('('), skip_whitespace),
     parse_sequential_list,
     with_failure_input(
       input,
-      assert_exists(char(')'), "Expected closing parenthesis on subshell."),
+      assert_exists(ch(')'), "Expected closing parenthesis on subshell."),
     ),
   )(input)
 }

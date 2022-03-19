@@ -40,7 +40,7 @@ impl<'a> ParseError<'a> {
 pub type ParseResult<'a, O> = Result<(&'a str, O), ParseError<'a>>;
 
 /// Recognizes a character.
-pub fn char<'a>(c: char) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+pub fn ch<'a>(c: char) -> impl Fn(&'a str) -> ParseResult<'a, char> {
   if_true(next_char, move |found_char| *found_char == c)
 }
 
