@@ -327,13 +327,30 @@ pub fn many0<'a, O>(
 
 /// Skips the whitespace.
 pub fn skip_whitespace(input: &str) -> ParseResult<()> {
+  match whitespace(input) {
+    Ok((input, _)) => Ok((input, ())),
+    // the next char was not a backtrace... continue.
+    Err(ParseError::Backtrace) => Ok((input, ())),
+    Err(err) => Err(err),
+  }
+}
+
+/// Parses and expects whitespace.
+pub fn whitespace(input: &str) -> ParseResult<&str> {
+  if input.is_empty() {
+    return ParseError::backtrace();
+  }
+
   for (pos, c) in input.char_indices() {
     if !c.is_whitespace() {
-      return Ok((&input[pos..], ()));
+      if pos == 0 {
+        return ParseError::backtrace();
+      }
+      return Ok((&input[pos..], &input[..pos]));
     }
   }
 
-  Ok(("", ()))
+  Ok(("", input))
 }
 
 /// Checks if a condition is true for a combinator.

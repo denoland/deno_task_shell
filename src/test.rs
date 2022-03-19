@@ -230,6 +230,12 @@ pub async fn pipeline() {
     .await;
 
   TestBuilder::new()
+    .command(r#"echo 1 | echo 2 && echo 3"#)
+    .assert_stdout("2\n3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command(r#"echo $(sleep 0.1 && echo 2 & echo 1) | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
     .assert_stdout("1 2\n")
     .run()
@@ -267,6 +273,57 @@ pub async fn pipeline() {
   TestBuilder::new()
     .command(r#"echo 1 |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
     .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+pub async fn negated() {
+  TestBuilder::new()
+    .command(r#"! echo 1 && echo 2"#)
+    .assert_stdout("1\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 || echo 2"#)
+    .assert_stdout("1\n2\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! (echo 1 | echo 2 && echo 3) || echo 4"#)
+    .assert_stdout("2\n3\n4\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 | echo 2 && echo 3"#)
+    .assert_stdout("2\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! (exit 5) && echo 1"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! exit 5 && echo 1"#)
+    .assert_exit_code(5)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 && echo 2 &"#)
+    .assert_stdout("1\n")
+    // being explicit... this must be 0 because it's an async command
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // test no spaces
+  TestBuilder::new()
+    .command(r#"!echo 1 && echo 2"#)
+    .assert_stderr("History expansion is not supported:\n  !echo\n  ~\n\nPerhaps you meant to add a space after the exclamation point to negate the command?\n  ! echo\n")
+    .assert_exit_code(1)
     .run()
     .await;
 }

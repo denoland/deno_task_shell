@@ -29,6 +29,8 @@ pub enum Sequence {
   Command(Command),
   /// `cmd1 | cmd2`
   Pipeline(Box<Pipeline>),
+  /// `! pipeline`
+  Negated(Box<Sequence>),
   /// `cmd1 && cmd2 || cmd3`
   BooleanList(Box<BooleanList>),
   /// `(list)`
@@ -211,7 +213,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
     or3(
       map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
       parse_env_or_shell_var_command,
-      map(parse_command, Sequence::Command),
+      parse_command_or_pipeline,
     ),
     skip_whitespace,
   )(input)?;
@@ -231,24 +233,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
         })),
       )
     }
-    Err(ParseError::Backtrace) => match parse_pipeline_op(input) {
-      Ok((input, op)) => {
-        let (input, next_sequence) = assert_exists(
-          &parse_sequence,
-          "Expected command following pipeline operator.",
-        )(input)?;
-        (
-          input,
-          Sequence::Pipeline(Box::new(Pipeline {
-            current,
-            op,
-            next: next_sequence,
-          })),
-        )
-      }
-      Err(ParseError::Backtrace) => (input, current),
-      Err(err) => return Err(err),
-    },
+    Err(ParseError::Backtrace) => (input, current),
     Err(err) => return Err(err),
   })
 }
@@ -277,6 +262,47 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
       },
     ))
   }
+}
+
+/// Parses a pipeline, which is a sequence of one or more commands.
+/// https://www.gnu.org/software/bash/manual/html_node/Pipelines.html
+fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
+  let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
+  let (input, current) = terminated(
+    or3(
+      map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
+      parse_env_or_shell_var_command,
+      map(parse_command, Sequence::Command),
+    ),
+    skip_whitespace,
+  )(input)?;
+
+  let (input, sequence) = match parse_pipeline_op(input) {
+    Ok((input, op)) => {
+      let (input, next_sequence) = assert_exists(
+        &parse_command_or_pipeline,
+        "Expected command following pipeline operator.",
+      )(input)?;
+      (
+        input,
+        Sequence::Pipeline(Box::new(Pipeline {
+          current,
+          op,
+          next: next_sequence,
+        })),
+      )
+    }
+    Err(ParseError::Backtrace) => (input, current),
+    Err(err) => return Err(err),
+  };
+
+  let sequence = if maybe_negated.is_some() {
+    Sequence::Negated(Box::new(sequence))
+  } else {
+    sequence
+  };
+
+  Ok((input, sequence))
 }
 
 fn parse_command(input: &str) -> ParseResult<Command> {
@@ -333,6 +359,14 @@ fn parse_sequential_list_op(input: &str) -> ParseResult<&str> {
 
 fn parse_async_list_op(input: &str) -> ParseResult<&str> {
   parse_op_str("&")(input)
+}
+
+fn parse_negated_op(input: &str) -> ParseResult<&str> {
+  terminated(
+    tag("!"),
+    // must have whitespace following
+    whitespace,
+  )(input)
 }
 
 fn parse_op_str<'a>(
@@ -966,6 +1000,36 @@ mod test {
               )]),
             ],
           }),
+        }],
+      }),
+    );
+
+    run_test(
+      parse_sequential_list,
+      "! cmd1 | cmd2 && cmd3",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::BooleanList(Box::new(BooleanList {
+            current: Sequence::Negated(Box::new(Sequence::Pipeline(Box::new(
+              Pipeline {
+                current: Sequence::Command(Command {
+                  args: vec![StringOrWord::new_word("cmd1")],
+                  env_vars: vec![],
+                }),
+                op: PipelineOperator::Stdout,
+                next: Sequence::Command(Command {
+                  args: vec![StringOrWord::new_word("cmd2")],
+                  env_vars: vec![],
+                }),
+              },
+            )))),
+            op: BooleanListOperator::And,
+            next: Sequence::Command(Command {
+              args: vec![StringOrWord::new_word("cmd3")],
+              env_vars: vec![],
+            }),
+          })),
         }],
       }),
     );
