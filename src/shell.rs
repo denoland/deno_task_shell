@@ -499,17 +499,13 @@ async fn evaluate_args(
         let text =
           evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
             .await;
-        for part in text.split(' ') {
-          let part = part.trim();
-          if !part.is_empty() {
-            result.push(part.to_string());
-          }
-        }
+        result.extend(text);
       }
       StringOrWord::String(parts) => {
         result.push(
           evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
-            .await,
+            .await
+            .join(" "),
         );
       }
     }
@@ -523,7 +519,9 @@ async fn evaluate_string_or_word(
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> String {
-  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr).await
+  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr)
+    .await
+    .join(" ")
 }
 
 async fn evaluate_string_parts(
@@ -531,18 +529,18 @@ async fn evaluate_string_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> String {
-  let mut final_text = String::new();
+) -> Vec<String> {
+  let mut result = Vec::new();
+  let mut current_text = String::new();
   for part in parts {
-    match part {
-      StringPart::Text(text) => final_text.push_str(&text),
-      StringPart::Variable(name) => {
-        if let Some(value) = state.get_var(&name) {
-          final_text.push_str(value);
-        }
+    let evaluation_result_text = match part {
+      StringPart::Text(text) => {
+        current_text.push_str(&text);
+        None
       }
-      StringPart::Command(list) => final_text.push_str(
-        &evaluate_command_substitution(
+      StringPart::Variable(name) => state.get_var(&name).map(|v| v.to_string()),
+      StringPart::Command(list) => Some(
+        evaluate_command_substitution(
           list,
           state,
           stdin.clone(),
@@ -550,9 +548,39 @@ async fn evaluate_string_parts(
         )
         .await,
       ),
+    };
+
+    // This text needs to be turned into a vector of strings.
+    // For now we do a very basic string split on whitespace, but in the future
+    // we should continue to improve this functionality.
+    if let Some(text) = evaluation_result_text {
+      let mut parts = text
+        .split(' ')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+
+      if !parts.is_empty() {
+        // append the first part to the current text
+        let first_part = parts.remove(0);
+        current_text.push_str(first_part);
+
+        // store the current text
+        result.push(current_text);
+
+        // store all the parts
+        result.extend(parts.into_iter().map(|p| p.to_string()));
+
+        // use the last part as the current text so it maybe
+        // gets appended to in the future
+        current_text = result.pop().unwrap();
+      }
     }
   }
-  final_text
+  if !current_text.is_empty() {
+    result.push(current_text);
+  }
+  result
 }
 
 async fn evaluate_command_substitution(

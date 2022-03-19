@@ -438,9 +438,7 @@ fn parse_string_or_word(input: &str) -> ParseResult<StringOrWord> {
 
 fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
   assert(
-    parse_string_parts(|c| {
-      !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
-    }),
+    parse_string_parts(ParseStringPartsMode::Word),
     |result| {
       result
         .ok()
@@ -502,7 +500,7 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   // Double quotes may have escaped
   delimited(
     char('"'),
-    parse_string_parts(|c| c != '"'),
+    parse_string_parts(ParseStringPartsMode::DoubleQuotes),
     with_failure_input(
       input,
       assert_exists(char('"'), "Expected closing double quote."),
@@ -510,8 +508,14 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   )(input)
 }
 
-pub(crate) fn parse_string_parts(
-  allow_char: impl Fn(char) -> bool + Clone,
+#[derive(Clone, Copy, PartialEq)]
+enum ParseStringPartsMode {
+  DoubleQuotes,
+  Word,
+}
+
+fn parse_string_parts(
+  mode: ParseStringPartsMode,
 ) -> impl Fn(&str) -> ParseResult<Vec<StringPart>> {
   fn parse_escaped_dollar_sign(input: &str) -> ParseResult<char> {
     or(
@@ -549,14 +553,16 @@ pub(crate) fn parse_string_parts(
   }
 
   fn first_escaped_char<'a>(
-    allow_char: impl Fn(char) -> bool,
+    mode: ParseStringPartsMode,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
     or5(
       parse_special_shell_var,
       parse_escaped_dollar_sign,
       parse_escaped_char('`'),
       parse_escaped_char('"'),
-      if_true(parse_escaped_char('\''), move |_| allow_char('"')),
+      if_true(parse_escaped_char('\''), move |_| {
+        mode == ParseStringPartsMode::DoubleQuotes
+      }),
     )
   }
 
@@ -567,8 +573,8 @@ pub(crate) fn parse_string_parts(
       Command(SequentialList),
     }
 
-    let (input, parts) = many0(or5(
-      map(first_escaped_char(&allow_char), PendingPart::Char),
+    let (input, parts) = many0(or6(
+      map(first_escaped_char(mode), PendingPart::Char),
       map(parse_command_substitution, PendingPart::Command),
       map(
         preceded(char('$'), parse_env_var_name),
@@ -581,7 +587,22 @@ pub(crate) fn parse_string_parts(
           "Back ticks in strings is currently not supported.",
         )
       },
-      map(if_true(next_char, |c| allow_char(*c)), PendingPart::Char),
+      // words can have escaped spaces
+      map(
+        if_true(preceded(char('\\'), char(' ')), |_| {
+          mode == ParseStringPartsMode::Word
+        }),
+        PendingPart::Char,
+      ),
+      map(
+        if_true(next_char, |&c| match mode {
+          ParseStringPartsMode::DoubleQuotes => c != '"',
+          ParseStringPartsMode::Word => {
+            !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
+          }
+        }),
+        PendingPart::Char,
+      ),
     ))(input)?;
 
     let mut result = Vec::new();
@@ -1197,6 +1218,11 @@ mod test {
     run_test(parse_word, "$?", Err("$? is currently not supported."));
     run_test(parse_word, "$#", Err("$# is currently not supported."));
     run_test(parse_word, "$*", Err("$* is currently not supported."));
+    run_test(
+      parse_word,
+      "test\\ test",
+      Ok(vec![StringPart::Text("test test".to_string())]),
+    );
   }
 
   #[test]
