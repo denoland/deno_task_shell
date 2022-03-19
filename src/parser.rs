@@ -265,8 +265,6 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
 }
 
 /// Parses a pipeline, which is a sequence of one or more commands.
-///
-/// Technically commands are pipelines.
 /// https://www.gnu.org/software/bash/manual/html_node/Pipelines.html
 fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
   let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
