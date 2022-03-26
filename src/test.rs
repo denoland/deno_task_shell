@@ -531,6 +531,14 @@ pub async fn windows_resolve_command() {
     .assert_stdout("1\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    // handle trailing semi-colon
+    .env_var("PATHEXT", ".EXE;")
+    .assert_stdout("1\n")
+    .run()
+    .await;
 }
 
 fn no_such_file_error_text() -> &'static str {
