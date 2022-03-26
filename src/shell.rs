@@ -445,15 +445,21 @@ async fn resolve_command_path(
     }
   }
   let path_exts = if cfg!(windows) {
+    let uc_command_name = command_name.to_uppercase();
     let path_ext = state
       .get_var("PATHEXT")
       .map(|s| s.as_str())
       .unwrap_or(".EXE;.CMD;.BAT;.COM");
     let command_exts = path_ext
       .split(';')
-      .map(|s| s.to_string().to_uppercase())
+      .map(|s| s.trim().to_uppercase())
+      .filter(|s| !s.is_empty())
       .collect::<Vec<_>>();
-    if command_exts.iter().any(|ext| command_name.ends_with(ext)) {
+    if command_exts.is_empty()
+      || command_exts
+        .iter()
+        .any(|ext| uc_command_name.ends_with(ext))
+    {
       None // use the command name as-is
     } else {
       Some(command_exts)

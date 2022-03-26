@@ -79,6 +79,14 @@ pub async fn commands() {
     .assert_stdout("test-dashes\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    .env_var("PATH", "")
+    .assert_stderr("deno: command not found\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]
@@ -518,6 +526,25 @@ pub async fn stdin() {
     .command(r#"echo "12345" | (deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)")"#)
     .stdin("55555") // should not use this because stdin is piped from the echo
     .assert_stdout("Uint8Array(1) [ 49 ]\nUint8Array(1) [ 50 ]\n")
+    .run()
+    .await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+pub async fn windows_resolve_command() {
+  // not cross platform, but still allow this
+  TestBuilder::new()
+    .command("deno.exe eval 'console.log(1)'")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    // handle trailing semi-colon
+    .env_var("PATHEXT", ".EXE;")
+    .assert_stdout("1\n")
     .run()
     .await;
 }
