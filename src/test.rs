@@ -301,7 +301,8 @@ pub async fn pipeline() {
     .await;
 
   TestBuilder::new()
-    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    // add bit of a delay while outputting stdout so that it doesn't race with stderr
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'Deno.sleepSync(10); await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
     // still outputs 2 because the first command didn't pipe stderr
     .assert_stderr("2\n1\n")
     .run()
