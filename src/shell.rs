@@ -453,7 +453,7 @@ async fn resolve_command_path(
     let command_exts = path_ext
       .split(';')
       .map(|s| s.trim().to_uppercase())
-      .filter(|s| s.is_empty())
+      .filter(|s| !s.is_empty())
       .collect::<Vec<_>>();
     if command_exts.is_empty()
       || command_exts
