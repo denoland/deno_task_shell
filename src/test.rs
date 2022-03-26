@@ -79,6 +79,14 @@ pub async fn commands() {
     .assert_stdout("test-dashes\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    .env_var("PATH", "")
+    .assert_stderr("deno: command not found\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]
