@@ -522,6 +522,17 @@ pub async fn stdin() {
     .await;
 }
 
+#[cfg(windows)]
+#[tokio::test]
+pub async fn windows_resolve_command() {
+  // not cross platform, but still allow this
+  TestBuilder::new()
+    .command("deno.exe eval 'console.log(1)'")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
 fn no_such_file_error_text() -> &'static str {
   if cfg!(windows) {
     "The system cannot find the file specified. (os error 2)"
