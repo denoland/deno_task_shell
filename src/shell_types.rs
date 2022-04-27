@@ -10,6 +10,7 @@ use anyhow::Result;
 use futures::future::BoxFuture;
 use tokio::task::JoinHandle;
 
+use crate::child_process_tracker::ChildProcessTracker;
 use crate::fs_util;
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
+  process_tracker: ChildProcessTracker,
 }
 
 impl ShellState {
@@ -29,6 +31,7 @@ impl ShellState {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
+      process_tracker: ChildProcessTracker::new(),
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -106,6 +109,10 @@ impl ShellState {
         self.env_vars.insert(name, value.to_string());
       }
     }
+  }
+
+  pub fn track_child_process(&self, child: &tokio::process::Child) {
+    self.process_tracker.track(child);
   }
 }
 

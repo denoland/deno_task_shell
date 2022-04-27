@@ -400,6 +400,8 @@ async fn execute_command(
       }
     };
 
+    state.track_child_process(&child);
+
     // avoid deadlock since this is holding onto the pipes
     drop(sub_command);
 
