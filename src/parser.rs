@@ -124,7 +124,8 @@ impl From<Command> for Sequence {
     Pipeline {
       negated: false,
       inner: c.into(),
-    }.into()
+    }
+    .into()
   }
 }
 
@@ -281,10 +282,7 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or(
-      parse_env_or_shell_var_command,
-      parse_command_or_pipeline,
-    ),
+    or(parse_env_or_shell_var_command, parse_command_or_pipeline),
     skip_whitespace,
   )(input)?;
 
@@ -879,7 +877,8 @@ mod test {
                   StringOrWord::new_word("command"),
                   StringOrWord::new_word("arg1"),
                 ],
-              }.into(),
+              }
+              .into(),
               op: BooleanListOperator::Or,
               next: SimpleCommand {
                 env_vars: vec![],
@@ -888,7 +887,8 @@ mod test {
                   StringOrWord::new_word("arg12"),
                   StringOrWord::new_word("arg13"),
                 ],
-              }.into(),
+              }
+              .into(),
             })),
           },
           SequentialListItem {
@@ -897,12 +897,14 @@ mod test {
               current: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("command3")],
-              }.into(),
+              }
+              .into(),
               op: BooleanListOperator::And,
               next: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("command4")],
-              }.into(),
+              }
+              .into(),
             })),
           },
           SequentialListItem {
@@ -910,7 +912,8 @@ mod test {
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command5")],
-            }.into(),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
@@ -931,12 +934,14 @@ mod test {
                 current: SimpleCommand {
                   env_vars: vec![],
                   args: vec![StringOrWord::new_word("command8")],
-                }.into(),
+                }
+                .into(),
                 op: BooleanListOperator::Or,
                 next: SimpleCommand {
                   env_vars: vec![],
                   args: vec![StringOrWord::new_word("command9")],
-                }.into(),
+                }
+                .into(),
               })),
             })),
           },
@@ -946,7 +951,8 @@ mod test {
               current: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("cmd10")],
-              }.into(),
+              }
+              .into(),
               op: BooleanListOperator::And,
               next: Command::Subshell(Box::new(SequentialList {
                 items: vec![SequentialListItem {
@@ -955,15 +961,18 @@ mod test {
                     current: SimpleCommand {
                       env_vars: vec![],
                       args: vec![StringOrWord::new_word("cmd11")],
-                    }.into(),
+                    }
+                    .into(),
                     op: BooleanListOperator::Or,
                     next: SimpleCommand {
                       env_vars: vec![],
                       args: vec![StringOrWord::new_word("cmd12")],
-                    }.into(),
+                    }
+                    .into(),
                   })),
                 }],
-              })).into(),
+              }))
+              .into(),
             })),
           },
         ],
@@ -980,14 +989,16 @@ mod test {
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command1")],
-            }.into(),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command2")],
-            }.into(),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
@@ -997,7 +1008,8 @@ mod test {
                 StringOrWord::new_string("b"),
               )],
               args: vec![StringOrWord::new_word("command3")],
-            }.into(),
+            }
+            .into(),
           },
         ],
       }),
@@ -1018,7 +1030,8 @@ mod test {
           sequence: SimpleCommand {
             env_vars: vec![],
             args: vec![StringOrWord::new_word("command")],
-          }.into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -1033,13 +1046,16 @@ mod test {
             current: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }.into(),
+            }
+            .into(),
             op: PipeSequenceOperator::Stdout,
             next: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],
-            }.into(),
-          }.into(),
+            }
+            .into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -1054,13 +1070,16 @@ mod test {
             current: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }.into(),
+            }
+            .into(),
             op: PipeSequenceOperator::StdoutStderr,
             next: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],
-            }.into(),
-          }.into(),
+            }
+            .into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -1085,7 +1104,8 @@ mod test {
                 "MY_ENV".to_string(),
               )]),
             ],
-          }.into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -1103,19 +1123,24 @@ mod test {
                 current: SimpleCommand {
                   args: vec![StringOrWord::new_word("cmd1")],
                   env_vars: vec![],
-                }.into(),
+                }
+                .into(),
                 op: PipeSequenceOperator::Stdout,
                 next: SimpleCommand {
                   args: vec![StringOrWord::new_word("cmd2")],
                   env_vars: vec![],
-                }.into(),
-              }.into(),
-            }.into(),
+                }
+                .into(),
+              }
+              .into(),
+            }
+            .into(),
             op: BooleanListOperator::And,
             next: SimpleCommand {
               args: vec![StringOrWord::new_word("cmd3")],
               env_vars: vec![],
-            }.into(),
+            }
+            .into(),
           })),
         }],
       }),
@@ -1169,7 +1194,8 @@ mod test {
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }.into(),
+            }
+            .into(),
           }],
         })]),
       }),

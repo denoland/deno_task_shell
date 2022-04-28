@@ -18,12 +18,12 @@ use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
 use crate::parser::PipeSequence;
+use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
 use crate::parser::PipelineInner;
-use crate::parser::SimpleCommand;
-use crate::parser::PipeSequenceOperator;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
+use crate::parser::SimpleCommand;
 use crate::parser::StringOrWord;
 use crate::parser::StringPart;
 use crate::shell_types::pipe;
@@ -234,12 +234,11 @@ async fn execute_pipeline(
   stdout: ShellPipeWriter,
   stderr: ShellPipeWriter,
 ) -> ExecuteResult {
-  let result = execute_pipeline_inner(pipeline.inner, state, stdin, stdout, stderr).await;
+  let result =
+    execute_pipeline_inner(pipeline.inner, state, stdin, stdout, stderr).await;
   if pipeline.negated {
     match result {
-      ExecuteResult::Exit(code, handles) => {
-        ExecuteResult::Exit(code, handles)
-      }
+      ExecuteResult::Exit(code, handles) => ExecuteResult::Exit(code, handles),
       ExecuteResult::Continue(code, changes, handles) => {
         let new_code = if code == 0 { 1 } else { 0 };
         ExecuteResult::Continue(new_code, changes, handles)
@@ -258,24 +257,16 @@ async fn execute_pipeline_inner(
   stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
-    PipelineInner::Command(command) => {
-      match command {
-        Command::Simple(command) => {
-          execute_simple_command(command, state, stdin, stdout, stderr).await
-        }
-        Command::Subshell(list) => {
-          execute_subshell(list, state, stdin, stdout, stderr).await
-        }
+    PipelineInner::Command(command) => match command {
+      Command::Simple(command) => {
+        execute_simple_command(command, state, stdin, stdout, stderr).await
+      }
+      Command::Subshell(list) => {
+        execute_subshell(list, state, stdin, stdout, stderr).await
       }
     },
     PipelineInner::PipeSequence(pipe_sequence) => {
-      execute_pipe_sequence(
-        *pipe_sequence,
-        state,
-        stdin,
-        stdout,
-        stderr,
-      ).await
+      execute_pipe_sequence(*pipe_sequence, state, stdin, stdout, stderr).await
     }
   }
 }
@@ -291,7 +282,7 @@ async fn execute_pipe_sequence(
   let mut last_output = Some(stdin);
   let mut next_sequence = Some(Sequence::Pipeline(Pipeline {
     negated: false,
-    inner: pipe_sequence.into()
+    inner: pipe_sequence.into(),
   }));
   while let Some(sequence) = next_sequence.take() {
     let (output_reader, output_writer) = pipe();
