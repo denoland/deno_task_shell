@@ -28,7 +28,7 @@ pub enum Sequence {
   /// `cmd_name <args...>`
   Command(Command),
   /// `<cmd or pipeline> > file`
-  Redirect(Box<Redirect>),
+  Redirect(Redirect),
   /// `cmd1 | cmd2`
   Pipeline(Box<Pipeline>),
   /// `cmd1 && cmd2 || cmd3`
@@ -145,15 +145,14 @@ pub enum StringPart {
 
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Redirect {
-  pub sequence: Sequence,
   pub maybe_fd: Option<usize>,
   pub op: RedirectOp,
   pub word: Option<Vec<StringPart>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RedirectOp {
   /// >
   Redirect,
@@ -217,10 +216,11 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or3(
+    or4(
       map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
       parse_env_or_shell_var_command,
       map(parse_command, Sequence::Command),
+      map(parse_redirect, Sequence::Redirect),
     ),
     skip_whitespace,
   )(input)?;
@@ -648,12 +648,7 @@ fn is_reserved_word(text: &str) -> bool {
 }
 
 fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
-  if parse_redirect(input).is_ok() {
-    ParseErrorFailure::new(
-      input,
-      "Redirects are currently not supported, but will be soon.",
-    )
-  } else if input.starts_with('*') || input.starts_with('?') {
+  if input.starts_with('*') || input.starts_with('?') {
     ParseErrorFailure::new(
       input,
       "Globs are currently not supported, but will be soon.",
@@ -678,14 +673,6 @@ mod test {
     assert_eq!(
       parse("test { test").err().unwrap().to_string(),
       concat!("Unexpected character.\n", "  { test\n", "  ~",),
-    );
-    assert_eq!(
-      parse("test > redirect").err().unwrap().to_string(),
-      concat!(
-        "Redirects are currently not supported, but will be soon.\n",
-        "  > redirect\n",
-        "  ~",
-      ),
     );
     assert_eq!(
       parse("cp test/* other").err().unwrap().to_string(),
@@ -1149,5 +1136,29 @@ mod test {
         );
       }
     }
+  }
+
+  #[test]
+  fn test_redirects() {
+    run_test(
+      parse_sequential_list,
+      "echo 1 > test.txt",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Command(Command {
+            env_vars: vec![],
+            args: vec![StringOrWord::new_word("echo"), StringOrWord::new_word("1")],
+          }),
+        }, SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Redirect(Redirect {
+            maybe_fd: None,
+            op: RedirectOp::Redirect,
+            word: Some(vec![StringPart::Text("test.txt".to_string())]),
+          }),
+        }],
+      }),
+    );
   }
 }

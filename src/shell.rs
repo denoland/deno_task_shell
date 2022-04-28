@@ -270,6 +270,7 @@ fn execute_sequence(
           ExecuteResult::Continue(_, _, _) => result,
         }
       }
+      Sequence::Redirect(_) => todo!(),
     }
   }
   .boxed()
