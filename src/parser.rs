@@ -114,7 +114,7 @@ impl From<PipeSequence> for Sequence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Command {
   pub inner: CommandInner,
-  pub redirect: Option<Redirect>,
+  pub redirects: RedirectList,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,7 +144,7 @@ pub struct SimpleCommand {
 impl From<SimpleCommand> for Command {
   fn from(c: SimpleCommand) -> Self {
     Command {
-      redirect: None,
+      redirects: RedirectList(Vec::new()),
       inner: CommandInner::Simple(c),
     }
   }
@@ -221,6 +221,9 @@ pub enum StringPart {
   Command(SequentialList),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RedirectList(Vec<Redirect>);
+
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
 #[derive(Debug, Clone, PartialEq)]
@@ -294,7 +297,10 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or(parse_env_or_shell_var_command, map(parse_pipeline, Sequence::Pipeline)),
+    or(
+      parse_env_or_shell_var_command,
+      map(parse_pipeline, Sequence::Pipeline),
+    ),
     skip_whitespace,
   )(input)?;
 
@@ -393,7 +399,8 @@ fn parse_command(input: &str) -> ParseResult<Command> {
   )(input)?;
 
   let command = Command {
-    redirect: None,
+    // todo: parse redirect list
+    redirects: RedirectList(Vec::new()),
     inner,
   };
 
@@ -989,7 +996,7 @@ mod test {
                     })),
                   }],
                 })),
-                redirect: None,
+                redirects: RedirectList(Vec::new()),
               }
               .into(),
             })),
@@ -1393,11 +1400,11 @@ mod test {
             StringOrWord::new_word("1"),
           ],
         }),
-        redirect: Some(Redirect {
+        redirects: RedirectList(vec![Redirect {
           maybe_fd: None,
           op: RedirectOp::Redirect,
           word: vec![StringPart::Text("test.txt".to_string())],
-        }),
+        }]),
       }),
     );
   }

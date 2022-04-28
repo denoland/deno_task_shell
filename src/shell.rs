@@ -260,7 +260,7 @@ async fn execute_pipeline_inner(
   match pipeline {
     PipelineInner::Command(command) => {
       execute_command(command, state, stdin, stdout, stderr).await
-    },
+    }
     PipelineInner::PipeSequence(pipe_sequence) => {
       execute_pipe_sequence(*pipe_sequence, state, stdin, stdout, stderr).await
     }
