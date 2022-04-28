@@ -137,14 +137,6 @@ impl ExecuteResult {
   pub fn from_exit_code(exit_code: i32) -> ExecuteResult {
     ExecuteResult::Continue(exit_code, Vec::new(), Vec::new())
   }
-
-  pub fn with_stdout_text(
-    mut stdout: ShellPipeWriter,
-    text: String,
-  ) -> ExecuteResult {
-    let _ = stdout.write(&text.into_bytes());
-    ExecuteResult::Continue(0, Vec::new(), Vec::new())
-  }
 }
 
 /// Reader side of a pipe.

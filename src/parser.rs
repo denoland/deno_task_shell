@@ -31,36 +31,12 @@ pub enum Sequence {
   Redirect(Redirect),
   /// `cmd1 | cmd2`
   Pipeline(Box<Pipeline>),
+  /// `! pipeline`
+  Negated(Box<Sequence>),
   /// `cmd1 && cmd2 || cmd3`
   BooleanList(Box<BooleanList>),
   /// `(list)`
   Subshell(Box<SequentialList>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct BooleanList {
-  pub current: Sequence,
-  pub op: BooleanListOperator,
-  pub next: Sequence,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Pipeline {
-  pub current: Sequence,
-  pub next: Sequence,
-}
-
-impl Pipeline {
-  pub fn into_vec(self) -> Vec<Sequence> {
-    let mut sequences = vec![self.current];
-    match self.next {
-      Sequence::Pipeline(pipeline) => {
-        sequences.extend(pipeline.into_vec());
-      }
-      next => sequences.push(next),
-    }
-    sequences
-  }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -83,6 +59,28 @@ impl BooleanListOperator {
     *self == BooleanListOperator::Or && exit_code != 0
       || *self == BooleanListOperator::And && exit_code == 0
   }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanList {
+  pub current: Sequence,
+  pub op: BooleanListOperator,
+  pub next: Sequence,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PipelineOperator {
+  // |
+  Stdout,
+  // |&
+  StdoutStderr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pipeline {
+  pub current: Sequence,
+  pub op: PipelineOperator,
+  pub next: Sequence,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -219,12 +217,13 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
     or4(
       map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
       parse_env_or_shell_var_command,
-      map(parse_command, Sequence::Command),
+      parse_command_or_pipeline,
       map(parse_redirect, Sequence::Redirect),
     ),
     skip_whitespace,
   )(input)?;
-  let (input, current) = match parse_boolean_list_op(input) {
+
+  Ok(match parse_boolean_list_op(input) {
     Ok((input, op)) => {
       let (input, next_sequence) = assert_exists(
         &parse_sequence,
@@ -239,27 +238,9 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
         })),
       )
     }
-    Err(ParseError::Backtrace) => match parse_pipeline_op(input) {
-      Ok((input, _)) => {
-        let (input, next_sequence) = assert_exists(
-          &parse_sequence,
-          "Expected command following pipeline operator.",
-        )(input)?;
-        (
-          input,
-          Sequence::Pipeline(Box::new(Pipeline {
-            current,
-            next: next_sequence,
-          })),
-        )
-      }
-      Err(ParseError::Backtrace) => (input, current),
-      Err(err) => return Err(err),
-    },
+    Err(ParseError::Backtrace) => (input, current),
     Err(err) => return Err(err),
-  };
-
-  Ok((input, current))
+  })
 }
 
 fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
@@ -288,6 +269,47 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
   }
 }
 
+/// Parses a pipeline, which is a sequence of one or more commands.
+/// https://www.gnu.org/software/bash/manual/html_node/Pipelines.html
+fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
+  let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
+  let (input, current) = terminated(
+    or3(
+      map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
+      parse_env_or_shell_var_command,
+      map(parse_command, Sequence::Command),
+    ),
+    skip_whitespace,
+  )(input)?;
+
+  let (input, sequence) = match parse_pipeline_op(input) {
+    Ok((input, op)) => {
+      let (input, next_sequence) = assert_exists(
+        &parse_command_or_pipeline,
+        "Expected command following pipeline operator.",
+      )(input)?;
+      (
+        input,
+        Sequence::Pipeline(Box::new(Pipeline {
+          current,
+          op,
+          next: next_sequence,
+        })),
+      )
+    }
+    Err(ParseError::Backtrace) => (input, current),
+    Err(err) => return Err(err),
+  };
+
+  let sequence = if maybe_negated.is_some() {
+    Sequence::Negated(Box::new(sequence))
+  } else {
+    sequence
+  };
+
+  Ok((input, sequence))
+}
+
 fn parse_command(input: &str) -> ParseResult<Command> {
   let (input, env_vars) = parse_env_vars(input)?;
   let (input, args) = parse_command_args(input)?;
@@ -303,8 +325,8 @@ fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
     or4(
       parse_list_op,
       map(parse_redirect, |_| ()),
-      parse_pipeline_op,
-      map(char(')'), |_| ()),
+      map(parse_pipeline_op, |_| ()),
+      map(ch(')'), |_| ()),
     ),
   )(input)
 }
@@ -344,6 +366,14 @@ fn parse_async_list_op(input: &str) -> ParseResult<&str> {
   parse_op_str("&")(input)
 }
 
+fn parse_negated_op(input: &str) -> ParseResult<&str> {
+  terminated(
+    tag("!"),
+    // must have whitespace following
+    whitespace,
+  )(input)
+}
+
 fn parse_op_str<'a>(
   operator: &str,
 ) -> impl Fn(&'a str) -> ParseResult<'a, &'a str> {
@@ -355,10 +385,13 @@ fn parse_op_str<'a>(
   )
 }
 
-fn parse_pipeline_op(input: &str) -> ParseResult<()> {
+fn parse_pipeline_op(input: &str) -> ParseResult<PipelineOperator> {
   terminated(
-    map(char('|'), |_| ()),
-    terminated(check_not(char('|')), skip_whitespace),
+    or(
+      map(tag("|&"), |_| PipelineOperator::StdoutStderr),
+      map(ch('|'), |_| PipelineOperator::Stdout),
+    ),
+    terminated(check_not(one_of("|&")), skip_whitespace),
   )(input)
 }
 
@@ -380,7 +413,7 @@ fn parse_env_vars(input: &str) -> ParseResult<Vec<EnvVar>> {
 
 fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
   let (input, name) = parse_env_var_name(input)?;
-  let (input, _) = char('=')(input)?;
+  let (input, _) = ch('=')(input)?;
   let (input, value) = with_error_context(
     terminated(parse_env_var_value, assert_whitespace_or_end),
     "Invalid environment variable value.",
@@ -410,9 +443,7 @@ fn parse_string_or_word(input: &str) -> ParseResult<StringOrWord> {
 
 fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
   assert(
-    parse_string_parts(|c| {
-      !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
-    }),
+    parse_string_parts(ParseStringPartsMode::Word),
     |result| {
       result
         .ok()
@@ -460,11 +491,11 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
   // single quoted strings cannot contain a single quote
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_02
   delimited(
-    char('\''),
+    ch('\''),
     take_while(|c| c != '\''),
     with_failure_input(
       input,
-      assert_exists(char('\''), "Expected closing single quote."),
+      assert_exists(ch('\''), "Expected closing single quote."),
     ),
   )(input)
 }
@@ -473,31 +504,37 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
   // Double quotes may have escaped
   delimited(
-    char('"'),
-    parse_string_parts(|c| c != '"'),
+    ch('"'),
+    parse_string_parts(ParseStringPartsMode::DoubleQuotes),
     with_failure_input(
       input,
-      assert_exists(char('"'), "Expected closing double quote."),
+      assert_exists(ch('"'), "Expected closing double quote."),
     ),
   )(input)
 }
 
-pub(crate) fn parse_string_parts(
-  allow_char: impl Fn(char) -> bool + Clone,
+#[derive(Clone, Copy, PartialEq)]
+enum ParseStringPartsMode {
+  DoubleQuotes,
+  Word,
+}
+
+fn parse_string_parts(
+  mode: ParseStringPartsMode,
 ) -> impl Fn(&str) -> ParseResult<Vec<StringPart>> {
   fn parse_escaped_dollar_sign(input: &str) -> ParseResult<char> {
     or(
       parse_escaped_char('$'),
       terminated(
-        char('$'),
-        check_not(or(map(parse_env_var_name, |_| ()), map(char('('), |_| ()))),
+        ch('$'),
+        check_not(or(map(parse_env_var_name, |_| ()), map(ch('('), |_| ()))),
       ),
     )(input)
   }
 
   fn parse_special_shell_var(input: &str) -> ParseResult<char> {
     // for now, these hard error
-    preceded(char('$'), |input| {
+    preceded(ch('$'), |input| {
       if let Some(char) = input.chars().next() {
         // $$ - process id
         // $? - last exit code
@@ -517,18 +554,20 @@ pub(crate) fn parse_string_parts(
   fn parse_escaped_char<'a>(
     c: char,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
-    preceded(char('\\'), char(c))
+    preceded(ch('\\'), ch(c))
   }
 
   fn first_escaped_char<'a>(
-    allow_char: impl Fn(char) -> bool,
+    mode: ParseStringPartsMode,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
     or5(
       parse_special_shell_var,
       parse_escaped_dollar_sign,
       parse_escaped_char('`'),
       parse_escaped_char('"'),
-      if_true(parse_escaped_char('\''), move |_| allow_char('"')),
+      if_true(parse_escaped_char('\''), move |_| {
+        mode == ParseStringPartsMode::DoubleQuotes
+      }),
     )
   }
 
@@ -539,21 +578,33 @@ pub(crate) fn parse_string_parts(
       Command(SequentialList),
     }
 
-    let (input, parts) = many0(or5(
-      map(first_escaped_char(&allow_char), PendingPart::Char),
+    let (input, parts) = many0(or6(
+      map(first_escaped_char(mode), PendingPart::Char),
       map(parse_command_substitution, PendingPart::Command),
-      map(
-        preceded(char('$'), parse_env_var_name),
-        PendingPart::Variable,
-      ),
+      map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
-        let (input, _) = char('`')(input)?;
+        let (_, _) = ch('`')(input)?;
         ParseError::fail(
           input,
           "Back ticks in strings is currently not supported.",
         )
       },
-      map(if_true(next_char, |c| allow_char(*c)), PendingPart::Char),
+      // words can have escaped spaces
+      map(
+        if_true(preceded(ch('\\'), ch(' ')), |_| {
+          mode == ParseStringPartsMode::Word
+        }),
+        PendingPart::Char,
+      ),
+      map(
+        if_true(next_char, |&c| match mode {
+          ParseStringPartsMode::DoubleQuotes => c != '"',
+          ParseStringPartsMode::Word => {
+            !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
+          }
+        }),
+        PendingPart::Char,
+      ),
     ))(input)?;
 
     let mut result = Vec::new();
@@ -578,16 +629,16 @@ pub(crate) fn parse_string_parts(
 }
 
 fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
-  delimited(tag("$("), parse_sequential_list, char(')'))(input)
+  delimited(tag("$("), parse_sequential_list, ch(')'))(input)
 }
 
 fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
   delimited(
-    terminated(char('('), skip_whitespace),
+    terminated(ch('('), skip_whitespace),
     parse_sequential_list,
     with_failure_input(
       input,
-      assert_exists(char(')'), "Expected closing parenthesis on subshell."),
+      assert_exists(ch(')'), "Expected closing parenthesis on subshell."),
     ),
   )(input)
 }
@@ -708,6 +759,18 @@ mod test {
     );
 
     assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
+
+    assert_eq!(
+      parse("echo `echo 1`").err().unwrap().to_string(),
+      concat!(
+        "Back ticks in strings is currently not supported.\n",
+        "  `echo 1`\n",
+        "  ~",
+      ),
+    );
+    assert!(
+      parse("deno run --allow-read=. --allow-write=./testing main.ts").is_ok(),
+    );
   }
 
   #[test]
@@ -895,6 +958,28 @@ mod test {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
             }),
+            op: PipelineOperator::Stdout,
+            next: Sequence::Command(Command {
+              env_vars: vec![],
+              args: vec![StringOrWord::new_word("other")],
+            }),
+          })),
+        }],
+      }),
+    );
+
+    run_test(
+      parse_sequential_list,
+      "test |& other",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Pipeline(Box::new(Pipeline {
+            current: Sequence::Command(Command {
+              env_vars: vec![],
+              args: vec![StringOrWord::new_word("test")],
+            }),
+            op: PipelineOperator::StdoutStderr,
             next: Sequence::Command(Command {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],
@@ -925,6 +1010,36 @@ mod test {
               )]),
             ],
           }),
+        }],
+      }),
+    );
+
+    run_test(
+      parse_sequential_list,
+      "! cmd1 | cmd2 && cmd3",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::BooleanList(Box::new(BooleanList {
+            current: Sequence::Negated(Box::new(Sequence::Pipeline(Box::new(
+              Pipeline {
+                current: Sequence::Command(Command {
+                  args: vec![StringOrWord::new_word("cmd1")],
+                  env_vars: vec![],
+                }),
+                op: PipelineOperator::Stdout,
+                next: Sequence::Command(Command {
+                  args: vec![StringOrWord::new_word("cmd2")],
+                  env_vars: vec![],
+                }),
+              },
+            )))),
+            op: BooleanListOperator::And,
+            next: Sequence::Command(Command {
+              args: vec![StringOrWord::new_word("cmd3")],
+              env_vars: vec![],
+            }),
+          })),
         }],
       }),
     );
@@ -1092,6 +1207,11 @@ mod test {
     run_test(parse_word, "$?", Err("$? is currently not supported."));
     run_test(parse_word, "$#", Err("$# is currently not supported."));
     run_test(parse_word, "$*", Err("$* is currently not supported."));
+    run_test(
+      parse_word,
+      "test\\ test",
+      Ok(vec![StringPart::Text("test test".to_string())]),
+    );
   }
 
   #[test]

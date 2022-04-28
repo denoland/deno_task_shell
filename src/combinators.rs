@@ -40,7 +40,7 @@ impl<'a> ParseError<'a> {
 pub type ParseResult<'a, O> = Result<(&'a str, O), ParseError<'a>>;
 
 /// Recognizes a character.
-pub fn char<'a>(c: char) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+pub fn ch<'a>(c: char) -> impl Fn(&'a str) -> ParseResult<'a, char> {
   if_true(next_char, move |found_char| *found_char == c)
 }
 
@@ -156,6 +156,18 @@ pub fn or5<'a, O>(
   e: impl Fn(&'a str) -> ParseResult<'a, O>,
 ) -> impl Fn(&'a str) -> ParseResult<'a, O> {
   or4(a, b, c, or(d, e))
+}
+
+/// Checks for any to match.
+pub fn or6<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+  d: impl Fn(&'a str) -> ParseResult<'a, O>,
+  e: impl Fn(&'a str) -> ParseResult<'a, O>,
+  f: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or5(a, b, c, d, or(e, f))
 }
 
 /// Returns the second value and discards the first.
@@ -327,13 +339,30 @@ pub fn many0<'a, O>(
 
 /// Skips the whitespace.
 pub fn skip_whitespace(input: &str) -> ParseResult<()> {
+  match whitespace(input) {
+    Ok((input, _)) => Ok((input, ())),
+    // the next char was not a backtrace... continue.
+    Err(ParseError::Backtrace) => Ok((input, ())),
+    Err(err) => Err(err),
+  }
+}
+
+/// Parses and expects whitespace.
+pub fn whitespace(input: &str) -> ParseResult<&str> {
+  if input.is_empty() {
+    return ParseError::backtrace();
+  }
+
   for (pos, c) in input.char_indices() {
     if !c.is_whitespace() {
-      return Ok((&input[pos..], ()));
+      if pos == 0 {
+        return ParseError::backtrace();
+      }
+      return Ok((&input[pos..], &input[..pos]));
     }
   }
 
-  Ok(("", ()))
+  Ok(("", input))
 }
 
 /// Checks if a condition is true for a combinator.

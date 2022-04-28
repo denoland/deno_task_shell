@@ -19,6 +19,36 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command(r#"echo "1 2   3""#)
+    .assert_stdout("1 2   3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 2\ \ \ 3"#)
+    .assert_stdout("1 2   3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo "1 2\ \ \ 3""#)
+    .assert_stdout("1 2\\ \\ \\ 3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo test$(echo "1    2")"#)
+    .assert_stdout("test1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"TEST="1   2" ; echo $TEST"#)
+    .assert_stdout("1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command(
       r#"VAR=1 deno eval 'console.log(Deno.env.get("VAR"))' && echo $VAR"#,
     )
@@ -47,6 +77,14 @@ pub async fn commands() {
   TestBuilder::new()
     .command("echo test-dashes")
     .assert_stdout("test-dashes\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    .env_var("PATH", "")
+    .assert_stderr("deno: command not found\n")
+    .assert_exit_code(1)
     .run()
     .await;
 }
@@ -230,6 +268,12 @@ pub async fn pipeline() {
     .await;
 
   TestBuilder::new()
+    .command(r#"echo 1 | echo 2 && echo 3"#)
+    .assert_stdout("2\n3\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command(r#"echo $(sleep 0.1 && echo 2 & echo 1) | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
     .assert_stdout("1 2\n")
     .run()
@@ -240,18 +284,118 @@ pub async fn pipeline() {
     .assert_stdout("1\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .assert_stderr("2\n")
+    .run()
+    .await;
+
+  // stdout and stderr pipeline
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(2);' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    // add bit of a delay while outputting stdout so that it doesn't race with stderr
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'Deno.sleepSync(10); await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    // still outputs 2 because the first command didn't pipe stderr
+    .assert_stderr("2\n1\n")
+    .run()
+    .await;
+
+  // |& pipeline should still pipe stdout
+  TestBuilder::new()
+    .command(r#"echo 1 |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+pub async fn negated() {
+  TestBuilder::new()
+    .command(r#"! echo 1 && echo 2"#)
+    .assert_stdout("1\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 || echo 2"#)
+    .assert_stdout("1\n2\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! (echo 1 | echo 2 && echo 3) || echo 4"#)
+    .assert_stdout("2\n3\n4\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 | echo 2 && echo 3"#)
+    .assert_stdout("2\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! (exit 5) && echo 1"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! exit 5 && echo 1"#)
+    .assert_exit_code(5)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! echo 1 && echo 2 &"#)
+    .assert_stdout("1\n")
+    // being explicit... this must be 0 because it's an async command
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // test no spaces
+  TestBuilder::new()
+    .command(r#"!echo 1 && echo 2"#)
+    .assert_stderr("History expansion is not supported:\n  !echo\n  ~\n\nPerhaps you meant to add a space after the exclamation point to negate the command?\n  ! echo\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]
 pub async fn pwd() {
   TestBuilder::new()
-    .command("mkdir sub_dir && pwd && cd sub_dir && pwd && cd ../ && pwd")
+    .directory("sub_dir")
     .file("file.txt", "test")
+    .command("pwd && cd sub_dir && pwd && cd ../ && pwd")
     // the actual temp directory will get replaced here
     .assert_stdout(&format!(
       "$TEMP_DIR\n$TEMP_DIR{}sub_dir\n$TEMP_DIR\n",
       FOLDER_SEPERATOR
     ))
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("pwd -M")
+    .assert_stderr("pwd: unsupported flag: -M\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+pub async fn pwd_logical() {
+  TestBuilder::new()
+    .directory("main")
+    .command("ln -s main symlinked_main && cd symlinked_main && pwd && pwd -L")
+    .assert_stdout("$TEMP_DIR/symlinked_main\n$TEMP_DIR/main\n")
     .run()
     .await;
 }
@@ -383,6 +527,25 @@ pub async fn stdin() {
     .command(r#"echo "12345" | (deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)")"#)
     .stdin("55555") // should not use this because stdin is piped from the echo
     .assert_stdout("Uint8Array(1) [ 49 ]\nUint8Array(1) [ 50 ]\n")
+    .run()
+    .await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+pub async fn windows_resolve_command() {
+  // not cross platform, but still allow this
+  TestBuilder::new()
+    .command("deno.exe eval 'console.log(1)'")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("deno eval 'console.log(1)'")
+    // handle trailing semi-colon
+    .env_var("PATHEXT", ".EXE;")
+    .assert_stdout("1\n")
     .run()
     .await;
 }

@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Stdio;
 
 use anyhow::bail;
 use anyhow::Result;
@@ -14,9 +13,11 @@ use crate::commands::cp_command;
 use crate::commands::exit_command;
 use crate::commands::mkdir_command;
 use crate::commands::mv_command;
+use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
+use crate::parser::PipelineOperator;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::StringOrWord;
@@ -218,22 +219,35 @@ fn execute_sequence(
         }
       }
       Sequence::Pipeline(pipeline) => {
-        let sequences = pipeline.into_vec();
         let mut wait_tasks = vec![];
-        let mut last_input = Some(stdin);
-        for sequence in sequences.into_iter() {
-          let (stdin, stdout) = pipe();
+        let mut last_output = Some(stdin);
+        let mut next_sequence = Some(Sequence::Pipeline(pipeline));
+        while let Some(sequence) = next_sequence.take() {
+          let (output_reader, output_writer) = pipe();
+          let (stderr, sequence) = match sequence {
+            Sequence::Pipeline(pipeline) => {
+              next_sequence = Some(pipeline.next);
+              (
+                match pipeline.op {
+                  PipelineOperator::Stdout => stderr.clone(),
+                  PipelineOperator::StdoutStderr => output_writer.clone(),
+                },
+                pipeline.current,
+              )
+            }
+            _ => (stderr.clone(), sequence),
+          };
           wait_tasks.push(execute_sequence(
             sequence,
             state.clone(),
-            last_input.take().unwrap(),
-            stdout,
+            last_output.take().unwrap(),
+            output_writer.clone(),
             stderr.clone(),
           ));
-          last_input = Some(stdin);
+          last_output = Some(output_reader);
         }
         let output_handle = tokio::task::spawn_blocking(|| {
-          last_input.unwrap().pipe_to_sender(stdout).unwrap();
+          last_output.unwrap().pipe_to_sender(stdout).unwrap();
         });
         let mut results = futures::future::join_all(wait_tasks).await;
         output_handle.await.unwrap();
@@ -270,7 +284,19 @@ fn execute_sequence(
           ExecuteResult::Continue(_, _, _) => result,
         }
       }
-      Sequence::Redirect(_) => todo!(),
+      Sequence::Negated(sequence) => {
+        let result =
+          execute_sequence(*sequence, state, stdin, stdout, stderr).await;
+        match result {
+          ExecuteResult::Exit(code, handles) => {
+            ExecuteResult::Exit(code, handles)
+          }
+          ExecuteResult::Continue(code, changes, handles) => {
+            let new_code = if code == 0 { 1 } else { 0 };
+            ExecuteResult::Continue(new_code, changes, handles)
+          }
+        }
+      }
     }
   }
   .boxed()
@@ -280,7 +306,7 @@ async fn execute_command(
   command: Command,
   state: ShellState,
   stdin: ShellPipeReader,
-  stdout: ShellPipeWriter,
+  mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   let mut args =
@@ -290,19 +316,27 @@ async fn execute_command(
   } else {
     args.remove(0)
   };
-  if command_name == "cd" {
+  if let Some(stripped_name) = command_name.strip_prefix('!') {
+    let _ = stderr.write_line(
+      &format!(concat!(
+        "History expansion is not supported:\n",
+        "  {}\n",
+        "  ~\n\n",
+        "Perhaps you meant to add a space after the exclamation point to negate the command?\n",
+        "  ! {}",
+      ), command_name, stripped_name)
+    );
+    ExecuteResult::from_exit_code(1)
+  } else if command_name == "cd" {
     let cwd = state.cwd().clone();
     cd_command(&cwd, args, stderr)
   } else if command_name == "exit" {
     exit_command(args, stderr)
   } else if command_name == "pwd" {
-    // ignores additional arguments
-    ExecuteResult::with_stdout_text(
-      stdout,
-      format!("{}\n", state.cwd().display()),
-    )
+    pwd_command(state.cwd(), args, stdout, stderr)
   } else if command_name == "echo" {
-    ExecuteResult::with_stdout_text(stdout, format!("{}\n", args.join(" ")))
+    let _ = stdout.write_line(&args.join(" "));
+    ExecuteResult::from_exit_code(0)
   } else if command_name == "true" {
     // ignores additional arguments
     ExecuteResult::from_exit_code(0)
@@ -353,7 +387,7 @@ async fn execute_command(
       .envs(state.env_vars())
       .stdout(stdout.into_raw())
       .stdin(stdin.into_raw())
-      .stderr(Stdio::inherit())
+      .stderr(stderr.clone().into_raw())
       .spawn();
 
     let mut child = match child {
@@ -411,15 +445,21 @@ async fn resolve_command_path(
     }
   }
   let path_exts = if cfg!(windows) {
+    let uc_command_name = command_name.to_uppercase();
     let path_ext = state
       .get_var("PATHEXT")
       .map(|s| s.as_str())
       .unwrap_or(".EXE;.CMD;.BAT;.COM");
     let command_exts = path_ext
       .split(';')
-      .map(|s| s.to_string().to_uppercase())
+      .map(|s| s.trim().to_uppercase())
+      .filter(|s| !s.is_empty())
       .collect::<Vec<_>>();
-    if command_exts.iter().any(|ext| command_name.ends_with(ext)) {
+    if command_exts.is_empty()
+      || command_exts
+        .iter()
+        .any(|ext| uc_command_name.ends_with(ext))
+    {
       None // use the command name as-is
     } else {
       Some(command_exts)
@@ -465,17 +505,13 @@ async fn evaluate_args(
         let text =
           evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
             .await;
-        for part in text.split(' ') {
-          let part = part.trim();
-          if !part.is_empty() {
-            result.push(part.to_string());
-          }
-        }
+        result.extend(text);
       }
       StringOrWord::String(parts) => {
         result.push(
           evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
-            .await,
+            .await
+            .join(" "),
         );
       }
     }
@@ -489,7 +525,9 @@ async fn evaluate_string_or_word(
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> String {
-  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr).await
+  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr)
+    .await
+    .join(" ")
 }
 
 async fn evaluate_string_parts(
@@ -497,18 +535,18 @@ async fn evaluate_string_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> String {
-  let mut final_text = String::new();
+) -> Vec<String> {
+  let mut result = Vec::new();
+  let mut current_text = String::new();
   for part in parts {
-    match part {
-      StringPart::Text(text) => final_text.push_str(&text),
-      StringPart::Variable(name) => {
-        if let Some(value) = state.get_var(&name) {
-          final_text.push_str(value);
-        }
+    let evaluation_result_text = match part {
+      StringPart::Text(text) => {
+        current_text.push_str(&text);
+        None
       }
-      StringPart::Command(list) => final_text.push_str(
-        &evaluate_command_substitution(
+      StringPart::Variable(name) => state.get_var(&name).map(|v| v.to_string()),
+      StringPart::Command(list) => Some(
+        evaluate_command_substitution(
           list,
           state,
           stdin.clone(),
@@ -516,9 +554,39 @@ async fn evaluate_string_parts(
         )
         .await,
       ),
+    };
+
+    // This text needs to be turned into a vector of strings.
+    // For now we do a very basic string split on whitespace, but in the future
+    // we should continue to improve this functionality.
+    if let Some(text) = evaluation_result_text {
+      let mut parts = text
+        .split(' ')
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>();
+
+      if !parts.is_empty() {
+        // append the first part to the current text
+        let first_part = parts.remove(0);
+        current_text.push_str(first_part);
+
+        // store the current text
+        result.push(current_text);
+
+        // store all the parts
+        result.extend(parts.into_iter().map(|p| p.to_string()));
+
+        // use the last part as the current text so it maybe
+        // gets appended to in the future
+        current_text = result.pop().unwrap();
+      }
     }
   }
-  final_text
+  if !current_text.is_empty() {
+    result.push(current_text);
+  }
+  result
 }
 
 async fn evaluate_command_substitution(
