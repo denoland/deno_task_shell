@@ -17,6 +17,9 @@ use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
+use crate::parser::PipeSequence;
+use crate::parser::Pipeline;
+use crate::parser::PipelineInner;
 use crate::parser::SimpleCommand;
 use crate::parser::PipeSequenceOperator;
 use crate::parser::Sequence;
@@ -162,33 +165,6 @@ fn execute_sequence(
         )],
         Vec::new(),
       ),
-      Sequence::Command(command) => {
-        match command {
-          Command::Simple(command) => {
-            execute_simple_command(command, state, stdin, stdout, stderr).await
-          }
-          Command::Subshell(list) => {
-        let result = execute_sequential_list(
-          *list,
-          state.clone(),
-          stdin,
-          stdout,
-          stderr,
-          // yield async commands to the parent
-          AsyncCommandBehavior::Yield,
-        )
-        .await;
-
-        // sub shells do not cause an exit
-        match result {
-          ExecuteResult::Exit(code, handles) => {
-            ExecuteResult::Continue(code, Vec::new(), handles)
-          }
-          ExecuteResult::Continue(_, _, _) => result,
-        }
-          }
-        }
-      }
       Sequence::BooleanList(list) => {
         let mut changes = vec![];
         let first_result = execute_sequence(
@@ -243,68 +219,152 @@ fn execute_sequence(
           ExecuteResult::Continue(exit_code, changes, async_handles)
         }
       }
-      Sequence::PipeSequence(pipe_sequence) => {
-        let mut wait_tasks = vec![];
-        let mut last_output = Some(stdin);
-        let mut next_sequence = Some(Sequence::PipeSequence(pipe_sequence));
-        while let Some(sequence) = next_sequence.take() {
-          let (output_reader, output_writer) = pipe();
-          let (stderr, sequence) = match sequence {
-            Sequence::PipeSequence(pipe_sequence) => {
-              next_sequence = Some(pipe_sequence.next);
-              (
-                match pipe_sequence.op {
-                  PipeSequenceOperator::Stdout => stderr.clone(),
-                  PipeSequenceOperator::StdoutStderr => output_writer.clone(),
-                },
-                pipe_sequence.current,
-              )
-            }
-            _ => (stderr.clone(), sequence),
-          };
-          wait_tasks.push(execute_sequence(
-            sequence,
-            state.clone(),
-            last_output.take().unwrap(),
-            output_writer.clone(),
-            stderr.clone(),
-          ));
-          last_output = Some(output_reader);
-        }
-        let output_handle = tokio::task::spawn_blocking(|| {
-          last_output.unwrap().pipe_to_sender(stdout).unwrap();
-        });
-        let mut results = futures::future::join_all(wait_tasks).await;
-        output_handle.await.unwrap();
-        let last_result = results.pop().unwrap();
-        let all_handles = results.into_iter().flat_map(|r| r.into_handles());
-        match last_result {
-          ExecuteResult::Exit(code, mut handles) => {
-            handles.extend(all_handles);
-            ExecuteResult::Continue(code, Vec::new(), handles)
-          }
-          ExecuteResult::Continue(code, _, mut handles) => {
-            handles.extend(all_handles);
-            ExecuteResult::Continue(code, Vec::new(), handles)
-          }
-        }
-      }
-      Sequence::Negated(sequence) => {
-        let result =
-          execute_sequence(*sequence, state, stdin, stdout, stderr).await;
-        match result {
-          ExecuteResult::Exit(code, handles) => {
-            ExecuteResult::Exit(code, handles)
-          }
-          ExecuteResult::Continue(code, changes, handles) => {
-            let new_code = if code == 0 { 1 } else { 0 };
-            ExecuteResult::Continue(new_code, changes, handles)
-          }
-        }
+      Sequence::Pipeline(pipeline) => {
+        execute_pipeline(pipeline, state, stdin, stdout, stderr).await
       }
     }
   }
   .boxed()
+}
+
+async fn execute_pipeline(
+  pipeline: Pipeline,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  let result = execute_pipeline_inner(pipeline.inner, state, stdin, stdout, stderr).await;
+  if pipeline.negated {
+    match result {
+      ExecuteResult::Exit(code, handles) => {
+        ExecuteResult::Exit(code, handles)
+      }
+      ExecuteResult::Continue(code, changes, handles) => {
+        let new_code = if code == 0 { 1 } else { 0 };
+        ExecuteResult::Continue(new_code, changes, handles)
+      }
+    }
+  } else {
+    result
+  }
+}
+
+async fn execute_pipeline_inner(
+  pipeline: PipelineInner,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  match pipeline {
+    PipelineInner::Command(command) => {
+      match command {
+        Command::Simple(command) => {
+          execute_simple_command(command, state, stdin, stdout, stderr).await
+        }
+        Command::Subshell(list) => {
+          execute_subshell(list, state, stdin, stdout, stderr).await
+        }
+      }
+    },
+    PipelineInner::PipeSequence(pipe_sequence) => {
+      execute_pipe_sequence(
+        *pipe_sequence,
+        state,
+        stdin,
+        stdout,
+        stderr,
+      ).await
+    }
+  }
+}
+
+async fn execute_pipe_sequence(
+  pipe_sequence: PipeSequence,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  let mut wait_tasks = vec![];
+  let mut last_output = Some(stdin);
+  let mut next_sequence = Some(Sequence::Pipeline(Pipeline {
+    negated: false,
+    inner: pipe_sequence.into()
+  }));
+  while let Some(sequence) = next_sequence.take() {
+    let (output_reader, output_writer) = pipe();
+    let (stderr, sequence) = match sequence {
+      Sequence::Pipeline(Pipeline {
+        inner: PipelineInner::PipeSequence(pipe_sequence),
+        negated,
+      }) => {
+        assert!(!negated);
+        next_sequence = Some(pipe_sequence.next);
+        (
+          match pipe_sequence.op {
+            PipeSequenceOperator::Stdout => stderr.clone(),
+            PipeSequenceOperator::StdoutStderr => output_writer.clone(),
+          },
+          pipe_sequence.current,
+        )
+      }
+      _ => (stderr.clone(), sequence),
+    };
+    wait_tasks.push(execute_sequence(
+      sequence,
+      state.clone(),
+      last_output.take().unwrap(),
+      output_writer.clone(),
+      stderr.clone(),
+    ));
+    last_output = Some(output_reader);
+  }
+  let output_handle = tokio::task::spawn_blocking(|| {
+    last_output.unwrap().pipe_to_sender(stdout).unwrap();
+  });
+  let mut results = futures::future::join_all(wait_tasks).await;
+  output_handle.await.unwrap();
+  let last_result = results.pop().unwrap();
+  let all_handles = results.into_iter().flat_map(|r| r.into_handles());
+  match last_result {
+    ExecuteResult::Exit(code, mut handles) => {
+      handles.extend(all_handles);
+      ExecuteResult::Continue(code, Vec::new(), handles)
+    }
+    ExecuteResult::Continue(code, _, mut handles) => {
+      handles.extend(all_handles);
+      ExecuteResult::Continue(code, Vec::new(), handles)
+    }
+  }
+}
+
+async fn execute_subshell(
+  list: Box<SequentialList>,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  let result = execute_sequential_list(
+    *list,
+    state.clone(),
+    stdin,
+    stdout,
+    stderr,
+    // yield async commands to the parent
+    AsyncCommandBehavior::Yield,
+  )
+  .await;
+
+  // sub shells do not cause an exit
+  match result {
+    ExecuteResult::Exit(code, handles) => {
+      ExecuteResult::Continue(code, Vec::new(), handles)
+    }
+    ExecuteResult::Continue(_, _, _) => result,
+  }
 }
 
 async fn execute_simple_command(
