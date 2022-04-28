@@ -144,6 +144,7 @@ pub enum StringPart {
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
 pub struct Redirect {
+  pub sequence: Sequence,
   pub maybe_fd: Option<usize>,
   pub op: RedirectOp,
   pub word: Option<Vec<StringPart>>,
