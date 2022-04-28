@@ -17,6 +17,7 @@ use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::parser::Command;
+use crate::parser::CommandInner;
 use crate::parser::PipeSequence;
 use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
@@ -257,16 +258,29 @@ async fn execute_pipeline_inner(
   stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
-    PipelineInner::Command(command) => match command {
-      Command::Simple(command) => {
-        execute_simple_command(command, state, stdin, stdout, stderr).await
-      }
-      Command::Subshell(list) => {
-        execute_subshell(list, state, stdin, stdout, stderr).await
-      }
+    PipelineInner::Command(command) => {
+      execute_command(command, state, stdin, stdout, stderr).await
     },
     PipelineInner::PipeSequence(pipe_sequence) => {
       execute_pipe_sequence(*pipe_sequence, state, stdin, stdout, stderr).await
+    }
+  }
+}
+
+async fn execute_command(
+  command: Command,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  // todo: handle command.redirect
+  match command.inner {
+    CommandInner::Simple(command) => {
+      execute_simple_command(command, state, stdin, stdout, stderr).await
+    }
+    CommandInner::Subshell(list) => {
+      execute_subshell(list, state, stdin, stdout, stderr).await
     }
   }
 }
@@ -280,19 +294,12 @@ async fn execute_pipe_sequence(
 ) -> ExecuteResult {
   let mut wait_tasks = vec![];
   let mut last_output = Some(stdin);
-  let mut next_sequence = Some(Sequence::Pipeline(Pipeline {
-    negated: false,
-    inner: pipe_sequence.into(),
-  }));
-  while let Some(sequence) = next_sequence.take() {
+  let mut next_inner: Option<PipelineInner> = Some(pipe_sequence.into());
+  while let Some(sequence) = next_inner.take() {
     let (output_reader, output_writer) = pipe();
-    let (stderr, sequence) = match sequence {
-      Sequence::Pipeline(Pipeline {
-        inner: PipelineInner::PipeSequence(pipe_sequence),
-        negated,
-      }) => {
-        assert!(!negated);
-        next_sequence = Some(pipe_sequence.next);
+    let (stderr, command) = match sequence {
+      PipelineInner::PipeSequence(pipe_sequence) => {
+        next_inner = Some(pipe_sequence.next);
         (
           match pipe_sequence.op {
             PipeSequenceOperator::Stdout => stderr.clone(),
@@ -301,10 +308,10 @@ async fn execute_pipe_sequence(
           pipe_sequence.current,
         )
       }
-      _ => (stderr.clone(), sequence),
+      PipelineInner::Command(command) => (stderr.clone(), command),
     };
-    wait_tasks.push(execute_sequence(
-      sequence,
+    wait_tasks.push(execute_command(
+      command,
       state.clone(),
       last_output.take().unwrap(),
       output_writer.clone(),
