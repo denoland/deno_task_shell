@@ -481,6 +481,17 @@ async fn resolve_command_path(
     bail!("command name was empty");
   }
 
+  // Special handling to use the current executable for deno.
+  // This is to ensure deno tasks that use deno work in environments
+  // that don't have deno on the path and to ensure it use the current
+  // version of deno being executed rather than the one on the path,
+  // which has caused some confusion.
+  if command_name == "deno" {
+    if let Ok(exe_path) = std::env::current_exe() {
+      return Ok(exe_path);
+    }
+  }
+
   // check for absolute
   if PathBuf::from(command_name).is_absolute() {
     return Ok(PathBuf::from(command_name));
@@ -689,4 +700,17 @@ async fn execute_with_stdout_as_text(
   let _ = spawned_output.await;
   let data = output_handle.await.unwrap();
   String::from_utf8_lossy(&data).to_string()
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[tokio::test]
+  async fn should_resolve_current_exe_path_for_deno() {
+    let state =
+      ShellState::new(Default::default(), &std::env::current_dir().unwrap());
+    let path = resolve_command_path("deno", &state).await.unwrap();
+    assert_eq!(path, std::env::current_exe().unwrap());
+  }
 }
