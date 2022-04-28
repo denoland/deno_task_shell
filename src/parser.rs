@@ -1407,5 +1407,28 @@ mod test {
         }]),
       }),
     );
+
+    run_test(
+      parse_command,
+      "echo 1 1> stdout.txt 2> stderr.txt",
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![
+            StringOrWord::new_word("echo"),
+            StringOrWord::new_word("1"),
+          ],
+        }),
+        redirects: RedirectList(vec![Redirect {
+          maybe_fd: Some(1),
+          op: RedirectOp::Redirect,
+          word: vec![StringPart::Text("stdout.txt".to_string())],
+        }, Redirect {
+          maybe_fd: Some(2),
+          op: RedirectOp::Redirect,
+          word: vec![StringPart::Text("stderr.txt".to_string())],
+        }]),
+      }),
+    );
   }
 }
