@@ -27,6 +27,8 @@ pub enum Sequence {
   ShellVar(EnvVar),
   /// `cmd_name <args...>`
   Command(Command),
+  /// `<cmd or pipeline> > file`
+  Redirect(Box<Redirect>),
   /// `cmd1 | cmd2`
   Pipeline(Box<Pipeline>),
   /// `cmd1 && cmd2 || cmd3`
