@@ -25,16 +25,37 @@ pub enum Sequence {
   EnvVar(EnvVar),
   /// `MY_VAR=5`
   ShellVar(EnvVar),
-  /// `cmd_name <args...>`
-  Command(Command),
-  /// `cmd1 | cmd2`
-  Pipeline(Box<Pipeline>),
-  /// `! pipeline`
-  Negated(Box<Sequence>),
+  /// `cmd_name <args...>`, `cmd1 | cmd2`
+  Pipeline(Pipeline),
   /// `cmd1 && cmd2 || cmd3`
   BooleanList(Box<BooleanList>),
-  /// `(list)`
-  Subshell(Box<SequentialList>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pipeline {
+  /// `! pipeline`
+  pub negated: bool,
+  pub inner: PipelineInner,
+}
+
+impl From<Pipeline> for Sequence {
+  fn from(p: Pipeline) -> Self {
+    Sequence::Pipeline(p)
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PipelineInner {
+  /// Ex. `cmd_name <args...>`
+  Command(Command),
+  /// `cmd1 | cmd2`
+  PipeSequence(Box<PipeSequence>),
+}
+
+impl From<PipeSequence> for PipelineInner {
+  fn from(p: PipeSequence) -> Self {
+    PipelineInner::PipeSequence(Box::new(p))
+  }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -67,7 +88,7 @@ pub struct BooleanList {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum PipelineOperator {
+pub enum PipeSequenceOperator {
   // |
   Stdout,
   // |&
@@ -75,16 +96,67 @@ pub enum PipelineOperator {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Pipeline {
+pub struct PipeSequence {
   pub current: Sequence,
-  pub op: PipelineOperator,
+  pub op: PipeSequenceOperator,
   pub next: Sequence,
 }
 
+impl From<PipeSequence> for Sequence {
+  fn from(p: PipeSequence) -> Self {
+    Sequence::Pipeline(Pipeline {
+      negated: false,
+      inner: p.into(),
+    })
+  }
+}
+
 #[derive(Debug, Clone, PartialEq)]
-pub struct Command {
+pub enum Command {
+  /// `cmd_name <args...>`
+  Simple(SimpleCommand),
+  /// `(list)`
+  Subshell(Box<SequentialList>),
+}
+
+impl From<Command> for Sequence {
+  fn from(c: Command) -> Self {
+    Pipeline {
+      negated: false,
+      inner: c.into(),
+    }
+    .into()
+  }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SimpleCommand {
   pub env_vars: Vec<EnvVar>,
   pub args: Vec<StringOrWord>,
+}
+
+impl From<SimpleCommand> for Command {
+  fn from(c: SimpleCommand) -> Self {
+    Command::Simple(c)
+  }
+}
+
+impl From<SimpleCommand> for PipelineInner {
+  fn from(c: SimpleCommand) -> Self {
+    PipelineInner::Command(c.into())
+  }
+}
+
+impl From<Command> for PipelineInner {
+  fn from(c: Command) -> Self {
+    PipelineInner::Command(c)
+  }
+}
+
+impl From<SimpleCommand> for Sequence {
+  fn from(c: SimpleCommand) -> Self {
+    Command::Simple(c).into()
+  }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -144,7 +216,7 @@ pub enum StringPart {
 pub struct Redirect {
   pub maybe_fd: Option<usize>,
   pub op: RedirectOp,
-  pub word: Option<Vec<StringPart>>,
+  pub word: Vec<StringPart>,
 }
 
 pub enum RedirectOp {
@@ -210,11 +282,7 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or3(
-      map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
-      parse_env_or_shell_var_command,
-      parse_command_or_pipeline,
-    ),
+    or(parse_env_or_shell_var_command, parse_command_or_pipeline),
     skip_whitespace,
   )(input)?;
 
@@ -269,15 +337,14 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
 fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
   let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
   let (input, current) = terminated(
-    or3(
-      map(parse_subshell, |l| Sequence::Subshell(Box::new(l))),
-      parse_env_or_shell_var_command,
-      map(parse_command, Sequence::Command),
+    or(
+      map(parse_subshell, |l| Command::Subshell(Box::new(l))),
+      map(parse_simple_command, Command::Simple),
     ),
     skip_whitespace,
   )(input)?;
 
-  let (input, sequence) = match parse_pipeline_op(input) {
+  let (input, inner) = match parse_pipe_sequence_op(input) {
     Ok((input, op)) => {
       let (input, next_sequence) = assert_exists(
         &parse_command_or_pipeline,
@@ -285,33 +352,32 @@ fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
       )(input)?;
       (
         input,
-        Sequence::Pipeline(Box::new(Pipeline {
-          current,
+        PipelineInner::PipeSequence(Box::new(PipeSequence {
+          current: current.into(),
           op,
           next: next_sequence,
         })),
       )
     }
-    Err(ParseError::Backtrace) => (input, current),
+    Err(ParseError::Backtrace) => (input, PipelineInner::Command(current)),
     Err(err) => return Err(err),
   };
 
-  let sequence = if maybe_negated.is_some() {
-    Sequence::Negated(Box::new(sequence))
-  } else {
-    sequence
+  let pipeline = Pipeline {
+    negated: maybe_negated.is_some(),
+    inner,
   };
 
-  Ok((input, sequence))
+  Ok((input, pipeline.into()))
 }
 
-fn parse_command(input: &str) -> ParseResult<Command> {
+fn parse_simple_command(input: &str) -> ParseResult<SimpleCommand> {
   let (input, env_vars) = parse_env_vars(input)?;
   let (input, args) = parse_command_args(input)?;
   if args.is_empty() {
     return ParseError::backtrace();
   }
-  ParseResult::Ok((input, Command { env_vars, args }))
+  ParseResult::Ok((input, SimpleCommand { env_vars, args }))
 }
 
 fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
@@ -320,7 +386,7 @@ fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
     or4(
       parse_list_op,
       map(parse_redirect, |_| ()),
-      map(parse_pipeline_op, |_| ()),
+      map(parse_pipe_sequence_op, |_| ()),
       map(ch(')'), |_| ()),
     ),
   )(input)
@@ -380,11 +446,11 @@ fn parse_op_str<'a>(
   )
 }
 
-fn parse_pipeline_op(input: &str) -> ParseResult<PipelineOperator> {
+fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
   terminated(
     or(
-      map(tag("|&"), |_| PipelineOperator::StdoutStderr),
-      map(ch('|'), |_| PipelineOperator::Stdout),
+      map(tag("|&"), |_| PipeSequenceOperator::StdoutStderr),
+      map(ch('|'), |_| PipeSequenceOperator::Stdout),
     ),
     terminated(check_not(one_of("|&")), skip_whitespace),
   )(input)
@@ -397,7 +463,7 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
     map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
     map(tag(">>"), |_| RedirectOp::Append),
   )(input)?;
-  let (input, word) = maybe(parse_word)(input)?;
+  let (input, word) = parse_word(input)?;
 
   Ok((input, Redirect { maybe_fd, op, word }))
 }
@@ -796,7 +862,7 @@ mod test {
           SequentialListItem {
             is_async: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
-              current: Sequence::Command(Command {
+              current: SimpleCommand {
                 env_vars: vec![
                   EnvVar::new(
                     "Name".to_string(),
@@ -811,38 +877,43 @@ mod test {
                   StringOrWord::new_word("command"),
                   StringOrWord::new_word("arg1"),
                 ],
-              }),
+              }
+              .into(),
               op: BooleanListOperator::Or,
-              next: Sequence::Command(Command {
+              next: SimpleCommand {
                 env_vars: vec![],
                 args: vec![
                   StringOrWord::new_word("command2"),
                   StringOrWord::new_word("arg12"),
                   StringOrWord::new_word("arg13"),
                 ],
-              }),
+              }
+              .into(),
             })),
           },
           SequentialListItem {
             is_async: true,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
-              current: Sequence::Command(Command {
+              current: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("command3")],
-              }),
+              }
+              .into(),
               op: BooleanListOperator::And,
-              next: Sequence::Command(Command {
+              next: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("command4")],
-              }),
+              }
+              .into(),
             })),
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::Command(Command {
+            sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command5")],
-            }),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
@@ -860,42 +931,48 @@ mod test {
               )),
               op: BooleanListOperator::And,
               next: Sequence::BooleanList(Box::new(BooleanList {
-                current: Sequence::Command(Command {
+                current: SimpleCommand {
                   env_vars: vec![],
                   args: vec![StringOrWord::new_word("command8")],
-                }),
+                }
+                .into(),
                 op: BooleanListOperator::Or,
-                next: Sequence::Command(Command {
+                next: SimpleCommand {
                   env_vars: vec![],
                   args: vec![StringOrWord::new_word("command9")],
-                }),
+                }
+                .into(),
               })),
             })),
           },
           SequentialListItem {
             is_async: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
-              current: Sequence::Command(Command {
+              current: SimpleCommand {
                 env_vars: vec![],
                 args: vec![StringOrWord::new_word("cmd10")],
-              }),
+              }
+              .into(),
               op: BooleanListOperator::And,
-              next: Sequence::Subshell(Box::new(SequentialList {
+              next: Command::Subshell(Box::new(SequentialList {
                 items: vec![SequentialListItem {
                   is_async: false,
                   sequence: Sequence::BooleanList(Box::new(BooleanList {
-                    current: Sequence::Command(Command {
+                    current: SimpleCommand {
                       env_vars: vec![],
                       args: vec![StringOrWord::new_word("cmd11")],
-                    }),
+                    }
+                    .into(),
                     op: BooleanListOperator::Or,
-                    next: Sequence::Command(Command {
+                    next: SimpleCommand {
                       env_vars: vec![],
                       args: vec![StringOrWord::new_word("cmd12")],
-                    }),
+                    }
+                    .into(),
                   })),
                 }],
-              })),
+              }))
+              .into(),
             })),
           },
         ],
@@ -909,27 +986,30 @@ mod test {
         items: vec![
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::Command(Command {
+            sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command1")],
-            }),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::Command(Command {
+            sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("command2")],
-            }),
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::Command(Command {
+            sequence: SimpleCommand {
               env_vars: vec![EnvVar::new(
                 "A".to_string(),
                 StringOrWord::new_string("b"),
               )],
               args: vec![StringOrWord::new_word("command3")],
-            }),
+            }
+            .into(),
           },
         ],
       }),
@@ -947,10 +1027,11 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: true,
-          sequence: Sequence::Command(Command {
+          sequence: SimpleCommand {
             env_vars: vec![],
             args: vec![StringOrWord::new_word("command")],
-          }),
+          }
+          .into(),
         }],
       }),
     );
@@ -961,17 +1042,20 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
-          sequence: Sequence::Pipeline(Box::new(Pipeline {
-            current: Sequence::Command(Command {
+          sequence: PipeSequence {
+            current: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }),
-            op: PipelineOperator::Stdout,
-            next: Sequence::Command(Command {
+            }
+            .into(),
+            op: PipeSequenceOperator::Stdout,
+            next: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],
-            }),
-          })),
+            }
+            .into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -982,17 +1066,20 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
-          sequence: Sequence::Pipeline(Box::new(Pipeline {
-            current: Sequence::Command(Command {
+          sequence: PipeSequence {
+            current: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }),
-            op: PipelineOperator::StdoutStderr,
-            next: Sequence::Command(Command {
+            }
+            .into(),
+            op: PipeSequenceOperator::StdoutStderr,
+            next: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("other")],
-            }),
-          })),
+            }
+            .into(),
+          }
+          .into(),
         }],
       }),
     );
@@ -1009,7 +1096,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
-          sequence: Sequence::Command(Command {
+          sequence: SimpleCommand {
             env_vars: vec![],
             args: vec![
               StringOrWord::new_word("echo"),
@@ -1017,7 +1104,8 @@ mod test {
                 "MY_ENV".to_string(),
               )]),
             ],
-          }),
+          }
+          .into(),
         }],
       }),
     );
@@ -1029,24 +1117,30 @@ mod test {
         items: vec![SequentialListItem {
           is_async: false,
           sequence: Sequence::BooleanList(Box::new(BooleanList {
-            current: Sequence::Negated(Box::new(Sequence::Pipeline(Box::new(
-              Pipeline {
-                current: Sequence::Command(Command {
+            current: Pipeline {
+              negated: true,
+              inner: PipeSequence {
+                current: SimpleCommand {
                   args: vec![StringOrWord::new_word("cmd1")],
                   env_vars: vec![],
-                }),
-                op: PipelineOperator::Stdout,
-                next: Sequence::Command(Command {
+                }
+                .into(),
+                op: PipeSequenceOperator::Stdout,
+                next: SimpleCommand {
                   args: vec![StringOrWord::new_word("cmd2")],
                   env_vars: vec![],
-                }),
-              },
-            )))),
+                }
+                .into(),
+              }
+              .into(),
+            }
+            .into(),
             op: BooleanListOperator::And,
-            next: Sequence::Command(Command {
+            next: SimpleCommand {
               args: vec![StringOrWord::new_word("cmd3")],
               env_vars: vec![],
-            }),
+            }
+            .into(),
           })),
         }],
       }),
@@ -1097,10 +1191,11 @@ mod test {
         value: StringOrWord::Word(vec![StringPart::Command(SequentialList {
           items: vec![SequentialListItem {
             is_async: false,
-            sequence: Sequence::Command(Command {
+            sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![StringOrWord::new_word("test")],
-            }),
+            }
+            .into(),
           }],
         })]),
       }),
