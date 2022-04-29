@@ -428,7 +428,11 @@ async fn execute_simple_command(
       );
     }
 
-    let command_path = match resolve_command_path(&command_name, &state).await {
+    let command_path = match resolve_command_path(&command_name, &state, || {
+      Ok(std::env::current_dir()?)
+    })
+    .await
+    {
       Ok(command_path) => command_path,
       Err(err) => {
         stderr.write_line(&err.to_string()).unwrap();
@@ -476,9 +480,26 @@ async fn execute_simple_command(
 async fn resolve_command_path(
   command_name: &str,
   state: &ShellState,
+  current_exe: impl FnOnce() -> Result<PathBuf>,
 ) -> Result<PathBuf> {
   if command_name.is_empty() {
     bail!("command name was empty");
+  }
+
+  // Special handling to use the current executable for deno.
+  // This is to ensure deno tasks that use deno work in environments
+  // that don't have deno on the path and to ensure it use the current
+  // version of deno being executed rather than the one on the path,
+  // which has caused some confusion.
+  if command_name == "deno" {
+    if let Ok(exe_path) = current_exe() {
+      // this condition exists to make the tests pass because it's not
+      // using the deno as the current executable
+      let file_stem = exe_path.file_stem().map(|s| s.to_string_lossy());
+      if file_stem.map(|s| s.to_string()) == Some("deno".to_string()) {
+        return Ok(exe_path);
+      }
+    }
   }
 
   // check for absolute
@@ -689,4 +710,27 @@ async fn execute_with_stdout_as_text(
   let _ = spawned_output.await;
   let data = output_handle.await.unwrap();
   String::from_utf8_lossy(&data).to_string()
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[tokio::test]
+  async fn should_resolve_current_exe_path_for_deno() {
+    let state =
+      ShellState::new(Default::default(), &std::env::current_dir().unwrap());
+    let path =
+      resolve_command_path("deno", &state, || Ok(PathBuf::from("/bin/deno")))
+        .await
+        .unwrap();
+    assert_eq!(path, PathBuf::from("/bin/deno"));
+
+    let path = resolve_command_path("deno", &state, || {
+      Ok(PathBuf::from("/bin/deno.exe"))
+    })
+    .await
+    .unwrap();
+    assert_eq!(path, PathBuf::from("/bin/deno.exe"));
+  }
 }
