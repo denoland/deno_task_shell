@@ -429,7 +429,7 @@ async fn execute_simple_command(
     }
 
     let command_path = match resolve_command_path(&command_name, &state, || {
-      Ok(std::env::current_dir()?)
+      Ok(std::env::current_exe()?)
     })
     .await
     {
