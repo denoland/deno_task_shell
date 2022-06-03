@@ -1393,24 +1393,21 @@ mod test {
 
   #[test]
   fn test_redirects() {
-    run_test(
-      parse_command,
-      "echo 1 > test.txt",
-      Ok(Command {
-        inner: CommandInner::Simple(SimpleCommand {
-          env_vars: vec![],
-          args: vec![
-            StringOrWord::new_word("echo"),
-            StringOrWord::new_word("1"),
-          ],
-        }),
-        redirects: RedirectList(vec![Redirect {
-          maybe_fd: None,
-          op: RedirectOp::Redirect,
-          word: vec![StringPart::Text("test.txt".to_string())],
-        }]),
+    let expected = Ok(Command {
+      inner: CommandInner::Simple(SimpleCommand {
+        env_vars: vec![],
+        args: vec![StringOrWord::new_word("echo"), StringOrWord::new_word("1")],
       }),
-    );
+      redirects: RedirectList(vec![Redirect {
+        maybe_fd: None,
+        op: RedirectOp::Redirect,
+        word: vec![StringPart::Text("test.txt".to_string())],
+      }]),
+    });
+
+    run_test(parse_command, "echo 1 > test.txt", expected.clone());
+
+    run_test(parse_command, "echo 1 >test.txt", expected.clone());
 
     run_test(
       parse_command,
