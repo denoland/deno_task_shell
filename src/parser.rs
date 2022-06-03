@@ -1439,7 +1439,7 @@ mod test {
     run_test(
       parse_sequence,
       "echo 1 1> stdout.txt | cat",
-      Err("Redirects in pipeline sequence commands are not currently supported."),
+      Err("Redirects in pipe sequence commands are not currently supported."),
     );
   }
 }
