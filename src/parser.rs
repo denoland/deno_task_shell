@@ -390,6 +390,7 @@ fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
 }
 
 fn parse_command(input: &str) -> ParseResult<Command> {
+  println!("input {:?}", input);
   let (input, inner) = terminated(
     or(
       map(parse_subshell, |l| CommandInner::Subshell(Box::new(l))),
@@ -397,12 +398,24 @@ fn parse_command(input: &str) -> ParseResult<Command> {
     ),
     skip_whitespace,
   )(input)?;
+  println!("input {:?}", input);
+
+  let (input, redirects) = many0(terminated(parse_redirect, skip_whitespace))(input)?;
+  
+  /*
+  many_till(
+    terminated(parse_redirect, skip_whitespace),
+    assert_whitespace_or_end_and_skip,
+  )(input)?;
+  */
 
   let command = Command {
     // todo: parse redirect list
-    redirects: RedirectList(Vec::new()),
+    redirects: RedirectList(redirects),
     inner,
   };
+  println!("input {:?}", input);
+  println!("command {:?}", command);
 
   Ok((input, command))
 }
@@ -419,9 +432,8 @@ fn parse_simple_command(input: &str) -> ParseResult<SimpleCommand> {
 fn parse_command_args(input: &str) -> ParseResult<Vec<StringOrWord>> {
   many_till(
     terminated(parse_shell_arg, assert_whitespace_or_end_and_skip),
-    or4(
+    or3(
       parse_list_op,
-      map(parse_redirect, |_| ()),
       map(parse_pipe_sequence_op, |_| ()),
       map(ch(')'), |_| ()),
     ),
@@ -495,11 +507,15 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
 fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
   let (input, maybe_fd) = maybe(parse_usize)(input)?;
+  println!("parse_redirect input {}", input);
   let (input, op) = or(
     map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
     map(tag(">>"), |_| RedirectOp::Append),
   )(input)?;
+  let (input, _) = skip_whitespace(input)?;
+  println!("parse_redirect input {}", input);
   let (input, word) = parse_word(input)?;
+  println!("parse_redirect input {}", input);
 
   Ok((input, Redirect { maybe_fd, op, word }))
 }
@@ -1419,15 +1435,18 @@ mod test {
             StringOrWord::new_word("1"),
           ],
         }),
-        redirects: RedirectList(vec![Redirect {
-          maybe_fd: Some(1),
-          op: RedirectOp::Redirect,
-          word: vec![StringPart::Text("stdout.txt".to_string())],
-        }, Redirect {
-          maybe_fd: Some(2),
-          op: RedirectOp::Redirect,
-          word: vec![StringPart::Text("stderr.txt".to_string())],
-        }]),
+        redirects: RedirectList(vec![
+          Redirect {
+            maybe_fd: Some(1),
+            op: RedirectOp::Redirect,
+            word: vec![StringPart::Text("stdout.txt".to_string())],
+          },
+          Redirect {
+            maybe_fd: Some(2),
+            op: RedirectOp::Redirect,
+            word: vec![StringPart::Text("stderr.txt".to_string())],
+          },
+        ]),
       }),
     );
   }
