@@ -114,7 +114,7 @@ impl From<PipeSequence> for Sequence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Command {
   pub inner: CommandInner,
-  pub redirects: RedirectList,
+  pub redirect: Option<Redirect>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,7 +144,7 @@ pub struct SimpleCommand {
 impl From<SimpleCommand> for Command {
   fn from(c: SimpleCommand) -> Self {
     Command {
-      redirects: Vec::new(),
+      redirect: None,
       inner: CommandInner::Simple(c),
     }
   }
@@ -220,8 +220,6 @@ pub enum StringPart {
   /// Command substitution (ex. `$(command)`)
   Command(SequentialList),
 }
-
-pub type RedirectList = Vec<Redirect>;
 
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
@@ -397,11 +395,19 @@ fn parse_command(input: &str) -> ParseResult<Command> {
     skip_whitespace,
   )(input)?;
 
-  let (input, redirects) =
+  let before_redirects_input = input;
+  let (input, mut redirects) =
     many0(terminated(parse_redirect, skip_whitespace))(input)?;
 
+  if redirects.len() > 1 {
+    return ParseError::fail(
+      before_redirects_input,
+      "Multiple redirects are currently not supported.",
+    );
+  }
+
   let command = Command {
-    redirects,
+    redirect: redirects.pop(),
     inner,
   };
 
@@ -998,7 +1004,7 @@ mod test {
                     })),
                   }],
                 })),
-                redirects: Vec::new(),
+                redirect: None,
               }
               .into(),
             })),
@@ -1397,49 +1403,29 @@ mod test {
         env_vars: vec![],
         args: vec![StringOrWord::new_word("echo"), StringOrWord::new_word("1")],
       }),
-      redirects: vec![Redirect {
+      redirect: Some(Redirect {
         maybe_fd: None,
         op: RedirectOp::Redirect,
         word: vec![StringPart::Text("test.txt".to_string())],
-      }],
+      }),
     });
 
     run_test(parse_command, "echo 1 > test.txt", expected.clone());
 
     run_test(parse_command, "echo 1 >test.txt", expected.clone());
 
-    // todo: multiple redirects should throw a parse error
-    run_test(
+    run_test_with_end(
       parse_command,
       "echo 1 1> stdout.txt 2> stderr.txt",
-      Ok(Command {
-        inner: CommandInner::Simple(SimpleCommand {
-          env_vars: vec![],
-          args: vec![
-            StringOrWord::new_word("echo"),
-            StringOrWord::new_word("1"),
-          ],
-        }),
-        redirects: vec![
-          Redirect {
-            maybe_fd: Some(1),
-            op: RedirectOp::Redirect,
-            word: vec![StringPart::Text("stdout.txt".to_string())],
-          },
-          Redirect {
-            maybe_fd: Some(2),
-            op: RedirectOp::Redirect,
-            word: vec![StringPart::Text("stderr.txt".to_string())],
-          },
-        ],
-      }),
+      Err("Multiple redirects are currently not supported."),
+      "1> stdout.txt 2> stderr.txt",
     );
 
     // redirect in pipeline sequence command should error
     run_test(
       parse_sequence,
       "echo 1 1> stdout.txt | cat",
-      Err("Redirects in pipe sequence commands are not currently supported."),
+      Err("Redirects in pipe sequence commands are currently not supported."),
     );
   }
 }
