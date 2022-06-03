@@ -144,7 +144,7 @@ pub struct SimpleCommand {
 impl From<SimpleCommand> for Command {
   fn from(c: SimpleCommand) -> Self {
     Command {
-      redirects: RedirectList(Vec::new()),
+      redirects: Vec::new(),
       inner: CommandInner::Simple(c),
     }
   }
@@ -221,8 +221,7 @@ pub enum StringPart {
   Command(SequentialList),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct RedirectList(Vec<Redirect>);
+pub type RedirectList = Vec<Redirect>;
 
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
@@ -402,7 +401,7 @@ fn parse_command(input: &str) -> ParseResult<Command> {
     many0(terminated(parse_redirect, skip_whitespace))(input)?;
 
   let command = Command {
-    redirects: RedirectList(redirects),
+    redirects,
     inner,
   };
 
@@ -999,7 +998,7 @@ mod test {
                     })),
                   }],
                 })),
-                redirects: RedirectList(Vec::new()),
+                redirects: Vec::new(),
               }
               .into(),
             })),
@@ -1398,17 +1397,18 @@ mod test {
         env_vars: vec![],
         args: vec![StringOrWord::new_word("echo"), StringOrWord::new_word("1")],
       }),
-      redirects: RedirectList(vec![Redirect {
+      redirects: vec![Redirect {
         maybe_fd: None,
         op: RedirectOp::Redirect,
         word: vec![StringPart::Text("test.txt".to_string())],
-      }]),
+      }],
     });
 
     run_test(parse_command, "echo 1 > test.txt", expected.clone());
 
     run_test(parse_command, "echo 1 >test.txt", expected.clone());
 
+    // todo: multiple redirects should throw a parse error
     run_test(
       parse_command,
       "echo 1 1> stdout.txt 2> stderr.txt",
@@ -1420,7 +1420,7 @@ mod test {
             StringOrWord::new_word("1"),
           ],
         }),
-        redirects: RedirectList(vec![
+        redirects: vec![
           Redirect {
             maybe_fd: Some(1),
             op: RedirectOp::Redirect,
@@ -1431,8 +1431,15 @@ mod test {
             op: RedirectOp::Redirect,
             word: vec![StringPart::Text("stderr.txt".to_string())],
           },
-        ]),
+        ],
       }),
+    );
+
+    // redirect in pipeline sequence command should error
+    run_test(
+      parse_sequence,
+      "echo 1 1> stdout.txt | cat",
+      Err("Redirects in pipeline sequence commands are not currently supported."),
     );
   }
 }

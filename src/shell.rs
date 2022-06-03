@@ -258,7 +258,26 @@ async fn execute_pipeline_inner(
   stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
-    PipelineInner::Command(command) => {
+    PipelineInner::Command(mut command) => {
+      // We only support redirects that are not in a pipe sequence
+      // at the moment, so this is fine to do only here
+      let stdout = if let Some(redirect) = command.redirects.pop() {
+        // we only support one redirect at the moment
+        assert!(command.redirects.is_empty());
+
+        let output_path =
+          evaluate_string_parts(redirect.word, &state, stdin.clone(), stderr.clone())
+            .await;
+
+        // todo:
+        // redirect.maybe_fd
+        // redirect.op
+        let std_file = std::fs::OpenOptions...;
+
+        ShellPipeWriter::from_std(std_file)
+      } else {
+        stdout
+      };
       execute_command(command, state, stdin, stdout, stderr).await
     }
     PipelineInner::PipeSequence(pipe_sequence) => {
