@@ -241,16 +241,16 @@ pub enum RedirectOp {
   Append,
 }
 
-pub fn parse(input: &str) -> Result<SequentialList> {
-  fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
-    bail!(
-      "{}\n  {}\n  ~",
-      e.message,
-      // truncate the output to prevent wrapping in the console
-      e.input.chars().take(60).collect::<String>()
-    )
-  }
+fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
+  bail!(
+    "{}\n  {}\n  ~",
+    e.message,
+    // truncate the output to prevent wrapping in the console
+    e.input.chars().take(60).collect::<String>()
+  )
+}
 
+pub fn parse(input: &str) -> Result<SequentialList> {
   match parse_sequential_list(input) {
     Ok((input, expr)) => {
       if input.trim().is_empty() {
@@ -401,7 +401,7 @@ fn parse_command(input: &str) -> ParseResult<Command> {
   println!("input {:?}", input);
 
   let (input, redirects) = many0(terminated(parse_redirect, skip_whitespace))(input)?;
-  
+
   /*
   many_till(
     terminated(parse_redirect, skip_whitespace),
@@ -1396,7 +1396,7 @@ mod test {
           err.message,
           match expected.err() {
             Some(err) => err,
-            None => panic!("Got error: {}", err.message),
+            None => panic!("Got error: {:#}", error_for_failure(err).err().unwrap()),
           }
         );
       }
