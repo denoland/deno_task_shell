@@ -81,6 +81,12 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command("echo --test=\"2\" --test='2' test\"TEST\" TEST'test'TEST")
+    .assert_stdout("--test=2 --test=2 testTEST TESTtestTEST\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command("deno eval 'console.log(1)'")
     .env_var("PATH", "")
     .assert_stderr("deno: command not found\n")
