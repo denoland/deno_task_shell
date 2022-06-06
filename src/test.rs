@@ -514,7 +514,6 @@ pub async fn rm() {
     .await;
 }
 
-#[ignore]
 #[tokio::test]
 pub async fn stdin() {
   TestBuilder::new()
