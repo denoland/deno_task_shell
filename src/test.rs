@@ -455,7 +455,7 @@ pub async fn cat() {
     .run()
     .await;
 
-  // file containing commands to execute
+  // file containing a command to evaluate
   TestBuilder::new()
     .command("$(cat file)")
     .file("file", "echo hello")
