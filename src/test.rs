@@ -81,8 +81,8 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
-    .command("echo --test=\"2\" --test='2' test\"TEST\" TEST'test'TEST")
-    .assert_stdout("--test=2 --test=2 testTEST TESTtestTEST\n")
+    .command("echo --test=\"2\" --test='2' test\"TEST\" TEST'test'TEST 'test''test' test'test'\"test\" \"test\"\"test\"'test'")
+    .assert_stdout("--test=2 --test=2 testTEST TESTtestTEST testtest testtesttest testtesttest\n")
     .run()
     .await;
 

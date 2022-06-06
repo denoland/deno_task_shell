@@ -540,11 +540,16 @@ fn parse_word_with_text(
 }
 
 fn parse_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
-  or(
-    map(parse_single_quoted_string, |text| {
-      vec![StringPart::Text(text.to_string())]
-    }),
-    parse_double_quoted_string,
+  // Strings may be up beside each other, and if they are they
+  // should be categorized as the same argument.
+  map(
+    many1(or(
+      map(parse_single_quoted_string, |text| {
+        vec![StringPart::Text(text.to_string())]
+      }),
+      parse_double_quoted_string,
+    )),
+    |vecs| vecs.into_iter().flatten().collect(),
   )(input)
 }
 
