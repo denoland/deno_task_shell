@@ -400,6 +400,70 @@ pub async fn pwd_logical() {
     .await;
 }
 
+#[tokio::test]
+pub async fn cat() {
+  // no args
+  TestBuilder::new()
+    .command("cat")
+    .stdin("hello")
+    .assert_stdout("hello")
+    .run()
+    .await;
+
+  // dash
+  TestBuilder::new()
+    .command("cat -")
+    .stdin("hello")
+    .assert_stdout("hello")
+    .run()
+    .await;
+
+  // file
+  TestBuilder::new()
+    .command("cat file")
+    .file("file", "test")
+    .assert_stdout("test")
+    .run()
+    .await;
+
+  // multiple files
+  TestBuilder::new()
+    .command("cat file1 file2")
+    .file("file1", "test")
+    .file("file2", "other")
+    .assert_stdout("testother")
+    .run()
+    .await;
+
+  // multiple files and stdin
+  TestBuilder::new()
+    .command("cat file1 file2 -")
+    .file("file1", "test\n")
+    .file("file2", "other\n")
+    .stdin("hello")
+    .assert_stdout("test\nother\nhello")
+    .run()
+    .await;
+
+  // multiple files and stdin different order
+  TestBuilder::new()
+    .command("cat file1 - file2")
+    .file("file1", "test\n")
+    .file("file2", "other\n")
+    .stdin("hello\n")
+    .assert_stdout("test\nhello\nother\n")
+    .run()
+    .await;
+
+  // file containing commands to execute
+  TestBuilder::new()
+    .command("$(cat file)")
+    .file("file", "echo hello")
+    .assert_stdout("hello\n")
+    .run()
+    .await;
+}
+
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
 pub async fn mv() {
