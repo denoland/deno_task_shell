@@ -155,14 +155,14 @@ impl TestBuilder {
       "NO_TEMP_DIR".to_string()
     };
     assert_eq!(
-      stdout_handle.await.unwrap(),
-      self.expected_stdout.replace("$TEMP_DIR", &temp_dir),
+      stderr_handle.await.unwrap(),
+      self.expected_stderr.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
     );
     assert_eq!(
-      stderr_handle.await.unwrap(),
-      self.expected_stderr.replace("$TEMP_DIR", &temp_dir),
+      stdout_handle.await.unwrap(),
+      self.expected_stdout.replace("$TEMP_DIR", &temp_dir),
       "\n\nFailed for: {}",
       self.command
     );

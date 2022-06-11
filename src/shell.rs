@@ -8,6 +8,7 @@ use anyhow::bail;
 use anyhow::Result;
 use futures::FutureExt;
 
+use crate::commands::cat_command;
 use crate::commands::cd_command;
 use crate::commands::cp_command;
 use crate::commands::exit_command;
@@ -425,6 +426,9 @@ fn execute_command_args(
   } else if command_name == "false" {
     // ignores additional arguments
     ExecuteResult::from_exit_code(1)
+  } else if command_name == "cat" {
+    let cwd = state.cwd().clone();
+    cat_command(&cwd, args, stdin, stdout, stderr)
   } else if command_name == "cp" {
     let cwd = state.cwd().clone();
     cp_command(&cwd, args, stderr).await

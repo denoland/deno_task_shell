@@ -32,6 +32,8 @@ pub fn parse_arg_kinds(flags: &[String]) -> Vec<ArgKind> {
   for arg in flags {
     if had_dash_dash {
       result.push(ArgKind::Arg(arg));
+    } else if arg == "-" {
+      result.push(ArgKind::Arg("-"));
     } else if arg == "--" {
       had_dash_dash = true;
     } else if let Some(flag) = arg.strip_prefix("--") {
