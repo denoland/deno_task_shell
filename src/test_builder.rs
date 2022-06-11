@@ -199,7 +199,7 @@ fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
   let (stdout_reader, stdout_writer) = pipe();
   let stdout_handle = tokio::task::spawn_blocking(|| {
     let mut buf = Vec::new();
-    stdout_reader.write_all(&mut buf).unwrap();
+    stdout_reader.pipe_to(&mut buf).unwrap();
     String::from_utf8_lossy(&buf).to_string()
   });
   (stdout_writer, stdout_handle)

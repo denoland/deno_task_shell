@@ -16,6 +16,7 @@ use crate::commands::mv_command;
 use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
+use crate::commands::xargs_collect_args;
 use crate::parser::Command;
 use crate::parser::PipeSequence;
 use crate::parser::PipeSequenceOperator;
@@ -362,11 +363,36 @@ async fn execute_simple_command(
   command: SimpleCommand,
   state: ShellState,
   stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  let args =
+    evaluate_args(command.args, &state, stdin.clone(), stderr.clone()).await;
+  let mut state = state.clone();
+  for env_var in command.env_vars {
+    state.apply_env_var(
+      &env_var.name,
+      &evaluate_string_or_word(
+        env_var.value,
+        &state,
+        stdin.clone(),
+        stderr.clone(),
+      )
+      .await,
+    );
+  }
+  execute_command_args(args, state, stdin, stdout, stderr).await
+}
+
+fn execute_command_args(
+  mut args: Vec<String>,
+  state: ShellState,
+  stdin: ShellPipeReader,
   mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
-) -> ExecuteResult {
-  let mut args =
-    evaluate_args(command.args, &state, stdin.clone(), stderr.clone()).await;
+) -> FutureExecuteResult {
+  // requires boxing because of recursive async
+  async move {
   let command_name = if args.is_empty() {
     String::new()
   } else {
@@ -413,21 +439,17 @@ async fn execute_simple_command(
     rm_command(&cwd, args, stderr).await
   } else if command_name == "sleep" {
     sleep_command(args, stderr).await
-  } else {
-    let mut state = state.clone();
-    for env_var in command.env_vars {
-      state.apply_env_var(
-        &env_var.name,
-        &evaluate_string_or_word(
-          env_var.value,
-          &state,
-          stdin.clone(),
-          stderr.clone(),
-        )
-        .await,
-      );
+  } else if command_name == "xargs" {
+    match xargs_collect_args(args, stdin.clone()) {
+      Ok(args) => {
+        execute_command_args(args, state, stdin, stdout, stderr).await
+      }
+      Err(err) => {
+        let _ = stderr.write_line(&format!("xargs: {}", err));
+        ExecuteResult::from_exit_code(1)
+      }
     }
-
+  } else {
     let command_path = match resolve_command_path(&command_name, &state, || {
       Ok(std::env::current_exe()?)
     })
@@ -475,6 +497,7 @@ async fn execute_simple_command(
       }
     }
   }
+}.boxed()
 }
 
 async fn resolve_command_path(
@@ -704,7 +727,7 @@ async fn execute_with_stdout_as_text(
   let spawned_output = execute(shell_stdout_writer);
   let output_handle = tokio::task::spawn_blocking(move || {
     let mut final_data = Vec::new();
-    shell_stdout_reader.write_all(&mut final_data).unwrap();
+    shell_stdout_reader.pipe_to(&mut final_data).unwrap();
     final_data
   });
   let _ = spawned_output.await;

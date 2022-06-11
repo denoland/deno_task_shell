@@ -8,6 +8,7 @@ mod mkdir;
 mod pwd;
 mod rm;
 mod sleep;
+mod xargs;
 
 pub use cd::*;
 pub use cp_mv::*;
@@ -16,3 +17,4 @@ pub use mkdir::*;
 pub use pwd::*;
 pub use rm::*;
 pub use sleep::*;
+pub use xargs::*;

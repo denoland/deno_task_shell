@@ -521,6 +521,15 @@ pub async fn rm() {
 }
 
 #[tokio::test]
+pub async fn xargs() {
+  TestBuilder::new()
+    .command("echo '1   2   3  ' | xargs")
+    .assert_stdout("1 2 3\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 pub async fn stdin() {
   TestBuilder::new()
     .command(r#"deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)""#)
