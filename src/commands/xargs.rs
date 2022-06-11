@@ -24,6 +24,17 @@ pub fn xargs_collect_args(
   }
 
   if let Some(delim) = &flags.delimiter {
+    // strip a single trailing newline (xargs seems to do this)
+    let text = if *delim == '\n' {
+      if let Some(text) = text.strip_suffix(&delim.to_string()) {
+        text
+      } else {
+        &text
+      }
+    } else {
+      &text
+    };
+
     args.extend(text.split(*delim).map(|t| t.to_string()));
   } else if flags.is_null_delimited {
     args.extend(text.split('\0').map(|t| t.to_string()));
@@ -50,13 +61,6 @@ fn delimit_blanks(text: &str) -> Result<Vec<String>> {
               break;
             }
             match c {
-              '\\' => {
-                if matches!(chars.peek(), Some('"' | '\'')) {
-                  current.push(chars.next().unwrap());
-                } else {
-                  current.push('\\');
-                }
-              }
               '\n' => bail!("{}", UNMATCHED_MESSAGE),
               _ => current.push(c),
             }
