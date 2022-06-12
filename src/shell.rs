@@ -151,14 +151,6 @@ fn execute_sequence(
   // requires boxed async because of recursive async
   async move {
     match sequence {
-      Sequence::EnvVar(var) => ExecuteResult::Continue(
-        0,
-        vec![EnvChange::SetEnvVar(
-          var.name,
-          evaluate_string_or_word(var.value, &state, stdin, stderr).await,
-        )],
-        Vec::new(),
-      ),
       Sequence::ShellVar(var) => ExecuteResult::Continue(
         0,
         vec![EnvChange::SetShellVar(
@@ -453,6 +445,8 @@ fn execute_command_args(
           ExecuteResult::from_exit_code(1)
         }
       }
+    } else if command_name == "export" {
+      evaluate_export_command(args)
     } else {
       let command_path = match resolve_command_path(&command_name, &state, || {
         Ok(std::env::current_exe()?)
@@ -502,6 +496,26 @@ fn execute_command_args(
       }
     }
   }.boxed()
+}
+
+fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
+  let mut changes = Vec::new();
+  for arg in args {
+    // ignore if it doesn't contain an equals
+    if let Some(equals_index) = arg.find('=') {
+      let arg_name = &arg[..equals_index];
+      let arg_value = &arg[equals_index + 1..];
+      changes.push(EnvChange::SetEnvVar(
+        arg_name.to_string(),
+        arg_value.to_string(),
+      ));
+    }
+  }
+  ExecuteResult::Continue(
+    0,
+    changes,
+    Vec::new(),
+  )
 }
 
 fn resolve_command_path(

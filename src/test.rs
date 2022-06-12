@@ -254,6 +254,12 @@ pub async fn env_variables() {
     .assert_stdout("\n1\n1\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command(r#"export VAR=1 VAR2=testing VAR3="test this out" && echo $VAR $VAR2 $VAR3"#)
+    .assert_stdout("1 testing test this out\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]
@@ -631,6 +637,18 @@ pub async fn xargs() {
     .command(r#"deno eval "console.log('\"test')" | xargs"#)
     .assert_stderr("xargs: unmatched quote; by default quotes are special to xargs unless you use the -0 option\n")
     .assert_exit_code(1)
+    .run()
+    .await;
+
+  // test reading env file
+  TestBuilder::new()
+  .file(".env", r#"VAR1="testing"
+VAR2="other"
+"#)
+    // most likely people would want to do `export $(grep -v '^#' .env | xargs)` though
+    // in order to remove comments...
+    .command("export $(cat .env | xargs) && echo $VAR1 $VAR2")
+    .assert_stdout("testing other\n")
     .run()
     .await;
 }
