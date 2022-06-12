@@ -642,9 +642,12 @@ pub async fn xargs() {
 
   // test reading env file
   TestBuilder::new()
-  .file(".env", r#"VAR1="testing"
+    .file(
+      ".env",
+      r#"VAR1="testing"
 VAR2="other"
-"#)
+"#,
+    )
     // most likely people would want to do `export $(grep -v '^#' .env | xargs)` though
     // in order to remove comments...
     .command("export $(cat .env | xargs) && echo $VAR1 $VAR2")

@@ -317,10 +317,7 @@ fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
   if env_vars.len() > 1 {
     ParseError::fail(env_vars_input, "Cannot set multiple environment variables when there is no following command.")
   } else {
-    ParseResult::Ok((
-      input,
-      Sequence::ShellVar(env_vars.remove(0))
-    ))
+    ParseResult::Ok((input, Sequence::ShellVar(env_vars.remove(0))))
   }
 }
 
@@ -912,9 +909,12 @@ mod test {
             is_async: false,
             sequence: SimpleCommand {
               env_vars: vec![],
-              args: vec![StringOrWord::new_word("export"), StringOrWord::new_word("ENV6=5")],
+              args: vec![
+                StringOrWord::new_word("export"),
+                StringOrWord::new_word("ENV6=5"),
+              ],
             }
-            .into()
+            .into(),
           },
           SequentialListItem {
             is_async: false,

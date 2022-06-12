@@ -511,11 +511,7 @@ fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
       ));
     }
   }
-  ExecuteResult::Continue(
-    0,
-    changes,
-    Vec::new(),
-  )
+  ExecuteResult::Continue(0, changes, Vec::new())
 }
 
 fn resolve_command_path(
