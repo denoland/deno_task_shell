@@ -170,6 +170,19 @@ pub fn or6<'a, O>(
   or5(a, b, c, d, or(e, f))
 }
 
+/// Checks for any to match.
+pub fn or7<'a, O>(
+  a: impl Fn(&'a str) -> ParseResult<'a, O>,
+  b: impl Fn(&'a str) -> ParseResult<'a, O>,
+  c: impl Fn(&'a str) -> ParseResult<'a, O>,
+  d: impl Fn(&'a str) -> ParseResult<'a, O>,
+  e: impl Fn(&'a str) -> ParseResult<'a, O>,
+  f: impl Fn(&'a str) -> ParseResult<'a, O>,
+  g: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, O> {
+  or6(a, b, c, d, e, or(f, g))
+}
+
 /// Returns the second value and discards the first.
 pub fn preceded<'a, First, Second>(
   first: impl Fn(&'a str) -> ParseResult<'a, First>,
@@ -329,12 +342,27 @@ pub fn separated_list<'a, O, OSeparator>(
   }
 }
 
-/// Applies the parser 0 or more times and returns a vector
+/// Applies the combinator 0 or more times and returns a vector
 /// of all the parsed results.
 pub fn many0<'a, O>(
   combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
 ) -> impl Fn(&'a str) -> ParseResult<'a, Vec<O>> {
   many_till(combinator, |_| ParseError::backtrace::<()>())
+}
+
+/// Applies the combinator at least 1 time, but maybe more
+/// and returns a vector of all the parsed results.
+pub fn many1<'a, O>(
+  combinator: impl Fn(&'a str) -> ParseResult<'a, O>,
+) -> impl Fn(&'a str) -> ParseResult<'a, Vec<O>> {
+  move |input| {
+    let mut results = Vec::new();
+    let (input, first_result) = combinator(input)?;
+    results.push(first_result);
+    let (input, next_results) = many0(&combinator)(input)?;
+    results.extend(next_results);
+    Ok((input, results))
+  }
 }
 
 /// Skips the whitespace.

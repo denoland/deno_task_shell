@@ -584,11 +584,16 @@ fn parse_word_with_text(
 }
 
 fn parse_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
-  or(
-    map(parse_single_quoted_string, |text| {
-      vec![StringPart::Text(text.to_string())]
-    }),
-    parse_double_quoted_string,
+  // Strings may be up beside each other, and if they are they
+  // should be categorized as the same argument.
+  map(
+    many1(or(
+      map(parse_single_quoted_string, |text| {
+        vec![StringPart::Text(text.to_string())]
+      }),
+      parse_double_quoted_string,
+    )),
+    |vecs| vecs.into_iter().flatten().collect(),
   )(input)
 }
 
@@ -681,9 +686,10 @@ fn parse_string_parts(
       Char(char),
       Variable(&'a str),
       Command(SequentialList),
+      Parts(Vec<StringPart>),
     }
 
-    let (input, parts) = many0(or6(
+    let (input, parts) = many0(or7(
       map(first_escaped_char(mode), PendingPart::Char),
       map(parse_command_substitution, PendingPart::Command),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
@@ -710,6 +716,13 @@ fn parse_string_parts(
         }),
         PendingPart::Char,
       ),
+      |input| match mode {
+        ParseStringPartsMode::DoubleQuotes => ParseError::backtrace(),
+        ParseStringPartsMode::Word => {
+          let (input, parts) = parse_quoted_string(input)?;
+          Ok((input, PendingPart::Parts(parts)))
+        }
+      },
     ))(input)?;
 
     let mut result = Vec::new();
@@ -725,6 +738,9 @@ fn parse_string_parts(
         PendingPart::Command(s) => result.push(StringPart::Command(s)),
         PendingPart::Variable(v) => {
           result.push(StringPart::Variable(v.to_string()))
+        }
+        PendingPart::Parts(parts) => {
+          result.extend(parts);
         }
       }
     }
@@ -864,6 +880,8 @@ mod test {
     );
 
     assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
+    assert!(parse("command --arg='value'").is_ok());
+    assert!(parse("command --arg=\"value\"").is_ok());
 
     assert_eq!(
       parse("echo `echo 1`").err().unwrap().to_string(),
