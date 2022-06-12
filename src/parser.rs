@@ -362,6 +362,7 @@ fn parse_pipeline(input: &str) -> ParseResult<Pipeline> {
 }
 
 fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
+  let original_input = input;
   let (input, command) = parse_command(input)?;
 
   let (input, inner) = match parse_pipe_sequence_op(input) {
@@ -370,6 +371,14 @@ fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
         &parse_pipeline_inner,
         "Expected command following pipeline operator.",
       )(input)?;
+
+      if command.redirect.is_some() {
+        return ParseError::fail(
+          original_input,
+          "Redirects in pipe sequence commands are currently not supported.",
+        );
+      }
+
       (
         input,
         PipelineInner::PipeSequence(Box::new(PipeSequence {
@@ -501,13 +510,26 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
 
 fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
+  let original_input = input;
   let (input, maybe_fd) = maybe(parse_usize)(input)?;
+  let (input, maybe_ampersand) = if maybe_fd.is_none() {
+    maybe(ch('&'))(input)?
+  } else {
+    (input, None)
+  };
   let (input, op) = or(
-    map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
     map(tag(">>"), |_| RedirectOp::Append),
+    map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
   )(input)?;
   let (input, _) = skip_whitespace(input)?;
   let (input, word) = parse_word(input)?;
+
+  if maybe_ampersand.is_some() {
+    return ParseError::fail(
+      original_input,
+      "&> redirects are currently not supported.",
+    );
+  }
 
   Ok((input, Redirect { maybe_fd, op, word }))
 }
@@ -1429,8 +1451,24 @@ mod test {
     });
 
     run_test(parse_command, "echo 1 > test.txt", expected.clone());
-
     run_test(parse_command, "echo 1 >test.txt", expected.clone());
+
+    // append
+    run_test(
+      parse_command,
+      "command >> test.txt",
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: None,
+          op: RedirectOp::Append,
+          word: vec![StringPart::Text("test.txt".to_string())],
+        }),
+      }),
+    );
 
     run_test_with_end(
       parse_command,
@@ -1440,10 +1478,18 @@ mod test {
     );
 
     // redirect in pipeline sequence command should error
-    run_test(
+    run_test_with_end(
       parse_sequence,
       "echo 1 1> stdout.txt | cat",
       Err("Redirects in pipe sequence commands are currently not supported."),
+      "echo 1 1> stdout.txt | cat",
+    );
+
+    run_test_with_end(
+      parse_command,
+      "echo 1 &> stdout.txt",
+      Err("&> redirects are currently not supported."),
+      "&> stdout.txt",
     );
   }
 }

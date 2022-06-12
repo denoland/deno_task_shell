@@ -374,6 +374,80 @@ pub async fn negated() {
 }
 
 #[tokio::test]
+pub async fn redirects() {
+  TestBuilder::new()
+    .command(r#"echo 5 6 7 > test.txt"#)
+    .assert_file_equals("test.txt", "5 6 7\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 2 3 && echo 1 > test.txt"#)
+    .assert_stdout("1 2 3\n")
+    .assert_file_equals("test.txt", "1\n")
+    .run()
+    .await;
+
+  // stdout
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 1> test.txt"#)
+    .assert_stderr("5\n")
+    .assert_file_equals("test.txt", "1\n")
+    .run()
+    .await;
+
+  // stderr
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 2> test.txt"#)
+    .assert_stdout("1\n")
+    .assert_file_equals("test.txt", "5\n")
+    .run()
+    .await;
+
+  // invalid fd
+  TestBuilder::new()
+    .command(r#"echo 2 3> test.txt"#)
+    .assert_stderr(
+      "only redirecting to stdout (1) and stderr (2) is supported\n",
+    )
+    .run()
+    .await;
+
+  // /dev/null
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 2> /dev/null"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  // appending
+  TestBuilder::new()
+    .command(r#"echo 1 > test.txt && echo 2 >> test.txt"#)
+    .assert_file_equals("test.txt", "1\n2\n")
+    .run()
+    .await;
+
+  // multiple arguments after re-direct
+  TestBuilder::new()
+    .command(r#"export TwoArgs=testing\ this && echo 1 > $TwoArgs"#)
+    .assert_stderr(concat!(
+      "redirect path must be 1 argument, but found 2 ",
+      "(testing this). Did you mean to quote it (ex. \"testing this\")?\n"
+    ))
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // zero arguments after re-direct
+  TestBuilder::new()
+    .command(r#"echo 1 > $EMPTY"#)
+    .assert_stderr("redirect path must be 1 argument, but found 0\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
 pub async fn pwd() {
   TestBuilder::new()
     .directory("sub_dir")

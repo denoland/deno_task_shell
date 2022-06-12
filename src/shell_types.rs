@@ -1,5 +1,6 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
@@ -47,10 +48,15 @@ impl ShellState {
   }
 
   pub fn get_var(&self, name: &str) -> Option<&String> {
+    let name = if cfg!(windows) {
+      Cow::Owned(name.to_uppercase())
+    } else {
+      Cow::Borrowed(name)
+    };
     self
       .env_vars
-      .get(name)
-      .or_else(|| self.shell_vars.get(name))
+      .get(name.as_ref())
+      .or_else(|| self.shell_vars.get(name.as_ref()))
   }
 
   pub fn set_cwd(&mut self, cwd: &Path) {
@@ -157,8 +163,8 @@ impl ShellPipeReader {
     Self(reader)
   }
 
-  pub fn into_raw(self) -> os_pipe::PipeReader {
-    self.0
+  pub fn into_stdio(self) -> std::process::Stdio {
+    self.0.into()
   }
 
   /// Write everything to the specified writer
@@ -176,7 +182,11 @@ impl ShellPipeReader {
 
   /// Pipes this pipe to the specified sender.
   pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> Result<()> {
-    self.write_all(&mut sender.0)
+    match &mut sender {
+      ShellPipeWriter::OsPipe(pipe) => self.write_all(pipe),
+      ShellPipeWriter::StdFile(file) => self.write_all(file),
+      ShellPipeWriter::Null => Ok(()),
+    }
   }
 }
 
@@ -184,11 +194,19 @@ impl ShellPipeReader {
 ///
 /// Ensure that all of these are dropped when complete in order to
 /// prevent deadlocks where the reader hangs waiting for a read.
-pub struct ShellPipeWriter(os_pipe::PipeWriter);
+pub enum ShellPipeWriter {
+  OsPipe(os_pipe::PipeWriter),
+  StdFile(std::fs::File),
+  Null,
+}
 
 impl Clone for ShellPipeWriter {
   fn clone(&self) -> Self {
-    Self(self.0.try_clone().unwrap())
+    match self {
+      Self::OsPipe(pipe) => Self::OsPipe(pipe.try_clone().unwrap()),
+      Self::StdFile(file) => Self::StdFile(file.try_clone().unwrap()),
+      Self::Null => Self::Null,
+    }
   }
 }
 
@@ -201,16 +219,33 @@ impl ShellPipeWriter {
     ShellPipeWriter::from_raw(os_pipe::dup_stderr().unwrap())
   }
 
-  pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
-    Self(writer)
+  pub fn null() -> ShellPipeWriter {
+    ShellPipeWriter::Null
   }
 
-  pub fn into_raw(self) -> os_pipe::PipeWriter {
-    self.0
+  pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
+    Self::OsPipe(writer)
+  }
+
+  pub fn from_std(std_file: std::fs::File) -> Self {
+    Self::StdFile(std_file)
+  }
+
+  pub fn into_stdio(self) -> std::process::Stdio {
+    match self {
+      Self::OsPipe(pipe) => pipe.into(),
+      Self::StdFile(file) => file.into(),
+      Self::Null => std::process::Stdio::null(),
+    }
   }
 
   pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-    Ok(self.0.write_all(bytes)?)
+    match self {
+      Self::OsPipe(pipe) => pipe.write_all(bytes)?,
+      Self::StdFile(file) => file.write_all(bytes)?,
+      Self::Null => {}
+    }
+    Ok(())
   }
 
   pub fn write_line(&mut self, line: &str) -> Result<()> {
@@ -222,5 +257,5 @@ impl ShellPipeWriter {
 /// Used to communicate between commands.
 pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
   let (reader, writer) = os_pipe::pipe().unwrap();
-  (ShellPipeReader(reader), ShellPipeWriter(writer))
+  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
 }

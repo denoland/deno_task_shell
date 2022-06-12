@@ -1,5 +1,6 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
+use anyhow::Context;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -12,9 +13,13 @@ use crate::parser::parse;
 use crate::shell_types::pipe;
 use crate::shell_types::ShellPipeWriter;
 
+// Clippy is complaining about them all having `File` prefixes,
+// but there might be non-file variants in the future.
+#[allow(clippy::enum_variant_names)]
 enum TestAssertion {
   FileExists(String),
   FileNotExists(String),
+  FileTextEquals(String, String),
 }
 
 struct TempDir {
@@ -127,6 +132,19 @@ impl TestBuilder {
     self
   }
 
+  pub fn assert_file_equals(
+    &mut self,
+    path: &str,
+    file_text: &str,
+  ) -> &mut Self {
+    self.ensure_temp_dir();
+    self.assertions.push(TestAssertion::FileTextEquals(
+      path.to_string(),
+      file_text.to_string(),
+    ));
+    self
+  }
+
   pub async fn run(&mut self) {
     let list = parse(&self.command).unwrap();
     let cwd = if let Some(temp_dir) = &self.temp_dir {
@@ -188,6 +206,16 @@ impl TestBuilder {
             "\n\nFailed for: {}\nExpected '{}' to not exist.",
             self.command,
             path,
+          )
+        }
+        TestAssertion::FileTextEquals(path, text) => {
+          let actual_text = std::fs::read_to_string(path)
+            .with_context(|| format!("Error reading {}", path))
+            .unwrap();
+          assert_eq!(
+            &actual_text, text,
+            "\n\nFailed for: {}\nPath: {}",
+            self.command, path,
           )
         }
       }

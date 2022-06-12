@@ -23,6 +23,8 @@ use crate::parser::PipeSequence;
 use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
 use crate::parser::PipelineInner;
+use crate::parser::Redirect;
+use crate::parser::RedirectOp;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
@@ -256,35 +258,89 @@ async fn execute_pipeline_inner(
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  stderr: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
-    PipelineInner::Command(mut command) => {
+    PipelineInner::Command(command) => {
       // We only support redirects that are not in a pipe sequence
       // at the moment, so this is fine to do only here
-      let stdout = if let Some(redirect) = command.redirect.take() {
-        let output_path = evaluate_string_parts(
-          redirect.word.clone(),
-          &state,
-          stdin.clone(),
-          stderr.clone(),
-        )
-        .await;
+      let (stdout, stderr) = if let Some(redirect) = &command.redirect {
+        let pipe =
+          match resolve_redirect_pipe(redirect, &state, &stdin, &mut stderr)
+            .await
+          {
+            Ok(value) => value,
+            Err(value) => return value,
+          };
 
-        // todo:
-        // redirect.maybe_fd
-        // redirect.op
-        //let std_file = std::fs::OpenOptions...;
-
-        //ShellPipeWriter::from_std(std_file)
-        stdout // todo: remove and do the above commented out instaead
+        match redirect.maybe_fd {
+          Some(2) => (stdout, pipe),
+          Some(1) | None => (pipe, stderr),
+          Some(_) => {
+            let _ = stderr.write_line(
+              "only redirecting to stdout (1) and stderr (2) is supported",
+            );
+            return ExecuteResult::from_exit_code(1);
+          }
+        }
       } else {
-        stdout
+        (stdout, stderr)
       };
       execute_command(command, state, stdin, stdout, stderr).await
     }
     PipelineInner::PipeSequence(pipe_sequence) => {
       execute_pipe_sequence(*pipe_sequence, state, stdin, stdout, stderr).await
+    }
+  }
+}
+
+async fn resolve_redirect_pipe(
+  redirect: &Redirect,
+  state: &ShellState,
+  stdin: &ShellPipeReader,
+  stderr: &mut ShellPipeWriter,
+) -> Result<ShellPipeWriter, ExecuteResult> {
+  let words = evaluate_string_parts(
+    redirect.word.clone(),
+    state,
+    stdin.clone(),
+    stderr.clone(),
+  )
+  .await;
+  // edge case that's not supported
+  if words.is_empty() {
+    let _ = stderr.write_line("redirect path must be 1 argument, but found 0");
+    return Err(ExecuteResult::from_exit_code(1));
+  } else if words.len() > 1 {
+    let _ = stderr.write_line(&format!(
+      concat!(
+        "redirect path must be 1 argument, but found {0} ({1}). ",
+        "Did you mean to quote it (ex. \"{1}\")?"
+      ),
+      words.len(),
+      words.join(" ")
+    ));
+    return Err(ExecuteResult::from_exit_code(1));
+  }
+  let output_path = &words[0];
+
+  // cross platform supress errors
+  if output_path == "/dev/null" {
+    return Ok(ShellPipeWriter::null());
+  }
+
+  let std_file_result = std::fs::OpenOptions::new()
+    .write(true)
+    .create(true)
+    .append(redirect.op == RedirectOp::Append)
+    .truncate(redirect.op != RedirectOp::Append)
+    .open(output_path);
+  match std_file_result {
+    Ok(std_file) => Ok(ShellPipeWriter::from_std(std_file)),
+    Err(err) => {
+      let _ = stderr
+        .write_line(&format!("error opening file for redirect. {:#}", err));
+      Err(ExecuteResult::from_exit_code(1))
     }
   }
 }
@@ -477,9 +533,9 @@ async fn execute_simple_command(
       .args(&args)
       .env_clear()
       .envs(state.env_vars())
-      .stdout(stdout.into_raw())
-      .stdin(stdin.into_raw())
-      .stderr(stderr.clone().into_raw())
+      .stdout(stdout.into_stdio())
+      .stdin(stdin.into_stdio())
+      .stderr(stderr.clone().into_stdio())
       .spawn();
 
     let mut child = match child {
