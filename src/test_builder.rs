@@ -67,7 +67,12 @@ impl TestBuilder {
     }
   }
 
-  fn ensure_temp_dir(&mut self) -> &mut TempDir {
+  pub fn ensure_temp_dir(&mut self) -> &mut Self {
+    self.get_temp_dir();
+    self
+  }
+
+  fn get_temp_dir(&mut self) -> &mut TempDir {
     if self.temp_dir.is_none() {
       self.temp_dir = Some(TempDir::new());
     }
@@ -85,7 +90,7 @@ impl TestBuilder {
   }
 
   pub fn directory(&mut self, path: &str) -> &mut Self {
-    let temp_dir = self.ensure_temp_dir();
+    let temp_dir = self.get_temp_dir();
     fs::create_dir_all(temp_dir.cwd.join(path)).unwrap();
     self
   }
@@ -96,7 +101,7 @@ impl TestBuilder {
   }
 
   pub fn file(&mut self, path: &str, text: &str) -> &mut Self {
-    let temp_dir = self.ensure_temp_dir();
+    let temp_dir = self.get_temp_dir();
     fs::write(temp_dir.cwd.join(path), text).unwrap();
     self
   }
@@ -209,7 +214,7 @@ impl TestBuilder {
           )
         }
         TestAssertion::FileTextEquals(path, text) => {
-          let actual_text = std::fs::read_to_string(path)
+          let actual_text = std::fs::read_to_string(cwd.join(path))
             .with_context(|| format!("Error reading {}", path))
             .unwrap();
           assert_eq!(

@@ -227,7 +227,7 @@ pub enum StringPart {
 pub struct Redirect {
   pub maybe_fd: Option<usize>,
   pub op: RedirectOp,
-  pub word: Vec<StringPart>,
+  pub io_file: StringOrWord,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -522,7 +522,7 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
     map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
   )(input)?;
   let (input, _) = skip_whitespace(input)?;
-  let (input, word) = parse_word(input)?;
+  let (input, io_file) = parse_string_or_word(input)?;
 
   if maybe_ampersand.is_some() {
     return ParseError::fail(
@@ -531,7 +531,14 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
     );
   }
 
-  Ok((input, Redirect { maybe_fd, op, word }))
+  Ok((
+    input,
+    Redirect {
+      maybe_fd,
+      op,
+      io_file,
+    },
+  ))
 }
 
 fn parse_env_vars(input: &str) -> ParseResult<Vec<EnvVar>> {
@@ -1446,7 +1453,9 @@ mod test {
       redirect: Some(Redirect {
         maybe_fd: None,
         op: RedirectOp::Redirect,
-        word: vec![StringPart::Text("test.txt".to_string())],
+        io_file: StringOrWord::Word(vec![StringPart::Text(
+          "test.txt".to_string(),
+        )]),
       }),
     });
 
@@ -1456,7 +1465,7 @@ mod test {
     // append
     run_test(
       parse_command,
-      "command >> test.txt",
+      r#"command >> "test.txt""#,
       Ok(Command {
         inner: CommandInner::Simple(SimpleCommand {
           env_vars: vec![],
@@ -1465,7 +1474,9 @@ mod test {
         redirect: Some(Redirect {
           maybe_fd: None,
           op: RedirectOp::Append,
-          word: vec![StringPart::Text("test.txt".to_string())],
+          io_file: StringOrWord::String(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
         }),
       }),
     );

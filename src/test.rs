@@ -388,6 +388,20 @@ pub async fn redirects() {
     .run()
     .await;
 
+  // subdir
+  TestBuilder::new()
+    .command(r#"mkdir subdir && cd subdir && echo 1 2 3 > test.txt"#)
+    .assert_file_equals("subdir/test.txt", "1 2 3\n")
+    .run()
+    .await;
+
+  // absolute path
+  TestBuilder::new()
+    .command(r#"echo 1 2 3 > "$PWD/test.txt""#)
+    .assert_file_equals("test.txt", "1 2 3\n")
+    .run()
+    .await;
+
   // stdout
   TestBuilder::new()
     .command(r#"deno eval 'console.log(1); console.error(5)' 1> test.txt"#)
@@ -407,6 +421,7 @@ pub async fn redirects() {
   // invalid fd
   TestBuilder::new()
     .command(r#"echo 2 3> test.txt"#)
+    .ensure_temp_dir()
     .assert_stderr(
       "only redirecting to stdout (1) and stderr (2) is supported\n",
     )

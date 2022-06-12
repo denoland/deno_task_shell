@@ -301,7 +301,7 @@ async fn resolve_redirect_pipe(
   stderr: &mut ShellPipeWriter,
 ) -> Result<ShellPipeWriter, ExecuteResult> {
   let words = evaluate_string_parts(
-    redirect.word.clone(),
+    redirect.io_file.clone().into_parts(),
     state,
     stdin.clone(),
     stderr.clone(),
@@ -329,17 +329,21 @@ async fn resolve_redirect_pipe(
     return Ok(ShellPipeWriter::null());
   }
 
+  let output_path = state.cwd().join(output_path);
   let std_file_result = std::fs::OpenOptions::new()
     .write(true)
     .create(true)
     .append(redirect.op == RedirectOp::Append)
     .truncate(redirect.op != RedirectOp::Append)
-    .open(output_path);
+    .open(&output_path);
   match std_file_result {
     Ok(std_file) => Ok(ShellPipeWriter::from_std(std_file)),
     Err(err) => {
-      let _ = stderr
-        .write_line(&format!("error opening file for redirect. {:#}", err));
+      let _ = stderr.write_line(&format!(
+        "error opening file for redirect ({}). {:#}",
+        output_path.display(),
+        err
+      ));
       Err(ExecuteResult::from_exit_code(1))
     }
   }
