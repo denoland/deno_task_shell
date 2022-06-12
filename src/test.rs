@@ -410,6 +410,7 @@ pub async fn redirects() {
     .assert_stderr(
       "only redirecting to stdout (1) and stderr (2) is supported\n",
     )
+    .assert_exit_code(1)
     .run()
     .await;
 
