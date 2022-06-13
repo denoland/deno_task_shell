@@ -167,8 +167,8 @@ impl ShellPipeReader {
     self.0.into()
   }
 
-  /// Write everything to the specified writer
-  pub fn write_all(mut self, writer: &mut dyn Write) -> Result<()> {
+  /// Pipe everything to the specified writer
+  pub fn pipe_to(mut self, writer: &mut dyn Write) -> Result<()> {
     loop {
       let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
       let size = self.0.read(&mut buffer)?;
@@ -183,8 +183,8 @@ impl ShellPipeReader {
   /// Pipes this pipe to the specified sender.
   pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> Result<()> {
     match &mut sender {
-      ShellPipeWriter::OsPipe(pipe) => self.write_all(pipe),
-      ShellPipeWriter::StdFile(file) => self.write_all(file),
+      ShellPipeWriter::OsPipe(pipe) => self.pipe_to(pipe),
+      ShellPipeWriter::StdFile(file) => self.pipe_to(file),
       ShellPipeWriter::Null => Ok(()),
     }
   }

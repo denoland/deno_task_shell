@@ -17,6 +17,7 @@ use crate::commands::mv_command;
 use crate::commands::pwd_command;
 use crate::commands::rm_command;
 use crate::commands::sleep_command;
+use crate::commands::xargs_collect_args;
 use crate::parser::Command;
 use crate::parser::CommandInner;
 use crate::parser::PipeSequence;
@@ -153,14 +154,6 @@ fn execute_sequence(
   // requires boxed async because of recursive async
   async move {
     match sequence {
-      Sequence::EnvVar(var) => ExecuteResult::Continue(
-        0,
-        vec![EnvChange::SetEnvVar(
-          var.name,
-          evaluate_string_or_word(var.value, &state, stdin, stderr).await,
-        )],
-        Vec::new(),
-      ),
       Sequence::ShellVar(var) => ExecuteResult::Continue(
         0,
         vec![EnvChange::SetShellVar(
@@ -451,125 +444,165 @@ async fn execute_simple_command(
   command: SimpleCommand,
   state: ShellState,
   stdin: ShellPipeReader,
-  mut stdout: ShellPipeWriter,
-  mut stderr: ShellPipeWriter,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
 ) -> ExecuteResult {
-  let mut args =
+  let args =
     evaluate_args(command.args, &state, stdin.clone(), stderr.clone()).await;
-  let command_name = if args.is_empty() {
-    String::new()
-  } else {
-    args.remove(0)
-  };
-  if let Some(stripped_name) = command_name.strip_prefix('!') {
-    let _ = stderr.write_line(
-      &format!(concat!(
-        "History expansion is not supported:\n",
-        "  {}\n",
-        "  ~\n\n",
-        "Perhaps you meant to add a space after the exclamation point to negate the command?\n",
-        "  ! {}",
-      ), command_name, stripped_name)
+  let mut state = state.clone();
+  for env_var in command.env_vars {
+    state.apply_env_var(
+      &env_var.name,
+      &evaluate_string_or_word(
+        env_var.value,
+        &state,
+        stdin.clone(),
+        stderr.clone(),
+      )
+      .await,
     );
-    ExecuteResult::from_exit_code(1)
-  } else if command_name == "cd" {
-    let cwd = state.cwd().clone();
-    cd_command(&cwd, args, stderr)
-  } else if command_name == "exit" {
-    exit_command(args, stderr)
-  } else if command_name == "pwd" {
-    pwd_command(state.cwd(), args, stdout, stderr)
-  } else if command_name == "echo" {
-    let _ = stdout.write_line(&args.join(" "));
-    ExecuteResult::from_exit_code(0)
-  } else if command_name == "true" {
-    // ignores additional arguments
-    ExecuteResult::from_exit_code(0)
-  } else if command_name == "false" {
-    // ignores additional arguments
-    ExecuteResult::from_exit_code(1)
-  } else if command_name == "cat" {
-    let cwd = state.cwd().clone();
-    cat_command(&cwd, args, stdin, stdout, stderr)
-  } else if command_name == "cp" {
-    let cwd = state.cwd().clone();
-    cp_command(&cwd, args, stderr).await
-  } else if command_name == "mkdir" {
-    let cwd = state.cwd().clone();
-    mkdir_command(&cwd, args, stderr).await
-  } else if command_name == "mv" {
-    let cwd = state.cwd().clone();
-    mv_command(&cwd, args, stderr).await
-  } else if command_name == "rm" {
-    let cwd = state.cwd().clone();
-    rm_command(&cwd, args, stderr).await
-  } else if command_name == "sleep" {
-    sleep_command(args, stderr).await
-  } else {
-    let mut state = state.clone();
-    for env_var in command.env_vars {
-      state.apply_env_var(
-        &env_var.name,
-        &evaluate_string_or_word(
-          env_var.value,
-          &state,
-          stdin.clone(),
-          stderr.clone(),
-        )
-        .await,
-      );
-    }
-
-    let command_path = match resolve_command_path(&command_name, &state, || {
-      Ok(std::env::current_exe()?)
-    })
-    .await
-    {
-      Ok(command_path) => command_path,
-      Err(err) => {
-        stderr.write_line(&err.to_string()).unwrap();
-        return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-      }
-    };
-    let mut sub_command = tokio::process::Command::new(&command_path);
-    let child = sub_command
-      .current_dir(state.cwd())
-      .args(&args)
-      .env_clear()
-      .envs(state.env_vars())
-      .stdout(stdout.into_stdio())
-      .stdin(stdin.into_stdio())
-      .stderr(stderr.clone().into_stdio())
-      .spawn();
-
-    let mut child = match child {
-      Ok(child) => child,
-      Err(err) => {
-        stderr
-          .write_line(&format!("Error launching '{}': {}", command_name, err))
-          .unwrap();
-        return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-      }
-    };
-
-    // avoid deadlock since this is holding onto the pipes
-    drop(sub_command);
-
-    match child.wait().await {
-      Ok(status) => ExecuteResult::Continue(
-        status.code().unwrap_or(1),
-        Vec::new(),
-        Vec::new(),
-      ),
-      Err(err) => {
-        stderr.write_line(&format!("{}", err)).unwrap();
-        ExecuteResult::Continue(1, Vec::new(), Vec::new())
-      }
-    }
   }
+  execute_command_args(args, state, stdin, stdout, stderr).await
 }
 
-async fn resolve_command_path(
+fn execute_command_args(
+  mut args: Vec<String>,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  mut stdout: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
+) -> FutureExecuteResult {
+  // requires boxing because of recursive async
+  async move {
+    let command_name = if args.is_empty() {
+      String::new()
+    } else {
+      args.remove(0)
+    };
+    if let Some(stripped_name) = command_name.strip_prefix('!') {
+      let _ = stderr.write_line(
+        &format!(concat!(
+          "History expansion is not supported:\n",
+          "  {}\n",
+          "  ~\n\n",
+          "Perhaps you meant to add a space after the exclamation point to negate the command?\n",
+          "  ! {}",
+        ), command_name, stripped_name)
+      );
+      ExecuteResult::from_exit_code(1)
+    } else if command_name == "cd" {
+      let cwd = state.cwd().clone();
+      cd_command(&cwd, args, stderr)
+    } else if command_name == "exit" {
+      exit_command(args, stderr)
+    } else if command_name == "pwd" {
+      pwd_command(state.cwd(), args, stdout, stderr)
+    } else if command_name == "echo" {
+      let _ = stdout.write_line(&args.join(" "));
+      ExecuteResult::from_exit_code(0)
+    } else if command_name == "true" {
+      // ignores additional arguments
+      ExecuteResult::from_exit_code(0)
+    } else if command_name == "false" {
+      // ignores additional arguments
+      ExecuteResult::from_exit_code(1)
+    } else if command_name == "cp" {
+      let cwd = state.cwd().clone();
+      cp_command(&cwd, args, stderr).await
+    } else if command_name == "mkdir" {
+      let cwd = state.cwd().clone();
+      mkdir_command(&cwd, args, stderr).await
+    } else if command_name == "cat" {
+      let cwd = state.cwd().clone();
+      cat_command(&cwd, args, stdin, stdout, stderr)
+    } else if command_name == "mv" {
+      let cwd = state.cwd().clone();
+      mv_command(&cwd, args, stderr).await
+    } else if command_name == "rm" {
+      let cwd = state.cwd().clone();
+      rm_command(&cwd, args, stderr).await
+    } else if command_name == "sleep" {
+      sleep_command(args, stderr).await
+    } else if command_name == "xargs" {
+      match xargs_collect_args(args, stdin.clone()) {
+        Ok(args) => {
+          execute_command_args(args, state, stdin, stdout, stderr).await
+        }
+        Err(err) => {
+          let _ = stderr.write_line(&format!("xargs: {}", err));
+          ExecuteResult::from_exit_code(1)
+        }
+      }
+    } else if command_name == "export" {
+      evaluate_export_command(args)
+    } else {
+      let command_path = match resolve_command_path(&command_name, &state, || {
+        Ok(std::env::current_exe()?)
+      })
+      {
+        Ok(command_path) => command_path,
+        Err(err) => {
+          stderr.write_line(&err.to_string()).unwrap();
+          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+        }
+      };
+
+      let mut sub_command = tokio::process::Command::new(&command_path);
+      let child = sub_command
+        .current_dir(state.cwd())
+        .args(&args)
+        .env_clear()
+        .envs(state.env_vars())
+        .stdout(stdout.into_stdio())
+        .stdin(stdin.into_stdio())
+        .stderr(stderr.clone().into_stdio())
+        .spawn();
+
+      let mut child = match child {
+        Ok(child) => child,
+        Err(err) => {
+          stderr
+            .write_line(&format!("Error launching '{}': {}", command_name, err))
+            .unwrap();
+          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+        }
+      };
+
+      // avoid deadlock since this is holding onto the pipes
+      drop(sub_command);
+
+      match child.wait().await {
+        Ok(status) => ExecuteResult::Continue(
+          status.code().unwrap_or(1),
+          Vec::new(),
+          Vec::new(),
+        ),
+        Err(err) => {
+          stderr.write_line(&format!("{}", err)).unwrap();
+          ExecuteResult::Continue(1, Vec::new(), Vec::new())
+        }
+      }
+    }
+  }.boxed()
+}
+
+fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
+  let mut changes = Vec::new();
+  for arg in args {
+    // ignore if it doesn't contain an equals
+    if let Some(equals_index) = arg.find('=') {
+      let arg_name = &arg[..equals_index];
+      let arg_value = &arg[equals_index + 1..];
+      changes.push(EnvChange::SetEnvVar(
+        arg_name.to_string(),
+        arg_value.to_string(),
+      ));
+    }
+  }
+  ExecuteResult::Continue(0, changes, Vec::new())
+}
+
+fn resolve_command_path(
   command_name: &str,
   state: &ShellState,
   current_exe: impl FnOnce() -> Result<PathBuf>,
@@ -648,7 +681,9 @@ async fn resolve_command_path(
       vec![search_dir.join(command_name)]
     };
     for path in paths {
-      if let Ok(metadata) = tokio::fs::metadata(&path).await {
+      // don't use tokio::fs::metadata here as it was never returning
+      // in some circumstances for some reason
+      if let Ok(metadata) = std::fs::metadata(&path) {
         if metadata.is_file() {
           return Ok(path);
         }
@@ -796,7 +831,7 @@ async fn execute_with_stdout_as_text(
   let spawned_output = execute(shell_stdout_writer);
   let output_handle = tokio::task::spawn_blocking(move || {
     let mut final_data = Vec::new();
-    shell_stdout_reader.write_all(&mut final_data).unwrap();
+    shell_stdout_reader.pipe_to(&mut final_data).unwrap();
     final_data
   });
   let _ = spawned_output.await;
@@ -808,20 +843,18 @@ async fn execute_with_stdout_as_text(
 mod test {
   use super::*;
 
-  #[tokio::test]
-  async fn should_resolve_current_exe_path_for_deno() {
+  #[test]
+  fn should_resolve_current_exe_path_for_deno() {
     let state =
       ShellState::new(Default::default(), &std::env::current_dir().unwrap());
     let path =
       resolve_command_path("deno", &state, || Ok(PathBuf::from("/bin/deno")))
-        .await
         .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno"));
 
     let path = resolve_command_path("deno", &state, || {
       Ok(PathBuf::from("/bin/deno.exe"))
     })
-    .await
     .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
   }

@@ -21,8 +21,6 @@ pub struct SequentialListItem {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sequence {
-  /// `export MY_VAR=5`
-  EnvVar(EnvVar),
   /// `MY_VAR=5`
   ShellVar(EnvVar),
   /// `cmd_name <args...>`, `cmd1 | cmd2`
@@ -294,10 +292,7 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or(
-      parse_env_or_shell_var_command,
-      map(parse_pipeline, Sequence::Pipeline),
-    ),
+    or(parse_shell_var_command, map(parse_pipeline, Sequence::Pipeline)),
     skip_whitespace,
   )(input)?;
 
@@ -321,10 +316,8 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   })
 }
 
-fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
+fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
   let env_vars_input = input;
-  let (input, maybe_export) =
-    maybe(terminated(parse_word_with_text("export"), skip_whitespace))(input)?;
   let (input, mut env_vars) = parse_env_vars(input)?;
   if env_vars.is_empty() {
     return ParseError::backtrace();
@@ -336,14 +329,7 @@ fn parse_env_or_shell_var_command(input: &str) -> ParseResult<Sequence> {
   if env_vars.len() > 1 {
     ParseError::fail(env_vars_input, "Cannot set multiple environment variables when there is no following command.")
   } else {
-    ParseResult::Ok((
-      input,
-      if maybe_export.is_some() {
-        Sequence::EnvVar(env_vars.remove(0))
-      } else {
-        Sequence::ShellVar(env_vars.remove(0))
-      },
-    ))
+    ParseResult::Ok((input, Sequence::ShellVar(env_vars.remove(0))))
   }
 }
 
@@ -593,23 +579,6 @@ fn parse_word(input: &str) -> ParseResult<Vec<StringPart>> {
     },
     "Unsupported reserved word.",
   )(input)
-}
-
-fn parse_word_with_text(
-  text: &'static str,
-) -> impl Fn(&str) -> ParseResult<Vec<StringPart>> {
-  debug_assert!(!text.contains('$')); // not implemented
-  move |input| {
-    let (input, word) = parse_word(input)?;
-    if word.len() == 1 {
-      if let StringPart::Text(part_text) = &word[0] {
-        if part_text == text {
-          return ParseResult::Ok((input, word));
-        }
-      }
-    }
-    ParseError::backtrace()
-  }
 }
 
 fn parse_quoted_string(input: &str) -> ParseResult<Vec<StringPart>> {
@@ -995,10 +964,14 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
-            sequence: Sequence::EnvVar(EnvVar::new(
-              "ENV6".to_string(),
-              StringOrWord::new_word("5"),
-            )),
+            sequence: SimpleCommand {
+              env_vars: vec![],
+              args: vec![
+                StringOrWord::new_word("export"),
+                StringOrWord::new_word("ENV6=5"),
+              ],
+            }
+            .into(),
           },
           SequentialListItem {
             is_async: false,
