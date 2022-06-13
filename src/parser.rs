@@ -292,7 +292,10 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or(parse_shell_var_command, map(parse_pipeline, Sequence::Pipeline)),
+    or(
+      parse_shell_var_command,
+      map(parse_pipeline, Sequence::Pipeline),
+    ),
     skip_whitespace,
   )(input)?;
 
