@@ -161,8 +161,8 @@ impl ShellPipeReader {
     self.0
   }
 
-  /// Write everything to the specified writer
-  pub fn write_all(mut self, writer: &mut dyn Write) -> Result<()> {
+  /// Pipe everything to the specified writer
+  pub fn pipe_to(mut self, writer: &mut dyn Write) -> Result<()> {
     loop {
       let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
       let size = self.0.read(&mut buffer)?;
@@ -176,7 +176,7 @@ impl ShellPipeReader {
 
   /// Pipes this pipe to the specified sender.
   pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> Result<()> {
-    self.write_all(&mut sender.0)
+    self.pipe_to(&mut sender.0)
   }
 }
 
