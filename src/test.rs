@@ -314,7 +314,7 @@ pub async fn pipeline() {
 
   TestBuilder::new()
     // add bit of a delay while outputting stdout so that it doesn't race with stderr
-    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'Deno.sleepSync(10); await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'setTimeout(async () => { await Deno.stdin.readable.pipeTo(Deno.stderr.writable) }, 10)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
     // still outputs 2 because the first command didn't pipe stderr
     .assert_stderr("2\n1\n")
     .run()
@@ -446,6 +446,18 @@ pub async fn redirects() {
   TestBuilder::new()
     .command(r#"echo 1 > test.txt && echo 2 >> test.txt"#)
     .assert_file_equals("test.txt", "1\n2\n")
+    .run()
+    .await;
+
+  // &> and &>> redirect
+  TestBuilder::new()
+    .command(
+      concat!(
+        "deno eval 'console.log(1); setTimeout(() => console.error(23), 10)' &> file.txt &&",
+        "deno eval 'console.log(456); setTimeout(() => console.error(789), 10)' &>> file.txt"
+      )
+    )
+    .assert_file_equals("file.txt", "1\n23\n456\n789\n")
     .run()
     .await;
 

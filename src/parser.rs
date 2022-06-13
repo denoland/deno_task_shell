@@ -219,11 +219,17 @@ pub enum StringPart {
   Command(SequentialList),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RedirectFd {
+  Fd(usize),
+  StdoutStderr,
+}
+
 /// Note: Only used to detect redirects in order to give a better error.
 /// Redirects are not part of the first pass of this feature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Redirect {
-  pub maybe_fd: Option<usize>,
+  pub maybe_fd: Option<RedirectFd>,
   pub op: RedirectOp,
   pub io_file: StringOrWord,
 }
@@ -499,7 +505,6 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
 
 fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
-  let original_input = input;
   let (input, maybe_fd) = maybe(parse_usize)(input)?;
   let (input, maybe_ampersand) = if maybe_fd.is_none() {
     maybe(ch('&'))(input)?
@@ -513,12 +518,13 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   let (input, _) = skip_whitespace(input)?;
   let (input, io_file) = parse_string_or_word(input)?;
 
-  if maybe_ampersand.is_some() {
-    return ParseError::fail(
-      original_input,
-      "&> redirects are currently not supported.",
-    );
-  }
+  let maybe_fd = if let Some(fd) = maybe_fd {
+    Some(RedirectFd::Fd(fd))
+  } else if maybe_ampersand.is_some() {
+    Some(RedirectFd::StdoutStderr)
+  } else {
+    None
+  };
 
   Ok((
     input,
@@ -1457,6 +1463,44 @@ mod test {
       }),
     );
 
+    // fd
+    run_test(
+      parse_command,
+      r#"command 2> test.txt"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: Some(RedirectFd::Fd(2)),
+          op: RedirectOp::Redirect,
+          io_file: StringOrWord::Word(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
+        }),
+      }),
+    );
+
+    // both
+    run_test(
+      parse_command,
+      r#"command &> test.txt"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: Some(RedirectFd::StdoutStderr),
+          op: RedirectOp::Redirect,
+          io_file: StringOrWord::Word(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
+        }),
+      }),
+    );
+
     run_test_with_end(
       parse_command,
       "echo 1 1> stdout.txt 2> stderr.txt",
@@ -1470,13 +1514,6 @@ mod test {
       "echo 1 1> stdout.txt | cat",
       Err("Redirects in pipe sequence commands are currently not supported."),
       "echo 1 1> stdout.txt | cat",
-    );
-
-    run_test_with_end(
-      parse_command,
-      "echo 1 &> stdout.txt",
-      Err("&> redirects are currently not supported."),
-      "&> stdout.txt",
     );
   }
 }

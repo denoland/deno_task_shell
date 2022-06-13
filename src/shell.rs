@@ -25,6 +25,7 @@ use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
 use crate::parser::PipelineInner;
 use crate::parser::Redirect;
+use crate::parser::RedirectFd;
 use crate::parser::RedirectOp;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
@@ -267,14 +268,15 @@ async fn execute_pipeline_inner(
           };
 
         match redirect.maybe_fd {
-          Some(2) => (stdout, pipe),
-          Some(1) | None => (pipe, stderr),
-          Some(_) => {
+          Some(RedirectFd::Fd(2)) => (stdout, pipe),
+          Some(RedirectFd::Fd(1)) | None => (pipe, stderr),
+          Some(RedirectFd::Fd(_)) => {
             let _ = stderr.write_line(
               "only redirecting to stdout (1) and stderr (2) is supported",
             );
             return ExecuteResult::from_exit_code(1);
           }
+          Some(RedirectFd::StdoutStderr) => (pipe.clone(), pipe),
         }
       } else {
         (stdout, stderr)
