@@ -317,7 +317,7 @@ async fn resolve_redirect_pipe(
   }
   let output_path = &words[0];
 
-  // cross platform supress output
+  // cross platform suppress output
   if output_path == "/dev/null" {
     return Ok(ShellPipeWriter::null());
   }
