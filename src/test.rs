@@ -314,7 +314,7 @@ pub async fn pipeline() {
 
   TestBuilder::new()
     // add bit of a delay while outputting stdout so that it doesn't race with stderr
-    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'Deno.sleepSync(10); await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'setTimeout(async () => { await Deno.stdin.readable.pipeTo(Deno.stderr.writable) }, 10)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
     // still outputs 2 because the first command didn't pipe stderr
     .assert_stderr("2\n1\n")
     .run()
@@ -374,6 +374,108 @@ pub async fn negated() {
   TestBuilder::new()
     .command(r#"!echo 1 && echo 2"#)
     .assert_stderr("History expansion is not supported:\n  !echo\n  ~\n\nPerhaps you meant to add a space after the exclamation point to negate the command?\n  ! echo\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+pub async fn redirects() {
+  TestBuilder::new()
+    .command(r#"echo 5 6 7 > test.txt"#)
+    .assert_file_equals("test.txt", "5 6 7\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 2 3 && echo 1 > test.txt"#)
+    .assert_stdout("1 2 3\n")
+    .assert_file_equals("test.txt", "1\n")
+    .run()
+    .await;
+
+  // subdir
+  TestBuilder::new()
+    .command(r#"mkdir subdir && cd subdir && echo 1 2 3 > test.txt"#)
+    .assert_file_equals("subdir/test.txt", "1 2 3\n")
+    .run()
+    .await;
+
+  // absolute path
+  TestBuilder::new()
+    .command(r#"echo 1 2 3 > "$PWD/test.txt""#)
+    .assert_file_equals("test.txt", "1 2 3\n")
+    .run()
+    .await;
+
+  // stdout
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 1> test.txt"#)
+    .assert_stderr("5\n")
+    .assert_file_equals("test.txt", "1\n")
+    .run()
+    .await;
+
+  // stderr
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 2> test.txt"#)
+    .assert_stdout("1\n")
+    .assert_file_equals("test.txt", "5\n")
+    .run()
+    .await;
+
+  // invalid fd
+  TestBuilder::new()
+    .command(r#"echo 2 3> test.txt"#)
+    .ensure_temp_dir()
+    .assert_stderr(
+      "only redirecting to stdout (1) and stderr (2) is supported\n",
+    )
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // /dev/null
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log(1); console.error(5)' 2> /dev/null"#)
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  // appending
+  TestBuilder::new()
+    .command(r#"echo 1 > test.txt && echo 2 >> test.txt"#)
+    .assert_file_equals("test.txt", "1\n2\n")
+    .run()
+    .await;
+
+  // &> and &>> redirect
+  TestBuilder::new()
+    .command(
+      concat!(
+        "deno eval 'console.log(1); setTimeout(() => console.error(23), 10)' &> file.txt &&",
+        "deno eval 'console.log(456); setTimeout(() => console.error(789), 10)' &>> file.txt"
+      )
+    )
+    .assert_file_equals("file.txt", "1\n23\n456\n789\n")
+    .run()
+    .await;
+
+  // multiple arguments after re-direct
+  TestBuilder::new()
+    .command(r#"export TwoArgs=testing\ this && echo 1 > $TwoArgs"#)
+    .assert_stderr(concat!(
+      "redirect path must be 1 argument, but found 2 ",
+      "(testing this). Did you mean to quote it (ex. \"testing this\")?\n"
+    ))
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // zero arguments after re-direct
+  TestBuilder::new()
+    .command(r#"echo 1 > $EMPTY"#)
+    .assert_stderr("redirect path must be 1 argument, but found 0\n")
     .assert_exit_code(1)
     .run()
     .await;

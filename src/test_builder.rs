@@ -1,5 +1,6 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
+use anyhow::Context;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -12,9 +13,13 @@ use crate::parser::parse;
 use crate::shell_types::pipe;
 use crate::shell_types::ShellPipeWriter;
 
+// Clippy is complaining about them all having `File` prefixes,
+// but there might be non-file variants in the future.
+#[allow(clippy::enum_variant_names)]
 enum TestAssertion {
   FileExists(String),
   FileNotExists(String),
+  FileTextEquals(String, String),
 }
 
 struct TempDir {
@@ -62,7 +67,12 @@ impl TestBuilder {
     }
   }
 
-  fn ensure_temp_dir(&mut self) -> &mut TempDir {
+  pub fn ensure_temp_dir(&mut self) -> &mut Self {
+    self.get_temp_dir();
+    self
+  }
+
+  fn get_temp_dir(&mut self) -> &mut TempDir {
     if self.temp_dir.is_none() {
       self.temp_dir = Some(TempDir::new());
     }
@@ -80,7 +90,7 @@ impl TestBuilder {
   }
 
   pub fn directory(&mut self, path: &str) -> &mut Self {
-    let temp_dir = self.ensure_temp_dir();
+    let temp_dir = self.get_temp_dir();
     fs::create_dir_all(temp_dir.cwd.join(path)).unwrap();
     self
   }
@@ -91,7 +101,7 @@ impl TestBuilder {
   }
 
   pub fn file(&mut self, path: &str, text: &str) -> &mut Self {
-    let temp_dir = self.ensure_temp_dir();
+    let temp_dir = self.get_temp_dir();
     fs::write(temp_dir.cwd.join(path), text).unwrap();
     self
   }
@@ -124,6 +134,19 @@ impl TestBuilder {
     self
       .assertions
       .push(TestAssertion::FileNotExists(path.to_string()));
+    self
+  }
+
+  pub fn assert_file_equals(
+    &mut self,
+    path: &str,
+    file_text: &str,
+  ) -> &mut Self {
+    self.ensure_temp_dir();
+    self.assertions.push(TestAssertion::FileTextEquals(
+      path.to_string(),
+      file_text.to_string(),
+    ));
     self
   }
 
@@ -188,6 +211,16 @@ impl TestBuilder {
             "\n\nFailed for: {}\nExpected '{}' to not exist.",
             self.command,
             path,
+          )
+        }
+        TestAssertion::FileTextEquals(path, text) => {
+          let actual_text = std::fs::read_to_string(cwd.join(path))
+            .with_context(|| format!("Error reading {}", path))
+            .unwrap();
+          assert_eq!(
+            &actual_text, text,
+            "\n\nFailed for: {}\nPath: {}",
+            self.command, path,
           )
         }
       }

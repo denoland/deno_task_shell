@@ -95,9 +95,9 @@ pub enum PipeSequenceOperator {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipeSequence {
-  pub current: Sequence,
+  pub current: Command,
   pub op: PipeSequenceOperator,
-  pub next: Sequence,
+  pub next: PipelineInner,
 }
 
 impl From<PipeSequence> for Sequence {
@@ -110,7 +110,13 @@ impl From<PipeSequence> for Sequence {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Command {
+pub struct Command {
+  pub inner: CommandInner,
+  pub redirect: Option<Redirect>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CommandInner {
   /// `cmd_name <args...>`
   Simple(SimpleCommand),
   /// `(list)`
@@ -135,7 +141,10 @@ pub struct SimpleCommand {
 
 impl From<SimpleCommand> for Command {
   fn from(c: SimpleCommand) -> Self {
-    Command::Simple(c)
+    Command {
+      redirect: None,
+      inner: CommandInner::Simple(c),
+    }
   }
 }
 
@@ -153,7 +162,8 @@ impl From<Command> for PipelineInner {
 
 impl From<SimpleCommand> for Sequence {
   fn from(c: SimpleCommand) -> Self {
-    Command::Simple(c).into()
+    let command: Command = c.into();
+    command.into()
   }
 }
 
@@ -209,14 +219,22 @@ pub enum StringPart {
   Command(SequentialList),
 }
 
-/// Note: Only used to detect redirects in order to give a better error.
-/// Redirects are not part of the first pass of this feature.
-pub struct Redirect {
-  pub maybe_fd: Option<usize>,
-  pub op: RedirectOp,
-  pub word: Vec<StringPart>,
+#[derive(Debug, Clone, PartialEq)]
+pub enum RedirectFd {
+  Fd(usize),
+  StdoutStderr,
 }
 
+/// Note: Only used to detect redirects in order to give a better error.
+/// Redirects are not part of the first pass of this feature.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Redirect {
+  pub maybe_fd: Option<RedirectFd>,
+  pub op: RedirectOp,
+  pub io_file: StringOrWord,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum RedirectOp {
   /// >
   Redirect,
@@ -224,16 +242,16 @@ pub enum RedirectOp {
   Append,
 }
 
-pub fn parse(input: &str) -> Result<SequentialList> {
-  fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
-    bail!(
-      "{}\n  {}\n  ~",
-      e.message,
-      // truncate the output to prevent wrapping in the console
-      e.input.chars().take(60).collect::<String>()
-    )
-  }
+fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
+  bail!(
+    "{}\n  {}\n  ~",
+    e.message,
+    // truncate the output to prevent wrapping in the console
+    e.input.chars().take(60).collect::<String>()
+  )
+}
 
+pub fn parse(input: &str) -> Result<SequentialList> {
   match parse_sequential_list(input) {
     Ok((input, expr)) => {
       if input.trim().is_empty() {
@@ -280,7 +298,10 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
 
 fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   let (input, current) = terminated(
-    or(parse_shell_var_command, parse_command_or_pipeline),
+    or(
+      parse_shell_var_command,
+      map(parse_pipeline, Sequence::Pipeline),
+    ),
     skip_whitespace,
   )(input)?;
 
@@ -323,41 +344,78 @@ fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
 
 /// Parses a pipeline, which is a sequence of one or more commands.
 /// https://www.gnu.org/software/bash/manual/html_node/Pipelines.html
-fn parse_command_or_pipeline(input: &str) -> ParseResult<Sequence> {
+fn parse_pipeline(input: &str) -> ParseResult<Pipeline> {
   let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
-  let (input, current) = terminated(
-    or(
-      map(parse_subshell, |l| Command::Subshell(Box::new(l))),
-      map(parse_simple_command, Command::Simple),
-    ),
-    skip_whitespace,
-  )(input)?;
-
-  let (input, inner) = match parse_pipe_sequence_op(input) {
-    Ok((input, op)) => {
-      let (input, next_sequence) = assert_exists(
-        &parse_command_or_pipeline,
-        "Expected command following pipeline operator.",
-      )(input)?;
-      (
-        input,
-        PipelineInner::PipeSequence(Box::new(PipeSequence {
-          current: current.into(),
-          op,
-          next: next_sequence,
-        })),
-      )
-    }
-    Err(ParseError::Backtrace) => (input, PipelineInner::Command(current)),
-    Err(err) => return Err(err),
-  };
+  let (input, inner) = parse_pipeline_inner(input)?;
 
   let pipeline = Pipeline {
     negated: maybe_negated.is_some(),
     inner,
   };
 
-  Ok((input, pipeline.into()))
+  Ok((input, pipeline))
+}
+
+fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
+  let original_input = input;
+  let (input, command) = parse_command(input)?;
+
+  let (input, inner) = match parse_pipe_sequence_op(input) {
+    Ok((input, op)) => {
+      let (input, next_inner) = assert_exists(
+        &parse_pipeline_inner,
+        "Expected command following pipeline operator.",
+      )(input)?;
+
+      if command.redirect.is_some() {
+        return ParseError::fail(
+          original_input,
+          "Redirects in pipe sequence commands are currently not supported.",
+        );
+      }
+
+      (
+        input,
+        PipelineInner::PipeSequence(Box::new(PipeSequence {
+          current: command,
+          op,
+          next: next_inner,
+        })),
+      )
+    }
+    Err(ParseError::Backtrace) => (input, PipelineInner::Command(command)),
+    Err(err) => return Err(err),
+  };
+
+  Ok((input, inner))
+}
+
+fn parse_command(input: &str) -> ParseResult<Command> {
+  let (input, inner) = terminated(
+    or(
+      map(parse_subshell, |l| CommandInner::Subshell(Box::new(l))),
+      map(parse_simple_command, CommandInner::Simple),
+    ),
+    skip_whitespace,
+  )(input)?;
+
+  let before_redirects_input = input;
+  let (input, mut redirects) =
+    many0(terminated(parse_redirect, skip_whitespace))(input)?;
+
+  if redirects.len() > 1 {
+    return ParseError::fail(
+      before_redirects_input,
+      "Multiple redirects are currently not supported.",
+    );
+  }
+
+  let command = Command {
+    redirect: redirects.pop(),
+    inner,
+  };
+
+  Ok((input, command))
 }
 
 fn parse_simple_command(input: &str) -> ParseResult<SimpleCommand> {
@@ -448,13 +506,34 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
 fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
   let (input, maybe_fd) = maybe(parse_usize)(input)?;
+  let (input, maybe_ampersand) = if maybe_fd.is_none() {
+    maybe(ch('&'))(input)?
+  } else {
+    (input, None)
+  };
   let (input, op) = or(
-    map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
     map(tag(">>"), |_| RedirectOp::Append),
+    map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
   )(input)?;
-  let (input, word) = parse_word(input)?;
+  let (input, _) = skip_whitespace(input)?;
+  let (input, io_file) = parse_string_or_word(input)?;
 
-  Ok((input, Redirect { maybe_fd, op, word }))
+  let maybe_fd = if let Some(fd) = maybe_fd {
+    Some(RedirectFd::Fd(fd))
+  } else if maybe_ampersand.is_some() {
+    Some(RedirectFd::StdoutStderr)
+  } else {
+    None
+  };
+
+  Ok((
+    input,
+    Redirect {
+      maybe_fd,
+      op,
+      io_file,
+    },
+  ))
 }
 
 fn parse_env_vars(input: &str) -> ParseResult<Vec<EnvVar>> {
@@ -748,12 +827,7 @@ fn is_reserved_word(text: &str) -> bool {
 }
 
 fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
-  if parse_redirect(input).is_ok() {
-    ParseErrorFailure::new(
-      input,
-      "Redirects are currently not supported, but will be soon.",
-    )
-  } else if input.starts_with('*') || input.starts_with('?') {
+  if input.starts_with('*') || input.starts_with('?') {
     ParseErrorFailure::new(
       input,
       "Globs are currently not supported, but will be soon.",
@@ -778,14 +852,6 @@ mod test {
     assert_eq!(
       parse("test { test").err().unwrap().to_string(),
       concat!("Unexpected character.\n", "  { test\n", "  ~",),
-    );
-    assert_eq!(
-      parse("test > redirect").err().unwrap().to_string(),
-      concat!(
-        "Redirects are currently not supported, but will be soon.\n",
-        "  > redirect\n",
-        "  ~",
-      ),
     );
     assert_eq!(
       parse("cp test/* other").err().unwrap().to_string(),
@@ -948,24 +1014,27 @@ mod test {
               }
               .into(),
               op: BooleanListOperator::And,
-              next: Command::Subshell(Box::new(SequentialList {
-                items: vec![SequentialListItem {
-                  is_async: false,
-                  sequence: Sequence::BooleanList(Box::new(BooleanList {
-                    current: SimpleCommand {
-                      env_vars: vec![],
-                      args: vec![StringOrWord::new_word("cmd11")],
-                    }
-                    .into(),
-                    op: BooleanListOperator::Or,
-                    next: SimpleCommand {
-                      env_vars: vec![],
-                      args: vec![StringOrWord::new_word("cmd12")],
-                    }
-                    .into(),
-                  })),
-                }],
-              }))
+              next: Command {
+                inner: CommandInner::Subshell(Box::new(SequentialList {
+                  items: vec![SequentialListItem {
+                    is_async: false,
+                    sequence: Sequence::BooleanList(Box::new(BooleanList {
+                      current: SimpleCommand {
+                        env_vars: vec![],
+                        args: vec![StringOrWord::new_word("cmd11")],
+                      }
+                      .into(),
+                      op: BooleanListOperator::Or,
+                      next: SimpleCommand {
+                        env_vars: vec![],
+                        args: vec![StringOrWord::new_word("cmd12")],
+                      }
+                      .into(),
+                    })),
+                  }],
+                })),
+                redirect: None,
+              }
               .into(),
             })),
           },
@@ -1348,10 +1417,103 @@ mod test {
           err.message,
           match expected.err() {
             Some(err) => err,
-            None => panic!("Got error: {}", err.message),
+            None =>
+              panic!("Got error: {:#}", error_for_failure(err).err().unwrap()),
           }
         );
       }
     }
+  }
+
+  #[test]
+  fn test_redirects() {
+    let expected = Ok(Command {
+      inner: CommandInner::Simple(SimpleCommand {
+        env_vars: vec![],
+        args: vec![StringOrWord::new_word("echo"), StringOrWord::new_word("1")],
+      }),
+      redirect: Some(Redirect {
+        maybe_fd: None,
+        op: RedirectOp::Redirect,
+        io_file: StringOrWord::Word(vec![StringPart::Text(
+          "test.txt".to_string(),
+        )]),
+      }),
+    });
+
+    run_test(parse_command, "echo 1 > test.txt", expected.clone());
+    run_test(parse_command, "echo 1 >test.txt", expected.clone());
+
+    // append
+    run_test(
+      parse_command,
+      r#"command >> "test.txt""#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: None,
+          op: RedirectOp::Append,
+          io_file: StringOrWord::String(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
+        }),
+      }),
+    );
+
+    // fd
+    run_test(
+      parse_command,
+      r#"command 2> test.txt"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: Some(RedirectFd::Fd(2)),
+          op: RedirectOp::Redirect,
+          io_file: StringOrWord::Word(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
+        }),
+      }),
+    );
+
+    // both
+    run_test(
+      parse_command,
+      r#"command &> test.txt"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![StringOrWord::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: Some(RedirectFd::StdoutStderr),
+          op: RedirectOp::Redirect,
+          io_file: StringOrWord::Word(vec![StringPart::Text(
+            "test.txt".to_string(),
+          )]),
+        }),
+      }),
+    );
+
+    run_test_with_end(
+      parse_command,
+      "echo 1 1> stdout.txt 2> stderr.txt",
+      Err("Multiple redirects are currently not supported."),
+      "1> stdout.txt 2> stderr.txt",
+    );
+
+    // redirect in pipeline sequence command should error
+    run_test_with_end(
+      parse_sequence,
+      "echo 1 1> stdout.txt | cat",
+      Err("Redirects in pipe sequence commands are currently not supported."),
+      "echo 1 1> stdout.txt | cat",
+    );
   }
 }

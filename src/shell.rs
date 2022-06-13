@@ -19,10 +19,14 @@ use crate::commands::rm_command;
 use crate::commands::sleep_command;
 use crate::commands::xargs_collect_args;
 use crate::parser::Command;
+use crate::parser::CommandInner;
 use crate::parser::PipeSequence;
 use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
 use crate::parser::PipelineInner;
+use crate::parser::Redirect;
+use crate::parser::RedirectFd;
+use crate::parser::RedirectOp;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
@@ -248,19 +252,112 @@ async fn execute_pipeline_inner(
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  stderr: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
-    PipelineInner::Command(command) => match command {
-      Command::Simple(command) => {
-        execute_simple_command(command, state, stdin, stdout, stderr).await
-      }
-      Command::Subshell(list) => {
-        execute_subshell(list, state, stdin, stdout, stderr).await
-      }
-    },
+    PipelineInner::Command(command) => {
+      // We only support redirects that are not in a pipe sequence
+      // at the moment, so this is fine to do only here
+      let (stdout, stderr) = if let Some(redirect) = &command.redirect {
+        let pipe =
+          match resolve_redirect_pipe(redirect, &state, &stdin, &mut stderr)
+            .await
+          {
+            Ok(value) => value,
+            Err(value) => return value,
+          };
+
+        match redirect.maybe_fd {
+          Some(RedirectFd::Fd(2)) => (stdout, pipe),
+          Some(RedirectFd::Fd(1)) | None => (pipe, stderr),
+          Some(RedirectFd::Fd(_)) => {
+            let _ = stderr.write_line(
+              "only redirecting to stdout (1) and stderr (2) is supported",
+            );
+            return ExecuteResult::from_exit_code(1);
+          }
+          Some(RedirectFd::StdoutStderr) => (pipe.clone(), pipe),
+        }
+      } else {
+        (stdout, stderr)
+      };
+      execute_command(command, state, stdin, stdout, stderr).await
+    }
     PipelineInner::PipeSequence(pipe_sequence) => {
       execute_pipe_sequence(*pipe_sequence, state, stdin, stdout, stderr).await
+    }
+  }
+}
+
+async fn resolve_redirect_pipe(
+  redirect: &Redirect,
+  state: &ShellState,
+  stdin: &ShellPipeReader,
+  stderr: &mut ShellPipeWriter,
+) -> Result<ShellPipeWriter, ExecuteResult> {
+  let words = evaluate_string_parts(
+    redirect.io_file.clone().into_parts(),
+    state,
+    stdin.clone(),
+    stderr.clone(),
+  )
+  .await;
+  // edge case that's not supported
+  if words.is_empty() {
+    let _ = stderr.write_line("redirect path must be 1 argument, but found 0");
+    return Err(ExecuteResult::from_exit_code(1));
+  } else if words.len() > 1 {
+    let _ = stderr.write_line(&format!(
+      concat!(
+        "redirect path must be 1 argument, but found {0} ({1}). ",
+        "Did you mean to quote it (ex. \"{1}\")?"
+      ),
+      words.len(),
+      words.join(" ")
+    ));
+    return Err(ExecuteResult::from_exit_code(1));
+  }
+  let output_path = &words[0];
+
+  // cross platform suppress output
+  if output_path == "/dev/null" {
+    return Ok(ShellPipeWriter::null());
+  }
+
+  let output_path = state.cwd().join(output_path);
+  let std_file_result = std::fs::OpenOptions::new()
+    .write(true)
+    .create(true)
+    .append(redirect.op == RedirectOp::Append)
+    .truncate(redirect.op != RedirectOp::Append)
+    .open(&output_path);
+  match std_file_result {
+    Ok(std_file) => Ok(ShellPipeWriter::from_std(std_file)),
+    Err(err) => {
+      let _ = stderr.write_line(&format!(
+        "error opening file for redirect ({}). {:#}",
+        output_path.display(),
+        err
+      ));
+      Err(ExecuteResult::from_exit_code(1))
+    }
+  }
+}
+
+async fn execute_command(
+  command: Command,
+  state: ShellState,
+  stdin: ShellPipeReader,
+  stdout: ShellPipeWriter,
+  stderr: ShellPipeWriter,
+) -> ExecuteResult {
+  // todo: handle command.redirect
+  match command.inner {
+    CommandInner::Simple(command) => {
+      execute_simple_command(command, state, stdin, stdout, stderr).await
+    }
+    CommandInner::Subshell(list) => {
+      execute_subshell(list, state, stdin, stdout, stderr).await
     }
   }
 }
@@ -274,19 +371,12 @@ async fn execute_pipe_sequence(
 ) -> ExecuteResult {
   let mut wait_tasks = vec![];
   let mut last_output = Some(stdin);
-  let mut next_sequence = Some(Sequence::Pipeline(Pipeline {
-    negated: false,
-    inner: pipe_sequence.into(),
-  }));
-  while let Some(sequence) = next_sequence.take() {
+  let mut next_inner: Option<PipelineInner> = Some(pipe_sequence.into());
+  while let Some(sequence) = next_inner.take() {
     let (output_reader, output_writer) = pipe();
-    let (stderr, sequence) = match sequence {
-      Sequence::Pipeline(Pipeline {
-        inner: PipelineInner::PipeSequence(pipe_sequence),
-        negated,
-      }) => {
-        assert!(!negated);
-        next_sequence = Some(pipe_sequence.next);
+    let (stderr, command) = match sequence {
+      PipelineInner::PipeSequence(pipe_sequence) => {
+        next_inner = Some(pipe_sequence.next);
         (
           match pipe_sequence.op {
             PipeSequenceOperator::Stdout => stderr.clone(),
@@ -295,10 +385,10 @@ async fn execute_pipe_sequence(
           pipe_sequence.current,
         )
       }
-      _ => (stderr.clone(), sequence),
+      PipelineInner::Command(command) => (stderr.clone(), command),
     };
-    wait_tasks.push(execute_sequence(
-      sequence,
+    wait_tasks.push(execute_command(
+      command,
       state.clone(),
       last_output.take().unwrap(),
       output_writer.clone(),
@@ -465,9 +555,9 @@ fn execute_command_args(
         .args(&args)
         .env_clear()
         .envs(state.env_vars())
-        .stdout(stdout.into_raw())
-        .stdin(stdin.into_raw())
-        .stderr(stderr.clone().into_raw())
+        .stdout(stdout.into_stdio())
+        .stdin(stdin.into_stdio())
+        .stderr(stderr.clone().into_stdio())
         .spawn();
 
       let mut child = match child {
