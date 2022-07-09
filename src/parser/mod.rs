@@ -26,7 +26,10 @@ pub struct SequentialListItem {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sequence {
   /// `MY_VAR=5`
@@ -53,7 +56,10 @@ impl From<Pipeline> for Sequence {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PipelineInner {
   /// Ex. `cmd_name <args...>`
@@ -138,7 +144,10 @@ pub struct Command {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandInner {
   /// `cmd_name <args...>`
@@ -208,7 +217,10 @@ impl EnvVar {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringOrWord {
   Word(Vec<StringPart>),
@@ -240,7 +252,10 @@ impl StringOrWord {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringPart {
   /// Text in the string (ex. `some text`)
@@ -252,7 +267,10 @@ pub enum StringPart {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind")
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectFd {
   Fd(usize),
