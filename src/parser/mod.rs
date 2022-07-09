@@ -219,7 +219,7 @@ impl EnvVar {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
 #[cfg_attr(
   feature = "serialization",
-  serde(rename_all = "camelCase", tag = "kind")
+  serde(rename_all = "camelCase", tag = "kind", content = "value")
 )]
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringOrWord {
