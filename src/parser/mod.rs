@@ -3,22 +3,30 @@
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::combinators::*;
+mod combinators;
+
+use combinators::*;
 
 // Shell grammar rules this is loosely based on:
 // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_10_02
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SequentialList {
   pub items: Vec<SequentialListItem>,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SequentialListItem {
   pub is_async: bool,
   pub sequence: Sequence,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Sequence {
   /// `MY_VAR=5`
@@ -29,6 +37,8 @@ pub enum Sequence {
   BooleanList(Box<BooleanList>),
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pipeline {
   /// `! pipeline`
@@ -42,6 +52,8 @@ impl From<Pipeline> for Sequence {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PipelineInner {
   /// Ex. `cmd_name <args...>`
@@ -56,6 +68,8 @@ impl From<PipeSequence> for PipelineInner {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum BooleanListOperator {
   // &&
@@ -78,6 +92,8 @@ impl BooleanListOperator {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct BooleanList {
   pub current: Sequence,
@@ -85,6 +101,8 @@ pub struct BooleanList {
   pub next: Sequence,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PipeSequenceOperator {
   // |
@@ -93,6 +111,8 @@ pub enum PipeSequenceOperator {
   StdoutStderr,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PipeSequence {
   pub current: Command,
@@ -109,12 +129,16 @@ impl From<PipeSequence> for Sequence {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Command {
   pub inner: CommandInner,
   pub redirect: Option<Redirect>,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandInner {
   /// `cmd_name <args...>`
@@ -133,6 +157,8 @@ impl From<Command> for Sequence {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct SimpleCommand {
   pub env_vars: Vec<EnvVar>,
@@ -167,6 +193,8 @@ impl From<SimpleCommand> for Sequence {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, PartialEq, Clone)]
 pub struct EnvVar {
   pub name: String,
@@ -179,6 +207,8 @@ impl EnvVar {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringOrWord {
   Word(Vec<StringPart>),
@@ -209,6 +239,8 @@ impl StringOrWord {
   }
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, PartialEq, Clone)]
 pub enum StringPart {
   /// Text in the string (ex. `some text`)
@@ -219,14 +251,16 @@ pub enum StringPart {
   Command(SequentialList),
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectFd {
   Fd(usize),
   StdoutStderr,
 }
 
-/// Note: Only used to detect redirects in order to give a better error.
-/// Redirects are not part of the first pass of this feature.
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Redirect {
   pub maybe_fd: Option<RedirectFd>,
@@ -234,6 +268,8 @@ pub struct Redirect {
   pub io_file: StringOrWord,
 }
 
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectOp {
   /// >

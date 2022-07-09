@@ -8,16 +8,16 @@ use anyhow::bail;
 use anyhow::Result;
 use futures::FutureExt;
 
-use crate::commands::cat_command;
-use crate::commands::cd_command;
-use crate::commands::cp_command;
-use crate::commands::exit_command;
-use crate::commands::mkdir_command;
-use crate::commands::mv_command;
-use crate::commands::pwd_command;
-use crate::commands::rm_command;
-use crate::commands::sleep_command;
-use crate::commands::xargs_collect_args;
+use crate::shell::commands::cat_command;
+use crate::shell::commands::cd_command;
+use crate::shell::commands::cp_command;
+use crate::shell::commands::exit_command;
+use crate::shell::commands::mkdir_command;
+use crate::shell::commands::mv_command;
+use crate::shell::commands::pwd_command;
+use crate::shell::commands::rm_command;
+use crate::shell::commands::sleep_command;
+use crate::shell::commands::xargs_collect_args;
 use crate::parser::Command;
 use crate::parser::CommandInner;
 use crate::parser::PipeSequence;
@@ -32,13 +32,13 @@ use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
 use crate::parser::StringOrWord;
 use crate::parser::StringPart;
-use crate::shell_types::pipe;
-use crate::shell_types::EnvChange;
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::FutureExecuteResult;
-use crate::shell_types::ShellPipeReader;
-use crate::shell_types::ShellPipeWriter;
-use crate::shell_types::ShellState;
+use crate::shell::types::pipe;
+use crate::shell::types::EnvChange;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::FutureExecuteResult;
+use crate::shell::types::ShellPipeReader;
+use crate::shell::types::ShellPipeWriter;
+use crate::shell::types::ShellState;
 
 pub async fn execute(
   list: SequentialList,
