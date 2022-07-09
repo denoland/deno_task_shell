@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use tokio::task::JoinHandle;
 
 use crate::execute_with_pipes;
-use crate::shell::fs_util;
 use crate::parser::parse;
+use crate::shell::fs_util;
 use crate::shell::types::pipe;
 use crate::shell::types::ShellPipeWriter;
 

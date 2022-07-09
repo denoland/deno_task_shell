@@ -3,6 +3,7 @@
 mod commands;
 mod fs_util;
 
+#[allow(clippy::module_inception)]
 mod shell;
 mod types;
 
