@@ -11,7 +11,7 @@ use anyhow::Result;
 use futures::future::BoxFuture;
 use tokio::task::JoinHandle;
 
-use crate::fs_util;
+use crate::shell::fs_util;
 
 #[derive(Clone)]
 pub struct ShellState {

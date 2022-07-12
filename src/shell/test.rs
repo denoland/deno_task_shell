@@ -1,6 +1,6 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
-use crate::test_builder::TestBuilder;
+use super::test_builder::TestBuilder;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 

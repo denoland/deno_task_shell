@@ -39,6 +39,9 @@ jobs:
         if: contains(matrix.os, 'ubuntu')
         run: cargo clippy --all-targets --all-features --release
 
+      - name: Build only parser
+        if: contains(matrix.os, 'ubuntu')
+        run: cargo build --no-default-features
       - name: Build
         run: cargo build --all-targets --all-features --release
       - name: Test

@@ -3,7 +3,7 @@
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::shell_types::ShellPipeReader;
+use crate::shell::types::ShellPipeReader;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;

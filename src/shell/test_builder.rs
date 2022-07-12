@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use tokio::task::JoinHandle;
 
 use crate::execute_with_pipes;
-use crate::fs_util;
 use crate::parser::parse;
-use crate::shell_types::pipe;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::fs_util;
+use crate::shell::types::pipe;
+use crate::shell::types::ShellPipeWriter;
 
 // Clippy is complaining about them all having `File` prefixes,
 // but there might be non-file variants in the future.

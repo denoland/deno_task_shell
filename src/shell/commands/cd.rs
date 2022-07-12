@@ -7,10 +7,10 @@ use anyhow::bail;
 use anyhow::Result;
 use path_dedot::ParseDot;
 
-use crate::fs_util;
-use crate::shell_types::EnvChange;
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::fs_util;
+use crate::shell::types::EnvChange;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;

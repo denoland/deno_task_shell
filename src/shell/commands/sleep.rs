@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::bail;
 use anyhow::Result;
 
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
