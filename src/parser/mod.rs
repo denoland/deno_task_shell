@@ -1449,7 +1449,11 @@ mod test {
     run_test_with_end(parse_u32, "1>", Ok(1), ">");
     run_test(parse_u32, "-1", Err("backtrace"));
     run_test(parse_u32, "a", Err("backtrace"));
-    run_test(parse_u32, "16116951273372934291112534924737", Err("backtrace"));
+    run_test(
+      parse_u32,
+      "16116951273372934291112534924737",
+      Err("backtrace"),
+    );
     run_test(parse_u32, "4294967295", Ok(4294967295));
     run_test(parse_u32, "4294967296", Err("backtrace"));
   }
