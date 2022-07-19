@@ -273,7 +273,7 @@ pub enum StringPart {
 )]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RedirectFd {
-  Fd(usize),
+  Fd(u32),
   StdoutStderr,
 }
 
@@ -559,7 +559,7 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
 
 fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
-  let (input, maybe_fd) = maybe(parse_usize)(input)?;
+  let (input, maybe_fd) = maybe(parse_u32)(input)?;
   let (input, maybe_ampersand) = if maybe_fd.is_none() {
     maybe(ch('&'))(input)?
   } else {
@@ -825,12 +825,19 @@ fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
   )(input)
 }
 
-fn parse_usize(input: &str) -> ParseResult<usize> {
-  let mut value = 0;
+fn parse_u32(input: &str) -> ParseResult<u32> {
+  let mut value: u32 = 0;
   let mut byte_index = 0;
   for c in input.chars() {
     if c.is_ascii_digit() {
-      value = value * 10 + (c.to_digit(10).unwrap() as usize);
+      let shifted_val = match value.checked_mul(10) {
+        Some(val) => val,
+        None => return ParseError::backtrace(),
+      };
+      value = match shifted_val.checked_add(c.to_digit(10).unwrap()) {
+        Some(val) => val,
+        None => return ParseError::backtrace(),
+      };
     } else if byte_index == 0 {
       return ParseError::backtrace();
     } else {
@@ -1435,13 +1442,16 @@ mod test {
   }
 
   #[test]
-  fn test_parse_usize() {
-    run_test(parse_usize, "999", Ok(999));
-    run_test(parse_usize, "11", Ok(11));
-    run_test(parse_usize, "0", Ok(0));
-    run_test_with_end(parse_usize, "1>", Ok(1), ">");
-    run_test(parse_usize, "-1", Err("backtrace"));
-    run_test(parse_usize, "a", Err("backtrace"));
+  fn test_parse_u32() {
+    run_test(parse_u32, "999", Ok(999));
+    run_test(parse_u32, "11", Ok(11));
+    run_test(parse_u32, "0", Ok(0));
+    run_test_with_end(parse_u32, "1>", Ok(1), ">");
+    run_test(parse_u32, "-1", Err("backtrace"));
+    run_test(parse_u32, "a", Err("backtrace"));
+    run_test(parse_u32, "16116951273372934291112534924737", Err("backtrace"));
+    run_test(parse_u32, "4294967295", Ok(4294967295));
+    run_test(parse_u32, "4294967296", Err("backtrace"));
   }
 
   fn run_test<'a, T: PartialEq + std::fmt::Debug>(
