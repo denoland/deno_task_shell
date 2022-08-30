@@ -3,7 +3,7 @@
 use anyhow::bail;
 use anyhow::Result;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ArgKind<'a> {
   ShortFlag(char),
   LongFlag(&'a str),
