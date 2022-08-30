@@ -62,7 +62,7 @@ dependencies = [
  "path-dedot",
  "pretty_assertions",
  "serde",
- "string_combinators",
+ "monch",
  "tempfile",
  "tokio",
 ]
@@ -407,7 +407,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2dd574626839106c320a323308629dcb1acfc96e32a8cba364ddc61ac23ee83"
 
 [[package]]
-name = "string_combinators"
+name = "monch"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaffc4923992c98bb6cc17d0ced222b8da3e7b21dcbc4652c034c9e78d58b75f"
