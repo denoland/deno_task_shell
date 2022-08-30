@@ -2,10 +2,7 @@
 
 use anyhow::bail;
 use anyhow::Result;
-
-mod combinators;
-
-use combinators::*;
+use string_combinators::*;
 
 // Shell grammar rules this is loosely based on:
 // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_10_02
