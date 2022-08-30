@@ -115,7 +115,7 @@ impl ShellState {
   }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum EnvChange {
   // `export ENV_VAR=VALUE`
   SetEnvVar(String, String),
