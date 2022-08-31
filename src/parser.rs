@@ -378,10 +378,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
 
 fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
   let env_vars_input = input;
-  let (input, mut env_vars) = parse_env_vars(input)?;
-  if env_vars.is_empty() {
-    return ParseError::backtrace();
-  }
+  let (input, mut env_vars) = if_not_empty(parse_env_vars)(input)?;
   let (input, args) = parse_command_args(input)?;
   if !args.is_empty() {
     return ParseError::backtrace();
@@ -471,10 +468,7 @@ fn parse_command(input: &str) -> ParseResult<Command> {
 
 fn parse_simple_command(input: &str) -> ParseResult<SimpleCommand> {
   let (input, env_vars) = parse_env_vars(input)?;
-  let (input, args) = parse_command_args(input)?;
-  if args.is_empty() {
-    return ParseError::backtrace();
-  }
+  let (input, args) = if_not_empty(parse_command_args)(input)?;
   ParseResult::Ok((input, SimpleCommand { env_vars, args }))
 }
 
@@ -602,12 +596,7 @@ fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
 }
 
 fn parse_env_var_name(input: &str) -> ParseResult<&str> {
-  let (input, name) = take_while(is_valid_env_var_char)(input)?;
-  if name.is_empty() {
-    ParseError::backtrace()
-  } else {
-    Ok((input, name))
-  }
+  if_not_empty(take_while(is_valid_env_var_char))(input)
 }
 
 fn parse_env_var_value(input: &str) -> ParseResult<StringOrWord> {
