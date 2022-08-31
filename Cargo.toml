@@ -21,7 +21,7 @@ path-dedot = { version = "3.0.17", optional = true }
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
 os_pipe = { version = "1.0.1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-monch = "0.1.0"
+monch = "0.2.0"
 
 [dev-dependencies]
 parking_lot = "0.12.0"
