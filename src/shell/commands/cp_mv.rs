@@ -21,10 +21,10 @@ pub async fn cp_command(
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_cp(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
       stderr.write_line(&format!("cp: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      ExecuteResult::from_exit_code(1)
     }
   }
 }

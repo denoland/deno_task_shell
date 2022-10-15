@@ -17,10 +17,10 @@ pub async fn rm_command(
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_remove(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
       stderr.write_line(&format!("rm: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
@@ -29,39 +29,34 @@ async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
     let path = cwd.join(&specified_path);
-    if flags.recursive {
+    let result = if flags.recursive {
       if path.is_dir() {
-        if let Err(err) = tokio::fs::remove_dir_all(&path).await {
-          if err.kind() != ErrorKind::NotFound || !flags.force {
-            bail!("cannot remove '{}': {}", specified_path, err);
-          }
-        }
+        tokio::fs::remove_dir_all(&path).await
       } else {
-        remove_file_or_dir(&path, specified_path, &flags).await?;
+        remove_file_or_dir(&path, &flags).await
       }
     } else {
-      remove_file_or_dir(&path, specified_path, &flags).await?;
+      remove_file_or_dir(&path, &flags).await
+    };
+    if let Err(err) = result {
+      if err.kind() != ErrorKind::NotFound || !flags.force {
+        bail!("cannot remove '{}': {}", specified_path, err);
+      }
     }
   }
+
   Ok(())
 }
 
 async fn remove_file_or_dir(
   path: &Path,
-  specified_path: &str,
   flags: &RmFlags,
-) -> Result<()> {
-  let result = if flags.dir && path.is_dir() {
+) -> std::io::Result<()> {
+  if flags.dir && path.is_dir() {
     tokio::fs::remove_dir(path).await
   } else {
     tokio::fs::remove_file(path).await
-  };
-  if let Err(err) = result {
-    if err.kind() != ErrorKind::NotFound || !flags.force {
-      bail!("cannot remove '{}': {}", specified_path, err);
-    }
   }
-  Ok(())
 }
 
 #[derive(Default, Debug, PartialEq)]

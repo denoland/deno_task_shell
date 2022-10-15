@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use anyhow::bail;
 use anyhow::Result;
 use futures::FutureExt;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::parser::Command;
 use crate::parser::CommandInner;
@@ -39,6 +41,8 @@ use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
+
+use self::types::CANCELLATION_EXIT_CODE;
 
 mod commands;
 mod fs_util;
@@ -111,6 +115,7 @@ fn execute_sequential_list(
     let mut final_exit_code = 0;
     let mut final_changes = Vec::new();
     let mut async_handles = Vec::new();
+    let mut was_exit = false;
     for item in list.items {
       if item.is_async {
         let state = state.clone();
@@ -118,9 +123,11 @@ fn execute_sequential_list(
         let stdout = stdout.clone();
         let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn(async move {
+          let main_token = state.token();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
-          futures::future::join_all(result.into_handles()).await;
+          let (exit_code, handles) = result.into_exit_code_and_handles();
+          wait_handles(exit_code, handles, main_token).await
         }));
       } else {
         let result = execute_sequence(
@@ -132,7 +139,12 @@ fn execute_sequential_list(
         )
         .await;
         match result {
-          ExecuteResult::Exit(_, _) => return result,
+          ExecuteResult::Exit(exit_code, handles) => {
+            async_handles.extend(handles);
+            final_exit_code = exit_code;
+            was_exit = true;
+            break;
+          }
           ExecuteResult::Continue(exit_code, changes, handles) => {
             state.apply_changes(&changes);
             final_changes.extend(changes);
@@ -146,12 +158,43 @@ fn execute_sequential_list(
 
     // wait for async commands to complete
     if async_command_behavior == AsyncCommandBehavior::Wait {
-      futures::future::join_all(async_handles.drain(..)).await;
+      final_exit_code = wait_handles(
+        final_exit_code,
+        async_handles.drain(..).collect(),
+        state.token(),
+      )
+      .await;
     }
 
-    ExecuteResult::Continue(final_exit_code, final_changes, async_handles)
+    if was_exit {
+      ExecuteResult::Exit(final_exit_code, async_handles)
+    } else {
+      ExecuteResult::Continue(final_exit_code, final_changes, async_handles)
+    }
   }
   .boxed()
+}
+
+async fn wait_handles(
+  mut exit_code: i32,
+  mut handles: Vec<JoinHandle<i32>>,
+  token: CancellationToken,
+) -> i32 {
+  if exit_code != 0 {
+    token.cancel();
+  }
+  while !handles.is_empty() {
+    let result = futures::future::select_all(handles).await;
+
+    // prefer the first non-zero then non-cancellation exit code
+    let new_exit_code = result.0.unwrap();
+    if matches!(exit_code, 0 | CANCELLATION_EXIT_CODE) && new_exit_code != 0 {
+      exit_code = new_exit_code;
+    }
+
+    handles = result.2;
+  }
+  exit_code
 }
 
 fn execute_sequence(
@@ -433,7 +476,7 @@ async fn execute_subshell(
 ) -> ExecuteResult {
   let result = execute_sequential_list(
     *list,
-    state.clone(),
+    state,
     stdin,
     stdout,
     stderr,
@@ -483,6 +526,19 @@ fn execute_command_args(
   mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
+  macro_rules! execute_with_cancellation {
+    ($result_expr:expr, $token:ident) => {
+      tokio::select! {
+        result = $result_expr => {
+          result
+        },
+        _ = $token.cancelled() => {
+          ExecuteResult::for_cancellation()
+        }
+      }
+    };
+  }
+
   // requires boxing because of recursive async
   async move {
     let command_name = if args.is_empty() {
@@ -490,6 +546,10 @@ fn execute_command_args(
     } else {
       args.remove(0)
     };
+    let token = state.token();
+    if token.is_cancelled() {
+      return ExecuteResult::for_cancellation();
+    }
     if let Some(stripped_name) = command_name.strip_prefix('!') {
       let _ = stderr.write_line(
         &format!(concat!(
@@ -519,24 +579,25 @@ fn execute_command_args(
       ExecuteResult::from_exit_code(1)
     } else if command_name == "cp" {
       let cwd = state.cwd().clone();
-      cp_command(&cwd, args, stderr).await
+      execute_with_cancellation!(cp_command(&cwd, args, stderr), token)
     } else if command_name == "mkdir" {
       let cwd = state.cwd().clone();
-      mkdir_command(&cwd, args, stderr).await
+      execute_with_cancellation!(mkdir_command(&cwd, args, stderr), token)
     } else if command_name == "cat" {
       let cwd = state.cwd().clone();
-      cat_command(&cwd, args, stdin, stdout, stderr)
+      cat_command(&cwd, args, stdin, stdout, stderr, token)
     } else if command_name == "mv" {
       let cwd = state.cwd().clone();
-      mv_command(&cwd, args, stderr).await
+      execute_with_cancellation!(mv_command(&cwd, args, stderr), token)
     } else if command_name == "rm" {
       let cwd = state.cwd().clone();
-      rm_command(&cwd, args, stderr).await
+      execute_with_cancellation!(rm_command(&cwd, args, stderr), token)
     } else if command_name == "sleep" {
-      sleep_command(args, stderr).await
+      execute_with_cancellation!(sleep_command(args, stderr), token)
     } else if command_name == "xargs" {
       match xargs_collect_args(args, stdin.clone()) {
         Ok(args) => {
+          // don't select on cancellation here as that will occur at a lower level
           execute_command_args(args, state, stdin, stdout, stderr).await
         }
         Err(err) => {
@@ -582,15 +643,21 @@ fn execute_command_args(
       // avoid deadlock since this is holding onto the pipes
       drop(sub_command);
 
-      match child.wait().await {
-        Ok(status) => ExecuteResult::Continue(
-          status.code().unwrap_or(1),
-          Vec::new(),
-          Vec::new(),
-        ),
-        Err(err) => {
-          stderr.write_line(&format!("{}", err)).unwrap();
-          ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      tokio::select! {
+        result = child.wait() => match result {
+          Ok(status) => ExecuteResult::Continue(
+            status.code().unwrap_or(1),
+            Vec::new(),
+            Vec::new(),
+          ),
+          Err(err) => {
+            stderr.write_line(&format!("{}", err)).unwrap();
+            ExecuteResult::Continue(1, Vec::new(), Vec::new())
+          }
+        },
+        _ = token.cancelled() => {
+          let _ = child.kill().await;
+          ExecuteResult::for_cancellation()
         }
       }
     }
@@ -763,7 +830,8 @@ async fn evaluate_string_parts(
       StringPart::Command(list) => Some(
         evaluate_command_substitution(
           list,
-          state,
+          // contain cancellation to the command substitution
+          &state.with_child_token(),
           stdin.clone(),
           stderr.clone(),
         )

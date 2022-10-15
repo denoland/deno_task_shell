@@ -195,6 +195,50 @@ pub async fn async_commands() {
     .assert_stdout("1 2\n")
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("exit 1 & exit 0")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // should not output because the `exit 1` will cancel the sleep
+  TestBuilder::new()
+    .command("sleep 5 && echo 1 & exit 1")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // should fail when async command exits
+  TestBuilder::new()
+    .command("exit 1 & exit 0")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // should fail when async command fails and cancel any running command
+  TestBuilder::new()
+    .command("deno eval 'Deno.exit(1)' & sleep 5 && echo 2 & echo 1")
+    .assert_stdout("1\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // should cancel running command
+  TestBuilder::new()
+    .command("sleep 10 & sleep 0.5 && deno eval 'Deno.exit(2)' & deno eval 'console.log(1); setTimeout(() => { console.log(3) }, 10_000);'")
+    .assert_stdout("1\n")
+    .assert_exit_code(2)
+    .run()
+    .await;
+
+  // should be able to opt out by doing an `|| exit 0`
+  TestBuilder::new()
+    .command("deno eval 'Deno.exit(1)' || exit 0 & echo 1")
+    .assert_stdout("1\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
 }
 
 #[tokio::test]
@@ -218,7 +262,7 @@ pub async fn command_substition() {
     .run()
     .await;
   TestBuilder::new()
-    .command("$(sleep 0.1 && echo 1 & exit 1) ; echo 2")
+    .command("$(sleep 0.1 && echo 1 && exit 5 &) ; echo 2")
     .assert_stdout("2\n")
     .assert_stderr("1: command not found\n")
     .run()
@@ -365,8 +409,8 @@ pub async fn negated() {
   TestBuilder::new()
     .command(r#"! echo 1 && echo 2 &"#)
     .assert_stdout("1\n")
-    // being explicit... this must be 0 because it's an async command
-    .assert_exit_code(0)
+    // differing behaviour to shells, where this async command will actually fail
+    .assert_exit_code(1)
     .run()
     .await;
 
