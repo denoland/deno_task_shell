@@ -2,7 +2,6 @@
 
 use anyhow::bail;
 use anyhow::Result;
-use futures::FutureExt;
 use std::io::ErrorKind;
 use std::path::Path;
 
@@ -30,16 +29,16 @@ async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
     let path = cwd.join(&specified_path);
-    let handle = if flags.recursive {
+    let result = if flags.recursive {
       if path.is_dir() {
-        tokio::fs::remove_dir_all(&path).boxed()
+        tokio::fs::remove_dir_all(&path).await
       } else {
-        remove_file_or_dir(&path, &flags).boxed()
+        remove_file_or_dir(&path, &flags).await
       }
     } else {
-      remove_file_or_dir(&path, &flags).boxed()
+      remove_file_or_dir(&path, &flags).await
     };
-    if let Err(err) = handle.await {
+    if let Err(err) = result {
       if err.kind() != ErrorKind::NotFound || !flags.force {
         bail!("cannot remove '{}': {}", specified_path, err);
       }
