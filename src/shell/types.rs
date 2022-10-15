@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use futures::future::BoxFuture;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::shell::fs_util;
 
@@ -22,6 +23,8 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
+  /// Token to cancel execution.
+  token: CancellationToken,
 }
 
 impl ShellState {
@@ -30,6 +33,7 @@ impl ShellState {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
+      token: CancellationToken::default(),
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -113,6 +117,16 @@ impl ShellState {
       }
     }
   }
+
+  pub fn token(&self) -> CancellationToken {
+    self.token.clone()
+  }
+
+  pub fn with_child_token(&self) -> ShellState {
+    let mut state = self.clone();
+    state.token = self.token.child_token();
+    state
+  }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -126,22 +140,34 @@ pub enum EnvChange {
 
 pub type FutureExecuteResult = BoxFuture<'static, ExecuteResult>;
 
+// https://unix.stackexchange.com/a/99117
+// SIGINT (2) + 128
+pub const CANCELLATION_EXIT_CODE: i32 = 130;
+
 #[derive(Debug)]
 pub enum ExecuteResult {
-  Exit(i32, Vec<JoinHandle<()>>),
-  Continue(i32, Vec<EnvChange>, Vec<JoinHandle<()>>),
+  Exit(i32, Vec<JoinHandle<i32>>),
+  Continue(i32, Vec<EnvChange>, Vec<JoinHandle<i32>>),
 }
 
 impl ExecuteResult {
-  pub fn into_handles(self) -> Vec<JoinHandle<()>> {
-    match self {
-      ExecuteResult::Exit(_, handles) => handles,
-      ExecuteResult::Continue(_, _, handles) => handles,
-    }
+  pub fn for_cancellation() -> ExecuteResult {
+    ExecuteResult::Exit(CANCELLATION_EXIT_CODE, Vec::new())
   }
 
   pub fn from_exit_code(exit_code: i32) -> ExecuteResult {
     ExecuteResult::Continue(exit_code, Vec::new(), Vec::new())
+  }
+
+  pub fn into_exit_code_and_handles(self) -> (i32, Vec<JoinHandle<i32>>) {
+    match self {
+      ExecuteResult::Exit(code, handles) => (code, handles),
+      ExecuteResult::Continue(code, _, handles) => (code, handles),
+    }
+  }
+
+  pub fn into_handles(self) -> Vec<JoinHandle<i32>> {
+    self.into_exit_code_and_handles().1
   }
 }
 

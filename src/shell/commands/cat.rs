@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeReader;
@@ -18,9 +19,10 @@ pub fn cat_command(
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
+  token: CancellationToken,
 ) -> ExecuteResult {
-  match execute_cat(cwd, args, stdin, stdout, stderr.clone()) {
-    Ok(exit_code) => ExecuteResult::from_exit_code(exit_code),
+  match execute_cat(cwd, args, stdin, stdout, stderr.clone(), token) {
+    Ok(result) => result,
     Err(err) => {
       let _ = stderr.write_line(&format!("cat: {}", err));
       ExecuteResult::from_exit_code(1)
@@ -34,7 +36,8 @@ fn execute_cat(
   stdin: ShellPipeReader,
   mut stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
-) -> Result<i32> {
+  token: CancellationToken,
+) -> Result<ExecuteResult> {
   let flags = parse_args(args)?;
   let mut exit_code = 0;
   let mut buf = vec![0; 1024];
@@ -46,6 +49,10 @@ fn execute_cat(
       // in memory
       match File::open(cwd.join(&path)) {
         Ok(mut file) => loop {
+          if token.is_cancelled() {
+            return Ok(ExecuteResult::for_cancellation());
+          }
+
           let size = file.read(&mut buf)?;
           if size == 0 {
             break;
@@ -61,7 +68,7 @@ fn execute_cat(
     }
   }
 
-  Ok(exit_code)
+  Ok(ExecuteResult::from_exit_code(exit_code))
 }
 
 #[derive(Debug, PartialEq)]

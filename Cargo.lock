@@ -56,6 +56,7 @@ dependencies = [
  "serde",
  "tempfile",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -225,9 +226,9 @@ dependencies = [
 
 [[package]]
 name = "monch"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350537f27a69018269e534582e2f1ec532ea7078b06485fdd4db0509bd70feb8"
+checksum = "c5e2e282addadb529bb31700f7d184797382fa2eb18384986aad78d117eaf0c4"
 
 [[package]]
 name = "num_cpus"
@@ -433,9 +434,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.20.1"
+version = "1.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a8325f63a7d4774dd041e363b2409ed1c5cbbd0f867795e661df066b2b0a581"
+checksum = "a9e03c497dc955702ba729190dc4aac6f2a0ce97f913e5b1b5912fc5039d9099"
 dependencies = [
  "autocfg",
  "bytes",
@@ -443,7 +444,6 @@ dependencies = [
  "memchr",
  "mio",
  "num_cpus",
- "once_cell",
  "pin-project-lite",
  "signal-hook-registry",
  "tokio-macros",
@@ -459,6 +459,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb2e075f03b3d66d8d8785356224ba688d2906a371015e225beeb65ca92c740"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
