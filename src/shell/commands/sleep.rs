@@ -30,13 +30,30 @@ async fn execute_sleep(args: Vec<String>) -> Result<()> {
   Ok(())
 }
 
+fn parse_arg(arg: &str) -> Result<f64> {
+  if let Some(t) = arg.strip_suffix('s') {
+    return Ok(t.parse()?);
+  }
+  if let Some(t) = arg.strip_suffix('m') {
+    return Ok(t.parse::<f64>()? * 60.);
+  }
+  if let Some(t) = arg.strip_suffix('h') {
+    return Ok(t.parse::<f64>()? * 60. * 60.);
+  }
+  if let Some(t) = arg.strip_suffix('d') {
+    return Ok(t.parse::<f64>()? * 60. * 60. * 24.);
+  }
+
+  Ok(arg.parse()?)
+}
+
 fn parse_args(args: Vec<String>) -> Result<u64> {
   // the time to sleep is the sum of all the arguments
   let mut total_time_ms = 0;
   let mut had_value = false;
   for arg in parse_arg_kinds(&args) {
     match arg {
-      ArgKind::Arg(arg) => match arg.parse::<f64>() {
+      ArgKind::Arg(arg) => match parse_arg(arg) {
         Ok(value_s) => {
           let ms = (value_s * 1000f64) as u64;
           total_time_ms += ms;
@@ -62,11 +79,24 @@ mod test {
   use super::*;
 
   #[test]
+  fn should_parse_arg() {
+    assert_eq!(parse_arg("1").unwrap(), 1.);
+    assert_eq!(parse_arg("1s").unwrap(), 1.);
+    assert_eq!(parse_arg("1m").unwrap(), 1. * 60.);
+    assert_eq!(parse_arg("1h").unwrap(), 1. * 60. * 60.);
+    assert_eq!(parse_arg("1d").unwrap(), 1. * 60. * 60. * 24.);
+    assert!(parse_arg("d").err().is_some());
+  }
+
+  #[test]
   fn should_parse_args() {
-    let value =
-      parse_args(vec!["0.5".to_string(), "1".to_string(), "1.25".to_string()])
-        .unwrap();
-    assert_eq!(value, 500 + 1000 + 1250);
+    let value = parse_args(vec![
+      "0.5".to_string(),
+      "1m".to_string(),
+      "1.25".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(value, 500 + 1000 * 60 + 1250);
 
     let result = parse_args(vec![]).err().unwrap();
     assert_eq!(result.to_string(), "missing operand");
