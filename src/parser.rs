@@ -1,7 +1,5 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
-use anyhow::bail;
-use anyhow::Result;
 use monch::*;
 
 // Shell grammar rules this is loosely based on:
@@ -293,32 +291,23 @@ pub enum RedirectOp {
   Append,
 }
 
-fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
-  bail!(
-    "{}\n  {}\n  ~",
-    e.message,
-    // truncate the output to prevent wrapping in the console
-    e.input.chars().take(60).collect::<String>()
-  )
-}
-
-pub fn parse(input: &str) -> Result<SequentialList> {
+pub fn parse(input: &str) -> Result<SequentialList, String> {
   match parse_sequential_list(input) {
     Ok((input, expr)) => {
       if input.trim().is_empty() {
         if expr.items.is_empty() {
-          bail!("Empty command.")
+          Err("Empty command.".to_string())
         } else {
           Ok(expr)
         }
       } else {
-        error_for_failure(fail_for_trailing_input(input))
+        fail_for_trailing_input(input).into_result()
       }
     }
     Err(ParseError::Backtrace) => {
-      error_for_failure(fail_for_trailing_input(input))
+      fail_for_trailing_input(input).into_result()
     }
-    Err(ParseError::Failure(e)) => error_for_failure(e),
+    Err(ParseError::Failure(e)) => e.into_result(),
   }
 }
 
@@ -1472,7 +1461,7 @@ mod test {
           match expected.err() {
             Some(err) => err,
             None =>
-              panic!("Got error: {:#}", error_for_failure(err).err().unwrap()),
+              panic!("Got error: {:#}", err.into_result::<T>().err().unwrap()),
           }
         );
       }
