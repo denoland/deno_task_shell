@@ -226,9 +226,9 @@ dependencies = [
 
 [[package]]
 name = "monch"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5e2e282addadb529bb31700f7d184797382fa2eb18384986aad78d117eaf0c4"
+checksum = "edfc3d6c19aa23d11fd53552627a0689b424d82f5c5e375225abb739ca2e7b84"
 
 [[package]]
 name = "num_cpus"

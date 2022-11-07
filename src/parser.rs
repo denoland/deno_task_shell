@@ -1,7 +1,5 @@
 // Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
 
-use anyhow::bail;
-use anyhow::Result;
 use monch::*;
 
 // Shell grammar rules this is loosely based on:
@@ -293,32 +291,21 @@ pub enum RedirectOp {
   Append,
 }
 
-fn error_for_failure(e: ParseErrorFailure) -> Result<SequentialList> {
-  bail!(
-    "{}\n  {}\n  ~",
-    e.message,
-    // truncate the output to prevent wrapping in the console
-    e.input.chars().take(60).collect::<String>()
-  )
-}
-
-pub fn parse(input: &str) -> Result<SequentialList> {
+pub fn parse(input: &str) -> Result<SequentialList, String> {
   match parse_sequential_list(input) {
     Ok((input, expr)) => {
       if input.trim().is_empty() {
         if expr.items.is_empty() {
-          bail!("Empty command.")
+          Err("Empty command.".to_string())
         } else {
           Ok(expr)
         }
       } else {
-        error_for_failure(fail_for_trailing_input(input))
+        fail_for_trailing_input(input).into_result()
       }
     }
-    Err(ParseError::Backtrace) => {
-      error_for_failure(fail_for_trailing_input(input))
-    }
-    Err(ParseError::Failure(e)) => error_for_failure(e),
+    Err(ParseError::Backtrace) => fail_for_trailing_input(input).into_result(),
+    Err(ParseError::Failure(e)) => e.into_result(),
   }
 }
 
@@ -891,17 +878,17 @@ mod test {
 
   #[test]
   fn test_main() {
-    assert_eq!(parse("").err().unwrap().to_string(), "Empty command.");
+    assert_eq!(parse("").err().unwrap(), "Empty command.");
     assert_eq!(
-      parse("&& testing").err().unwrap().to_string(),
+      parse("&& testing").err().unwrap(),
       concat!("Unexpected character.\n", "  && testing\n", "  ~",),
     );
     assert_eq!(
-      parse("test { test").err().unwrap().to_string(),
+      parse("test { test").err().unwrap(),
       concat!("Unexpected character.\n", "  { test\n", "  ~",),
     );
     assert_eq!(
-      parse("cp test/* other").err().unwrap().to_string(),
+      parse("cp test/* other").err().unwrap(),
       concat!(
         "Globs are currently not supported, but will be soon.\n",
         "  * other\n",
@@ -909,7 +896,7 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("cp test/? other").err().unwrap().to_string(),
+      parse("cp test/? other").err().unwrap(),
       concat!(
         "Globs are currently not supported, but will be soon.\n",
         "  ? other\n",
@@ -917,7 +904,7 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("(test").err().unwrap().to_string(),
+      parse("(test").err().unwrap(),
       concat!(
         "Expected closing parenthesis on subshell.\n",
         "  (test\n",
@@ -925,11 +912,11 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("cmd \"test").err().unwrap().to_string(),
+      parse("cmd \"test").err().unwrap(),
       concat!("Expected closing double quote.\n", "  \"test\n", "  ~"),
     );
     assert_eq!(
-      parse("cmd 'test").err().unwrap().to_string(),
+      parse("cmd 'test").err().unwrap(),
       concat!("Expected closing single quote.\n", "  'test\n", "  ~"),
     );
 
@@ -938,7 +925,7 @@ mod test {
     assert!(parse("command --arg=\"value\"").is_ok());
 
     assert_eq!(
-      parse("echo `echo 1`").err().unwrap().to_string(),
+      parse("echo `echo 1`").err().unwrap(),
       concat!(
         "Back ticks in strings is currently not supported.\n",
         "  `echo 1`\n",
@@ -1472,7 +1459,7 @@ mod test {
           match expected.err() {
             Some(err) => err,
             None =>
-              panic!("Got error: {:#}", error_for_failure(err).err().unwrap()),
+              panic!("Got error: {:#}", err.into_result::<T>().err().unwrap()),
           }
         );
       }
