@@ -304,9 +304,7 @@ pub fn parse(input: &str) -> Result<SequentialList, String> {
         fail_for_trailing_input(input).into_result()
       }
     }
-    Err(ParseError::Backtrace) => {
-      fail_for_trailing_input(input).into_result()
-    }
+    Err(ParseError::Backtrace) => fail_for_trailing_input(input).into_result(),
     Err(ParseError::Failure(e)) => e.into_result(),
   }
 }
