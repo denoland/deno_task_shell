@@ -303,10 +303,14 @@ pub fn parse(input: &str) -> Result<SequentialList> {
           Ok(expr)
         }
       } else {
-        fail_for_trailing_input(input).into_result().map_err(|err| err.into())
+        fail_for_trailing_input(input)
+          .into_result()
+          .map_err(|err| err.into())
       }
     }
-    Err(ParseError::Backtrace) => fail_for_trailing_input(input).into_result().map_err(|err| err.into()),
+    Err(ParseError::Backtrace) => fail_for_trailing_input(input)
+      .into_result()
+      .map_err(|err| err.into()),
     Err(ParseError::Failure(e)) => e.into_result().map_err(|err| err.into()),
   }
 }
