@@ -878,17 +878,17 @@ mod test {
 
   #[test]
   fn test_main() {
-    assert_eq!(parse("").err().unwrap().to_string(), "Empty command.");
+    assert_eq!(parse("").err().unwrap(), "Empty command.");
     assert_eq!(
-      parse("&& testing").err().unwrap().to_string(),
+      parse("&& testing").err().unwrap(),
       concat!("Unexpected character.\n", "  && testing\n", "  ~",),
     );
     assert_eq!(
-      parse("test { test").err().unwrap().to_string(),
+      parse("test { test").err().unwrap(),
       concat!("Unexpected character.\n", "  { test\n", "  ~",),
     );
     assert_eq!(
-      parse("cp test/* other").err().unwrap().to_string(),
+      parse("cp test/* other").err().unwrap(),
       concat!(
         "Globs are currently not supported, but will be soon.\n",
         "  * other\n",
@@ -896,7 +896,7 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("cp test/? other").err().unwrap().to_string(),
+      parse("cp test/? other").err().unwrap(),
       concat!(
         "Globs are currently not supported, but will be soon.\n",
         "  ? other\n",
@@ -904,7 +904,7 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("(test").err().unwrap().to_string(),
+      parse("(test").err().unwrap(),
       concat!(
         "Expected closing parenthesis on subshell.\n",
         "  (test\n",
@@ -912,11 +912,11 @@ mod test {
       ),
     );
     assert_eq!(
-      parse("cmd \"test").err().unwrap().to_string(),
+      parse("cmd \"test").err().unwrap(),
       concat!("Expected closing double quote.\n", "  \"test\n", "  ~"),
     );
     assert_eq!(
-      parse("cmd 'test").err().unwrap().to_string(),
+      parse("cmd 'test").err().unwrap(),
       concat!("Expected closing single quote.\n", "  'test\n", "  ~"),
     );
 
@@ -925,7 +925,7 @@ mod test {
     assert!(parse("command --arg=\"value\"").is_ok());
 
     assert_eq!(
-      parse("echo `echo 1`").err().unwrap().to_string(),
+      parse("echo `echo 1`").err().unwrap(),
       concat!(
         "Back ticks in strings is currently not supported.\n",
         "  `echo 1`\n",
