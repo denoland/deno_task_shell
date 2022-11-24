@@ -211,6 +211,8 @@ impl ShellPipeReader {
     match &mut sender {
       ShellPipeWriter::OsPipe(pipe) => self.pipe_to(pipe),
       ShellPipeWriter::StdFile(file) => self.pipe_to(file),
+      ShellPipeWriter::Stdout => self.pipe_to(&mut std::io::stdout()),
+      ShellPipeWriter::Stderr => self.pipe_to(&mut std::io::stderr()),
       ShellPipeWriter::Null => Ok(()),
     }
   }
@@ -223,6 +225,8 @@ impl ShellPipeReader {
 pub enum ShellPipeWriter {
   OsPipe(os_pipe::PipeWriter),
   StdFile(std::fs::File),
+  Stdout,
+  Stderr,
   Null,
 }
 
@@ -231,26 +235,24 @@ impl Clone for ShellPipeWriter {
     match self {
       Self::OsPipe(pipe) => Self::OsPipe(pipe.try_clone().unwrap()),
       Self::StdFile(file) => Self::StdFile(file.try_clone().unwrap()),
+      Self::Stdout => Self::Stdout,
+      Self::Stderr => Self::Stderr,
       Self::Null => Self::Null,
     }
   }
 }
 
 impl ShellPipeWriter {
-  pub fn stdout() -> ShellPipeWriter {
-    ShellPipeWriter::from_raw(os_pipe::dup_stdout().unwrap())
+  pub fn stdout() -> Self {
+    Self::Stdout
   }
 
-  pub fn stderr() -> ShellPipeWriter {
-    ShellPipeWriter::from_raw(os_pipe::dup_stderr().unwrap())
+  pub fn stderr() -> Self {
+    Self::Stderr
   }
 
-  pub fn null() -> ShellPipeWriter {
-    ShellPipeWriter::Null
-  }
-
-  pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
-    Self::OsPipe(writer)
+  pub fn null() -> Self {
+    Self::Null
   }
 
   pub fn from_std(std_file: std::fs::File) -> Self {
@@ -261,6 +263,8 @@ impl ShellPipeWriter {
     match self {
       Self::OsPipe(pipe) => pipe.into(),
       Self::StdFile(file) => file.into(),
+      Self::Stdout => std::process::Stdio::inherit(),
+      Self::Stderr => std::process::Stdio::inherit(),
       Self::Null => std::process::Stdio::null(),
     }
   }
@@ -269,6 +273,8 @@ impl ShellPipeWriter {
     match self {
       Self::OsPipe(pipe) => pipe.write_all(bytes)?,
       Self::StdFile(file) => file.write_all(bytes)?,
+      Self::Stdout => std::io::stdout().write_all(bytes)?,
+      Self::Stderr => std::io::stderr().write_all(bytes)?,
       Self::Null => {}
     }
     Ok(())
