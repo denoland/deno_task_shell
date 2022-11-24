@@ -57,7 +57,7 @@ fn execute_cat(
           if size == 0 {
             break;
           } else {
-            stdout.write(&buf[..size])?;
+            stdout.write_all(&buf[..size])?;
           }
         },
         Err(err) => {

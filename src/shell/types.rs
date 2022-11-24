@@ -194,7 +194,21 @@ impl ShellPipeReader {
   }
 
   /// Pipe everything to the specified writer
-  pub fn pipe_to(mut self, writer: &mut dyn Write) -> Result<()> {
+  pub fn pipe_to(self, writer: &mut dyn Write) -> Result<()> {
+    // don't bother flushing here because this won't ever be called
+    // with a Rust wrapped stdout/stderr
+    self.pipe_to_inner(writer, false)
+  }
+
+  fn pipe_to_with_flushing(self, writer: &mut dyn Write) -> Result<()> {
+    self.pipe_to_inner(writer, true)
+  }
+
+  fn pipe_to_inner(
+    mut self,
+    writer: &mut dyn Write,
+    flush: bool,
+  ) -> Result<()> {
     loop {
       let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
       let size = self.0.read(&mut buffer)?;
@@ -202,6 +216,9 @@ impl ShellPipeReader {
         break;
       }
       writer.write_all(&buffer[0..size])?;
+      if flush {
+        writer.flush()?;
+      }
     }
     Ok(())
   }
@@ -211,6 +228,16 @@ impl ShellPipeReader {
     match &mut sender {
       ShellPipeWriter::OsPipe(pipe) => self.pipe_to(pipe),
       ShellPipeWriter::StdFile(file) => self.pipe_to(file),
+      // Don't lock stdout/stderr here because we want to release the lock
+      // when reading from the sending pipe. Additionally, we want
+      // to flush after every write because Rust's wrapper has an
+      // internal buffer and Deno doesn't buffer stdout/stderr.
+      ShellPipeWriter::Stdout => {
+        self.pipe_to_with_flushing(&mut std::io::stdout())
+      }
+      ShellPipeWriter::Stderr => {
+        self.pipe_to_with_flushing(&mut std::io::stderr())
+      }
       ShellPipeWriter::Null => Ok(()),
     }
   }
@@ -223,6 +250,13 @@ impl ShellPipeReader {
 pub enum ShellPipeWriter {
   OsPipe(os_pipe::PipeWriter),
   StdFile(std::fs::File),
+  // For stdout and stderr, instead of directly duplicating the raw pipes
+  // and putting them in a ShellPipeWriter::OsPipe(...), we use Rust std's
+  // stdout() and stderr() wrappers because it contains some code to solve
+  // some encoding issues on Windows (ex. emojis). For more details, see
+  // library/std/src/sys/windows/stdio.rs in Rust's source code.
+  Stdout,
+  Stderr,
   Null,
 }
 
@@ -231,26 +265,24 @@ impl Clone for ShellPipeWriter {
     match self {
       Self::OsPipe(pipe) => Self::OsPipe(pipe.try_clone().unwrap()),
       Self::StdFile(file) => Self::StdFile(file.try_clone().unwrap()),
+      Self::Stdout => Self::Stdout,
+      Self::Stderr => Self::Stderr,
       Self::Null => Self::Null,
     }
   }
 }
 
 impl ShellPipeWriter {
-  pub fn stdout() -> ShellPipeWriter {
-    ShellPipeWriter::from_raw(os_pipe::dup_stdout().unwrap())
+  pub fn stdout() -> Self {
+    Self::Stdout
   }
 
-  pub fn stderr() -> ShellPipeWriter {
-    ShellPipeWriter::from_raw(os_pipe::dup_stderr().unwrap())
+  pub fn stderr() -> Self {
+    Self::Stderr
   }
 
-  pub fn null() -> ShellPipeWriter {
-    ShellPipeWriter::Null
-  }
-
-  pub fn from_raw(writer: os_pipe::PipeWriter) -> Self {
-    Self::OsPipe(writer)
+  pub fn null() -> Self {
+    Self::Null
   }
 
   pub fn from_std(std_file: std::fs::File) -> Self {
@@ -261,14 +293,28 @@ impl ShellPipeWriter {
     match self {
       Self::OsPipe(pipe) => pipe.into(),
       Self::StdFile(file) => file.into(),
+      Self::Stdout => std::process::Stdio::inherit(),
+      Self::Stderr => std::process::Stdio::inherit(),
       Self::Null => std::process::Stdio::null(),
     }
   }
 
-  pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+  pub fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
     match self {
       Self::OsPipe(pipe) => pipe.write_all(bytes)?,
       Self::StdFile(file) => file.write_all(bytes)?,
+      // For both stdout & stderr, we want to flush after each
+      // write in order to bypass Rust's internal buffer.
+      Self::Stdout => {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(bytes)?;
+        stdout.flush()?;
+      }
+      Self::Stderr => {
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(bytes)?;
+        stderr.flush()?;
+      }
       Self::Null => {}
     }
     Ok(())
@@ -276,7 +322,7 @@ impl ShellPipeWriter {
 
   pub fn write_line(&mut self, line: &str) -> Result<()> {
     let bytes = format!("{}\n", line);
-    self.write(bytes.as_bytes())
+    self.write_all(bytes.as_bytes())
   }
 }
 
