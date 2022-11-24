@@ -171,7 +171,7 @@ impl TestBuilder {
       std::env::temp_dir()
     };
     let (stdin, mut stdin_writer) = pipe();
-    stdin_writer.write(&self.stdin).unwrap();
+    stdin_writer.write_all(&self.stdin).unwrap();
     drop(stdin_writer); // prevent a deadlock by dropping the writer
     let (stdout, stdout_handle) = get_output_writer_and_handle();
     let (stderr, stderr_handle) = get_output_writer_and_handle();
