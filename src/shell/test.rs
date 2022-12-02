@@ -81,6 +81,18 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command("echo 'a/b'/c")
+    .assert_stdout("a/b/c\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("echo 'a/b'ctest\"te  st\"'asdf'")
+    .assert_stdout("a/bctestte  stasdf\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command("echo --test=\"2\" --test='2' test\"TEST\" TEST'test'TEST 'test''test' test'test'\"test\" \"test\"\"test\"'test'")
     .assert_stdout("--test=2 --test=2 testTEST TESTtestTEST testtest testtesttest testtesttest\n")
     .run()

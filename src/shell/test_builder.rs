@@ -176,15 +176,17 @@ impl TestBuilder {
     let (stdout, stdout_handle) = get_output_writer_and_handle();
     let (stderr, stderr_handle) = get_output_writer_and_handle();
 
-    let exit_code = execute_with_pipes(
-      list,
-      self.env_vars.clone(),
-      &cwd,
-      stdin,
-      stdout,
-      stderr,
-    )
-    .await;
+    let local_set = tokio::task::LocalSet::new();
+    let exit_code = local_set
+      .run_until(execute_with_pipes(
+        list,
+        self.env_vars.clone(),
+        &cwd,
+        stdin,
+        stdout,
+        stderr,
+      ))
+      .await;
     let temp_dir = if let Some(temp_dir) = &self.temp_dir {
       temp_dir.cwd.display().to_string()
     } else {

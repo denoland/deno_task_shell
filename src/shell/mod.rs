@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -22,8 +23,8 @@ use crate::parser::RedirectOp;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
-use crate::parser::StringOrWord;
-use crate::parser::StringPart;
+use crate::parser::Word;
+use crate::parser::WordPart;
 use crate::shell::commands::cat_command;
 use crate::shell::commands::cd_command;
 use crate::shell::commands::cp_command;
@@ -122,7 +123,7 @@ fn execute_sequential_list(
         let stdin = stdin.clone();
         let stdout = stdout.clone();
         let stderr = stderr.clone();
-        async_handles.push(tokio::task::spawn(async move {
+        async_handles.push(tokio::task::spawn_local(async move {
           let main_token = state.token();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
@@ -172,7 +173,7 @@ fn execute_sequential_list(
       ExecuteResult::Continue(final_exit_code, final_changes, async_handles)
     }
   }
-  .boxed()
+  .boxed_local()
 }
 
 async fn wait_handles(
@@ -211,7 +212,7 @@ fn execute_sequence(
         0,
         vec![EnvChange::SetShellVar(
           var.name,
-          evaluate_string_or_word(var.value, &state, stdin, stderr).await,
+          evaluate_word(var.value, &state, stdin, stderr).await,
         )],
         Vec::new(),
       ),
@@ -274,7 +275,7 @@ fn execute_sequence(
       }
     }
   }
-  .boxed()
+  .boxed_local()
 }
 
 async fn execute_pipeline(
@@ -322,7 +323,7 @@ async fn resolve_redirect_pipe(
   stdin: &ShellPipeReader,
   stderr: &mut ShellPipeWriter,
 ) -> Result<ShellPipeWriter, ExecuteResult> {
-  let words = evaluate_string_parts(
+  let words = evaluate_word_parts(
     redirect.io_file.clone().into_parts(),
     state,
     stdin.clone(),
@@ -508,13 +509,8 @@ async fn execute_simple_command(
   for env_var in command.env_vars {
     state.apply_env_var(
       &env_var.name,
-      &evaluate_string_or_word(
-        env_var.value,
-        &state,
-        stdin.clone(),
-        stderr.clone(),
-      )
-      .await,
+      &evaluate_word(env_var.value, &state, stdin.clone(), stderr.clone())
+        .await,
     );
   }
   execute_command_args(args, state, stdin, stdout, stderr).await
@@ -662,7 +658,7 @@ fn execute_command_args(
         }
       }
     }
-  }.boxed()
+  }.boxed_local()
 }
 
 fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
@@ -774,103 +770,106 @@ fn resolve_command_path(
 }
 
 async fn evaluate_args(
-  args: Vec<StringOrWord>,
+  args: Vec<Word>,
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> Vec<String> {
   let mut result = Vec::new();
   for arg in args {
-    match arg {
-      StringOrWord::Word(parts) => {
-        // todo(dsherret): maybe we should have this work like sh and I believe
-        // reparse then continually re-evaluate until there's only strings left.
-        let text =
-          evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
-            .await;
-        result.extend(text);
-      }
-      StringOrWord::String(parts) => {
-        result.push(
-          evaluate_string_parts(parts, state, stdin.clone(), stderr.clone())
-            .await
-            .join(" "),
-        );
-      }
-    }
+    let text = evaluate_word_parts(
+      arg.into_parts(),
+      state,
+      stdin.clone(),
+      stderr.clone(),
+    )
+    .await;
+    result.extend(text);
   }
   result
 }
 
-async fn evaluate_string_or_word(
-  string_or_word: StringOrWord,
+async fn evaluate_word(
+  word: Word,
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> String {
-  evaluate_string_parts(string_or_word.into_parts(), state, stdin, stderr)
+  evaluate_word_parts(word.into_parts(), state, stdin, stderr)
     .await
     .join(" ")
 }
 
-async fn evaluate_string_parts(
-  parts: Vec<StringPart>,
+fn evaluate_word_parts(
+  parts: Vec<WordPart>,
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> Vec<String> {
-  let mut result = Vec::new();
-  let mut current_text = String::new();
-  for part in parts {
-    let evaluation_result_text = match part {
-      StringPart::Text(text) => {
-        current_text.push_str(&text);
-        None
-      }
-      StringPart::Variable(name) => state.get_var(&name).map(|v| v.to_string()),
-      StringPart::Command(list) => Some(
-        evaluate_command_substitution(
-          list,
-          // contain cancellation to the command substitution
-          &state.with_child_token(),
-          stdin.clone(),
-          stderr.clone(),
-        )
-        .await,
-      ),
-    };
+) -> LocalBoxFuture<Vec<String>> {
+  // recursive async, so requires boxing
+  async move {
+    let mut result = Vec::new();
+    let mut current_text = String::new();
+    for part in parts {
+      let evaluation_result_text = match part {
+        WordPart::Text(text) => {
+          current_text.push_str(&text);
+          None
+        }
+        WordPart::Variable(name) => state.get_var(&name).map(|v| v.to_string()),
+        WordPart::Command(list) => Some(
+          evaluate_command_substitution(
+            list,
+            // contain cancellation to the command substitution
+            &state.with_child_token(),
+            stdin.clone(),
+            stderr.clone(),
+          )
+          .await,
+        ),
+        WordPart::Quoted(parts) => {
+          let text =
+            evaluate_word_parts(parts, state, stdin.clone(), stderr.clone())
+              .await
+              .join(" ");
+          current_text.push_str(&text);
+          continue;
+        }
+      };
 
-    // This text needs to be turned into a vector of strings.
-    // For now we do a very basic string split on whitespace, but in the future
-    // we should continue to improve this functionality.
-    if let Some(text) = evaluation_result_text {
-      let mut parts = text
-        .split(' ')
-        .map(|p| p.trim())
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>();
+      // This text needs to be turned into a vector of strings.
+      // For now we do a very basic string split on whitespace, but in the future
+      // we should continue to improve this functionality.
+      if let Some(text) = evaluation_result_text {
+        let mut parts = text
+          .split(' ')
+          .map(|p| p.trim())
+          .filter(|p| !p.is_empty())
+          .collect::<Vec<_>>();
 
-      if !parts.is_empty() {
-        // append the first part to the current text
-        let first_part = parts.remove(0);
-        current_text.push_str(first_part);
+        if !parts.is_empty() {
+          // append the first part to the current text
+          let first_part = parts.remove(0);
+          current_text.push_str(first_part);
 
-        // store the current text
-        result.push(current_text);
+          // store the current text
+          result.push(current_text);
 
-        // store all the parts
-        result.extend(parts.into_iter().map(|p| p.to_string()));
+          // store all the parts
+          result.extend(parts.into_iter().map(|p| p.to_string()));
 
-        // use the last part as the current text so it maybe
-        // gets appended to in the future
-        current_text = result.pop().unwrap();
+          // use the last part as the current text so it maybe
+          // gets appended to in the future
+          current_text = result.pop().unwrap();
+        }
       }
     }
+    if !current_text.is_empty() {
+      result.push(current_text);
+    }
+    result
   }
-  if !current_text.is_empty() {
-    result.push(current_text);
-  }
-  result
+  .boxed_local()
 }
 
 async fn evaluate_command_substitution(

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -138,7 +138,7 @@ pub enum EnvChange {
   Cd(PathBuf),
 }
 
-pub type FutureExecuteResult = BoxFuture<'static, ExecuteResult>;
+pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;
 
 // https://unix.stackexchange.com/a/99117
 // SIGINT (2) + 128
