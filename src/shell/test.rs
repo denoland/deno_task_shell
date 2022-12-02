@@ -370,6 +370,20 @@ pub async fn pipeline() {
     .assert_stdout("1\n")
     .run()
     .await;
+
+  // pipeline with redirect
+  TestBuilder::new()
+    .command(r#"echo 1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)' > output.txt"#)
+    .assert_file_equals("output.txt", "1\n")
+    .run()
+    .await;
+
+  // pipeline with stderr redirect
+  TestBuilder::new()
+    .command(r#"echo 1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)' 2> output.txt"#)
+    .assert_file_equals("output.txt", "1\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]
