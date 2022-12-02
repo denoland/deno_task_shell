@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::Result;
-use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -123,7 +123,7 @@ fn execute_sequential_list(
         let stdin = stdin.clone();
         let stdout = stdout.clone();
         let stderr = stderr.clone();
-        async_handles.push(tokio::task::spawn(async move {
+        async_handles.push(tokio::task::spawn_local(async move {
           let main_token = state.token();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
@@ -173,7 +173,7 @@ fn execute_sequential_list(
       ExecuteResult::Continue(final_exit_code, final_changes, async_handles)
     }
   }
-  .boxed()
+  .boxed_local()
 }
 
 async fn wait_handles(
@@ -275,7 +275,7 @@ fn execute_sequence(
       }
     }
   }
-  .boxed()
+  .boxed_local()
 }
 
 async fn execute_pipeline(
@@ -658,7 +658,7 @@ fn execute_command_args(
         }
       }
     }
-  }.boxed()
+  }.boxed_local()
 }
 
 fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
@@ -805,7 +805,7 @@ fn evaluate_word_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> BoxFuture<Vec<String>> {
+) -> LocalBoxFuture<Vec<String>> {
   // recursive async, so requires boxing
   async move {
     let mut result = Vec::new();
@@ -869,7 +869,7 @@ fn evaluate_word_parts(
     }
     result
   }
-  .boxed()
+  .boxed_local()
 }
 
 async fn evaluate_command_substitution(
