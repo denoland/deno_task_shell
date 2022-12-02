@@ -304,35 +304,10 @@ async fn execute_pipeline_inner(
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  mut stderr: ShellPipeWriter,
+  stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match pipeline {
     PipelineInner::Command(command) => {
-      // We only support redirects that are not in a pipe sequence
-      // at the moment, so this is fine to do only here
-      let (stdout, stderr) = if let Some(redirect) = &command.redirect {
-        let pipe =
-          match resolve_redirect_pipe(redirect, &state, &stdin, &mut stderr)
-            .await
-          {
-            Ok(value) => value,
-            Err(value) => return value,
-          };
-
-        match redirect.maybe_fd {
-          Some(RedirectFd::Fd(2)) => (stdout, pipe),
-          Some(RedirectFd::Fd(1)) | None => (pipe, stderr),
-          Some(RedirectFd::Fd(_)) => {
-            let _ = stderr.write_line(
-              "only redirecting to stdout (1) and stderr (2) is supported",
-            );
-            return ExecuteResult::from_exit_code(1);
-          }
-          Some(RedirectFd::StdoutStderr) => (pipe.clone(), pipe),
-        }
-      } else {
-        (stdout, stderr)
-      };
       execute_command(command, state, stdin, stdout, stderr).await
     }
     PipelineInner::PipeSequence(pipe_sequence) => {
@@ -401,9 +376,35 @@ async fn execute_command(
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  stderr: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
-  // todo: handle command.redirect
+  let (stdout, stderr) = if let Some(redirect) = &command.redirect {
+    let pipe = match resolve_redirect_pipe(
+      redirect,
+      &state,
+      &stdin,
+      &mut stderr,
+    )
+    .await
+    {
+      Ok(value) => value,
+      Err(value) => return value,
+    };
+
+    match redirect.maybe_fd {
+      Some(RedirectFd::Fd(2)) => (stdout, pipe),
+      Some(RedirectFd::Fd(1)) | None => (pipe, stderr),
+      Some(RedirectFd::Fd(_)) => {
+        let _ = stderr.write_line(
+          "only redirecting to stdout (1) and stderr (2) is supported",
+        );
+        return ExecuteResult::from_exit_code(1);
+      }
+      Some(RedirectFd::StdoutStderr) => (pipe.clone(), pipe),
+    }
+  } else {
+    (stdout, stderr)
+  };
   match command.inner {
     CommandInner::Simple(command) => {
       execute_simple_command(command, state, stdin, stdout, stderr).await
