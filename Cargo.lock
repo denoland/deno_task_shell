@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "deno_task_shell"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "futures",
