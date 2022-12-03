@@ -777,14 +777,14 @@ async fn evaluate_args(
 ) -> Vec<String> {
   let mut result = Vec::new();
   for arg in args {
-    let text = evaluate_word_parts(
+    let parts = evaluate_word_parts(
       arg.into_parts(),
       state,
       stdin.clone(),
       stderr.clone(),
     )
     .await;
-    result.extend(text);
+    result.extend(parts);
   }
   result
 }
