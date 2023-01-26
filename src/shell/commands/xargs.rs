@@ -33,7 +33,7 @@ impl ShellCommand for XargsCommand {
           .await
         }
         Err(err) => {
-          let _ = context.stderr.write_line(&format!("xargs: {}", err));
+          let _ = context.stderr.write_line(&format!("xargs: {err}"));
           ExecuteResult::from_exit_code(1)
         }
       }

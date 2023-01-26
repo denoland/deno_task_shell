@@ -24,7 +24,7 @@ impl ShellCommand for ExitCommand {
         // even if parsing args fails `exit` always exits
         context
           .stderr
-          .write_line(&format!("exit: {}", err))
+          .write_line(&format!("exit: {err}"))
           .unwrap();
         ExecuteResult::Exit(1, Vec::new())
       }

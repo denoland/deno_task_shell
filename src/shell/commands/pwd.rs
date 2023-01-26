@@ -26,7 +26,7 @@ impl ShellCommand for PwdCommand {
         ExecuteResult::from_exit_code(0)
       }
       Err(err) => {
-        let _ = context.stderr.write_line(&format!("pwd: {}", err));
+        let _ = context.stderr.write_line(&format!("pwd: {err}"));
         ExecuteResult::from_exit_code(1)
       }
     };

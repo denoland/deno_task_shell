@@ -23,7 +23,7 @@ impl ShellCommand for CatCommand {
     let result = match execute_cat(context) {
       Ok(result) => result,
       Err(err) => {
-        let _ = stderr.write_line(&format!("cat: {}", err));
+        let _ = stderr.write_line(&format!("cat: {err}"));
         ExecuteResult::from_exit_code(1)
       }
     };
@@ -60,7 +60,7 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
         Err(err) => {
           context
             .stderr
-            .write_line(&format!("cat: {}: {}", path, err))?;
+            .write_line(&format!("cat: {path}: {err}"))?;
           exit_code = 1;
         }
       }
