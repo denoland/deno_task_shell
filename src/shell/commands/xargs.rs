@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
@@ -173,8 +173,8 @@ fn parse_args(args: Vec<String>) -> Result<XargsFlags> {
               ArgKind::Arg(arg) => {
                 initial_args.push(arg.to_string());
               }
-              ArgKind::ShortFlag(f) => initial_args.push(format!("-{}", f)),
-              ArgKind::LongFlag(f) => initial_args.push(format!("--{}", f)),
+              ArgKind::ShortFlag(f) => initial_args.push(format!("-{f}")),
+              ArgKind::LongFlag(f) => initial_args.push(format!("--{f}")),
             }
           }
         }
