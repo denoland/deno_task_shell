@@ -871,16 +871,20 @@ pub async fn custom_command() {
   // not cross platform, but still allow this
   TestBuilder::new()
     .command("add 1 2")
-    .custom_command("add", Box::new(|mut context| {
-      async move {
-        let mut sum = 0;
-        for val in context.args {
-          sum += val.parse::<usize>().unwrap();
+    .custom_command(
+      "add",
+      Box::new(|mut context| {
+        async move {
+          let mut sum = 0;
+          for val in context.args {
+            sum += val.parse::<usize>().unwrap();
+          }
+          let _ = context.stderr.write_line(&sum.to_string());
+          ExecuteResult::from_exit_code(0)
         }
-        let _ = context.stderr.write_line(&sum.to_string());
-        ExecuteResult::from_exit_code(0)
-      }.boxed_local()
-    }))
+        .boxed_local()
+      }),
+    )
     .assert_stderr("3\n")
     .run()
     .await;

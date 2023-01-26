@@ -8,21 +8,23 @@ use std::fs;
 use std::path::PathBuf;
 use tokio::task::JoinHandle;
 
-use crate::ShellCommand;
-use crate::ShellCommandContext;
 use crate::execute_with_pipes;
 use crate::parser::parse;
 use crate::shell::fs_util;
 use crate::shell::types::pipe;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
+use crate::ShellCommand;
+use crate::ShellCommandContext;
 
 use super::types::ExecuteResult;
 
-struct FnShellCommand(Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>);
+struct FnShellCommand(
+  Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>,
+);
 
 impl ShellCommand for FnShellCommand {
-    fn execute(
+  fn execute(
     &self,
     context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
@@ -132,8 +134,16 @@ impl TestBuilder {
     self
   }
 
-  pub fn custom_command(&mut self, name: &str, execute: Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>) -> &mut Self {
-    self.custom_commands.insert(name.to_string(), Box::new(FnShellCommand(execute)));
+  pub fn custom_command(
+    &mut self,
+    name: &str,
+    execute: Box<
+      dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>,
+    >,
+  ) -> &mut Self {
+    self
+      .custom_commands
+      .insert(name.to_string(), Box::new(FnShellCommand(execute)));
     self
   }
 
@@ -201,7 +211,11 @@ impl TestBuilder {
     let (stderr, stderr_handle) = get_output_writer_and_handle();
 
     let local_set = tokio::task::LocalSet::new();
-    let state = ShellState::new(self.env_vars.clone(), &cwd, self.custom_commands.drain().collect());
+    let state = ShellState::new(
+      self.env_vars.clone(),
+      &cwd,
+      self.custom_commands.drain().collect(),
+    );
     let exit_code = local_set
       .run_until(execute_with_pipes(list, state, stdin, stdout, stderr))
       .await;
