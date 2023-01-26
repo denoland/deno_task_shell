@@ -1,55 +1,52 @@
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
-use tokio_util::sync::CancellationToken;
 
 use crate::shell::types::ExecuteResult;
-use crate::shell::types::ShellPipeReader;
-use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub fn cat_command(
-  cwd: &Path,
-  args: Vec<String>,
-  stdin: ShellPipeReader,
-  stdout: ShellPipeWriter,
-  mut stderr: ShellPipeWriter,
-  token: CancellationToken,
-) -> ExecuteResult {
-  match execute_cat(cwd, args, stdin, stdout, stderr.clone(), token) {
-    Ok(result) => result,
-    Err(err) => {
-      let _ = stderr.write_line(&format!("cat: {err}"));
-      ExecuteResult::from_exit_code(1)
-    }
+pub struct CatCommand;
+
+impl ShellCommand for CatCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    let mut stderr = context.stderr.clone();
+    let result = match execute_cat(context) {
+      Ok(result) => result,
+      Err(err) => {
+        let _ = stderr.write_line(&format!("cat: {err}"));
+        ExecuteResult::from_exit_code(1)
+      }
+    };
+    Box::pin(futures::future::ready(result))
   }
 }
 
-fn execute_cat(
-  cwd: &Path,
-  args: Vec<String>,
-  stdin: ShellPipeReader,
-  mut stdout: ShellPipeWriter,
-  mut stderr: ShellPipeWriter,
-  token: CancellationToken,
-) -> Result<ExecuteResult> {
-  let flags = parse_args(args)?;
+fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
+  let flags = parse_args(context.args)?;
   let mut exit_code = 0;
   let mut buf = vec![0; 1024];
   for path in flags.paths {
     if path == "-" {
-      stdin.clone().pipe_to_sender(stdout.clone())?;
+      context
+        .stdin
+        .clone()
+        .pipe_to_sender(context.stdout.clone())?;
     } else {
       // buffered to prevent reading an entire file
       // in memory
-      match File::open(cwd.join(&path)) {
+      match File::open(context.cwd.join(&path)) {
         Ok(mut file) => loop {
-          if token.is_cancelled() {
+          if context.token.is_cancelled() {
             return Ok(ExecuteResult::for_cancellation());
           }
 
@@ -57,11 +54,11 @@ fn execute_cat(
           if size == 0 {
             break;
           } else {
-            stdout.write_all(&buf[..size])?;
+            context.stdout.write_all(&buf[..size])?;
           }
         },
         Err(err) => {
-          stderr.write_line(&format!("cat: {path}: {err}"))?;
+          context.stderr.write_line(&format!("cat: {path}: {err}"))?;
           exit_code = 1;
         }
       }

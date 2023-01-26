@@ -25,16 +25,7 @@ use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
-use crate::shell::commands::cat_command;
-use crate::shell::commands::cd_command;
-use crate::shell::commands::cp_command;
-use crate::shell::commands::exit_command;
-use crate::shell::commands::mkdir_command;
-use crate::shell::commands::mv_command;
-use crate::shell::commands::pwd_command;
-use crate::shell::commands::rm_command;
-use crate::shell::commands::sleep_command;
-use crate::shell::commands::xargs_collect_args;
+use crate::shell::commands::ShellCommandContext;
 use crate::shell::types::pipe;
 use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
@@ -520,22 +511,9 @@ fn execute_command_args(
   mut args: Vec<String>,
   state: ShellState,
   stdin: ShellPipeReader,
-  mut stdout: ShellPipeWriter,
+  stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
-  macro_rules! execute_with_cancellation {
-    ($result_expr:expr, $token:ident) => {
-      tokio::select! {
-        result = $result_expr => {
-          result
-        },
-        _ = $token.cancelled() => {
-          ExecuteResult::for_cancellation()
-        }
-      }
-    };
-  }
-
   // requires boxing because of recursive async
   async move {
     let command_name = if args.is_empty() {
@@ -558,52 +536,20 @@ fn execute_command_args(
         ), command_name, stripped_name)
       );
       ExecuteResult::from_exit_code(1)
-    } else if command_name == "cd" {
-      let cwd = state.cwd().clone();
-      cd_command(&cwd, args, stderr)
-    } else if command_name == "exit" {
-      exit_command(args, stderr)
-    } else if command_name == "pwd" {
-      pwd_command(state.cwd(), args, stdout, stderr)
-    } else if command_name == "echo" {
-      let _ = stdout.write_line(&args.join(" "));
-      ExecuteResult::from_exit_code(0)
-    } else if command_name == "true" {
-      // ignores additional arguments
-      ExecuteResult::from_exit_code(0)
-    } else if command_name == "false" {
-      // ignores additional arguments
-      ExecuteResult::from_exit_code(1)
-    } else if command_name == "cp" {
-      let cwd = state.cwd().clone();
-      execute_with_cancellation!(cp_command(&cwd, args, stderr), token)
-    } else if command_name == "mkdir" {
-      let cwd = state.cwd().clone();
-      execute_with_cancellation!(mkdir_command(&cwd, args, stderr), token)
-    } else if command_name == "cat" {
-      let cwd = state.cwd().clone();
-      cat_command(&cwd, args, stdin, stdout, stderr, token)
-    } else if command_name == "mv" {
-      let cwd = state.cwd().clone();
-      execute_with_cancellation!(mv_command(&cwd, args, stderr), token)
-    } else if command_name == "rm" {
-      let cwd = state.cwd().clone();
-      execute_with_cancellation!(rm_command(&cwd, args, stderr), token)
-    } else if command_name == "sleep" {
-      execute_with_cancellation!(sleep_command(args, stderr), token)
-    } else if command_name == "xargs" {
-      match xargs_collect_args(args, stdin.clone()) {
-        Ok(args) => {
-          // don't select on cancellation here as that will occur at a lower level
-          execute_command_args(args, state, stdin, stdout, stderr).await
-        }
-        Err(err) => {
-          let _ = stderr.write_line(&format!("xargs: {err}"));
-          ExecuteResult::from_exit_code(1)
-        }
-      }
-    } else if command_name == "export" {
-      evaluate_export_command(args)
+    } else if let Some(command) = state.resolve_command(&command_name) {
+      let state = state.clone();
+      let command_context = ShellCommandContext {
+        args,
+        cwd: state.cwd().clone(),
+        stdin,
+        stdout,
+        stderr,
+        token,
+        execute_command_args: Box::new(move |args, stdin, stdout, stderr| {
+          execute_command_args(args, state, stdin, stdout, stderr)
+        })
+      };
+      command.execute(command_context).await
     } else {
       let command_path = match resolve_command_path(&command_name, &state, || {
         Ok(std::env::current_exe()?)
@@ -659,22 +605,6 @@ fn execute_command_args(
       }
     }
   }.boxed_local()
-}
-
-fn evaluate_export_command(args: Vec<String>) -> ExecuteResult {
-  let mut changes = Vec::new();
-  for arg in args {
-    // ignore if it doesn't contain an equals
-    if let Some(equals_index) = arg.find('=') {
-      let arg_name = &arg[..equals_index];
-      let arg_value = &arg[equals_index + 1..];
-      changes.push(EnvChange::SetEnvVar(
-        arg_name.to_string(),
-        arg_value.to_string(),
-      ));
-    }
-  }
-  ExecuteResult::Continue(0, changes, Vec::new())
 }
 
 fn resolve_command_path(

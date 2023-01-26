@@ -2,13 +2,47 @@
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 
+use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeReader;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub fn xargs_collect_args(
+pub struct XargsCommand;
+
+impl ShellCommand for XargsCommand {
+  fn execute(
+    &self,
+    mut context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      match xargs_collect_args(context.args, context.stdin.clone()) {
+        Ok(args) => {
+          // don't select on cancellation here as that will occur at a lower level
+          (context.execute_command_args)(
+            args,
+            context.stdin,
+            context.stdout,
+            context.stderr,
+          )
+          .await
+        }
+        Err(err) => {
+          let _ = context.stderr.write_line(&format!("xargs: {err}"));
+          ExecuteResult::from_exit_code(1)
+        }
+      }
+    }
+    .boxed_local()
+  }
+}
+
+fn xargs_collect_args(
   cli_args: Vec<String>,
   stdin: ShellPipeReader,
 ) -> Result<Vec<String>> {

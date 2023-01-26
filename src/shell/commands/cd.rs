@@ -5,29 +5,35 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
 use path_dedot::ParseDot;
 
 use crate::shell::fs_util;
 use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
-use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub fn cd_command(
-  cwd: &Path,
-  args: Vec<String>,
-  mut stderr: ShellPipeWriter,
-) -> ExecuteResult {
-  match execute_cd(cwd, args) {
-    Ok(new_dir) => {
-      ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
-    }
-    Err(err) => {
-      stderr.write_line(&format!("cd: {err}")).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
-    }
+pub struct CdCommand;
+
+impl ShellCommand for CdCommand {
+  fn execute(
+    &self,
+    mut context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    let result = match execute_cd(&context.cwd, context.args) {
+      Ok(new_dir) => {
+        ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
+      }
+      Err(err) => {
+        context.stderr.write_line(&format!("cd: {err}")).unwrap();
+        ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      }
+    };
+    Box::pin(futures::future::ready(result))
   }
 }
 
