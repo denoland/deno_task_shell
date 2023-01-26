@@ -7,6 +7,7 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 
 use crate::shell::types::ExecuteResult;
@@ -14,8 +15,28 @@ use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::execute_with_cancellation;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub async fn cp_command(
+pub struct CpCommand;
+
+impl ShellCommand for CpCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        cp_command(&context.cwd, context.args, context.stderr),
+        context.token
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn cp_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,
@@ -140,7 +161,24 @@ fn parse_cp_args(cwd: &Path, args: Vec<String>) -> Result<CpFlags> {
   })
 }
 
-pub async fn mv_command(
+pub struct MvCommand;
+
+impl ShellCommand for MvCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        mv_command(&context.cwd, context.args, context.stderr),
+        context.token
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn mv_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,

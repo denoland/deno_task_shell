@@ -6,6 +6,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
@@ -13,6 +14,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::shell::fs_util;
+
+use super::commands::builtin_commands;
+use super::commands::ShellCommand;
 
 #[derive(Clone)]
 pub struct ShellState {
@@ -23,6 +27,7 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
+  commands: Arc<HashMap<String, Box<dyn ShellCommand>>>,
   /// Token to cancel execution.
   token: CancellationToken,
 }
@@ -33,6 +38,7 @@ impl ShellState {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
+      commands: Arc::new(builtin_commands()),
       token: CancellationToken::default(),
     };
     // ensure the data is normalized
@@ -120,6 +126,10 @@ impl ShellState {
 
   pub fn token(&self) -> CancellationToken {
     self.token.clone()
+  }
+
+  pub fn resolve_command(&self, name: &str) -> Option<&dyn ShellCommand> {
+    self.commands.get(name).map(|c| &**c)
   }
 
   pub fn with_child_token(&self) -> ShellState {

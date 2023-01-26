@@ -2,6 +2,8 @@
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use std::path::Path;
 
 use crate::shell::types::ExecuteResult;
@@ -9,8 +11,28 @@ use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::execute_with_cancellation;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub async fn mkdir_command(
+pub struct MkdirCommand;
+
+impl ShellCommand for MkdirCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        mkdir_command(&context.cwd, context.args, context.stderr),
+        context.token
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn mkdir_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,

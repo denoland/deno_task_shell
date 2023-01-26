@@ -2,24 +2,34 @@
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
 
 use crate::shell::types::ExecuteResult;
-use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub fn exit_command(
-  args: Vec<String>,
-  mut stderr: ShellPipeWriter,
-) -> ExecuteResult {
-  match execute_exit(args) {
-    Ok(code) => ExecuteResult::Exit(code, Vec::new()),
-    Err(err) => {
-      // even if parsing args fails `exit` always exits
-      stderr.write_line(&format!("exit: {}", err)).unwrap();
-      ExecuteResult::Exit(1, Vec::new())
-    }
+pub struct ExitCommand;
+
+impl ShellCommand for ExitCommand {
+  fn execute(
+    &self,
+    mut context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    let result = match execute_exit(context.args) {
+      Ok(code) => ExecuteResult::Exit(code, Vec::new()),
+      Err(err) => {
+        // even if parsing args fails `exit` always exits
+        context
+          .stderr
+          .write_line(&format!("exit: {}", err))
+          .unwrap();
+        ExecuteResult::Exit(1, Vec::new())
+      }
+    };
+    Box::pin(futures::future::ready(result))
   }
 }
 
