@@ -22,10 +22,7 @@ impl ShellCommand for ExitCommand {
       Ok(code) => ExecuteResult::Exit(code, Vec::new()),
       Err(err) => {
         // even if parsing args fails `exit` always exits
-        context
-          .stderr
-          .write_line(&format!("exit: {err}"))
-          .unwrap();
+        context.stderr.write_line(&format!("exit: {err}")).unwrap();
         ExecuteResult::Exit(1, Vec::new())
       }
     };

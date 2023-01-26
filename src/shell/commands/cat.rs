@@ -58,9 +58,7 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
           }
         },
         Err(err) => {
-          context
-            .stderr
-            .write_line(&format!("cat: {path}: {err}"))?;
+          context.stderr.write_line(&format!("cat: {path}: {err}"))?;
           exit_code = 1;
         }
       }
