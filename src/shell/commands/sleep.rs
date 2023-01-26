@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ pub async fn sleep_command(
   match execute_sleep(args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("sleep: {}", err)).unwrap();
+      stderr.write_line(&format!("sleep: {err}")).unwrap();
       ExecuteResult::from_exit_code(1)
     }
   }

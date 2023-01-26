@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -598,7 +598,7 @@ fn execute_command_args(
           execute_command_args(args, state, stdin, stdout, stderr).await
         }
         Err(err) => {
-          let _ = stderr.write_line(&format!("xargs: {}", err));
+          let _ = stderr.write_line(&format!("xargs: {err}"));
           ExecuteResult::from_exit_code(1)
         }
       }
@@ -631,7 +631,7 @@ fn execute_command_args(
         Ok(child) => child,
         Err(err) => {
           stderr
-            .write_line(&format!("Error launching '{}': {}", command_name, err))
+            .write_line(&format!("Error launching '{command_name}': {err}"))
             .unwrap();
           return ExecuteResult::Continue(1, Vec::new(), Vec::new());
         }
@@ -648,7 +648,7 @@ fn execute_command_args(
             Vec::new(),
           ),
           Err(err) => {
-            stderr.write_line(&format!("{}", err)).unwrap();
+            stderr.write_line(&format!("{err}")).unwrap();
             ExecuteResult::Continue(1, Vec::new(), Vec::new())
           }
         },
@@ -711,7 +711,7 @@ fn resolve_command_path(
   if command_name.contains('/')
     || (cfg!(windows) && command_name.contains('\\'))
   {
-    return Ok(state.cwd().join(&command_name));
+    return Ok(state.cwd().join(command_name));
   }
 
   // now search based on the current environment state
@@ -749,7 +749,7 @@ fn resolve_command_path(
     let paths = if let Some(path_exts) = &path_exts {
       let mut paths = Vec::new();
       for path_ext in path_exts {
-        paths.push(search_dir.join(format!("{}{}", command_name, path_ext)))
+        paths.push(search_dir.join(format!("{command_name}{path_ext}")))
       }
       paths
     } else {

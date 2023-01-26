@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -23,7 +23,7 @@ pub fn pwd_command(
       ExecuteResult::from_exit_code(0)
     }
     Err(err) => {
-      let _ = stderr.write_line(&format!("pwd: {}", err));
+      let _ = stderr.write_line(&format!("pwd: {err}"));
       ExecuteResult::from_exit_code(1)
     }
   }

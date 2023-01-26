@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::Context;
 use pretty_assertions::assert_eq;
@@ -214,7 +214,7 @@ impl TestBuilder {
       match assertion {
         TestAssertion::FileExists(path) => {
           assert!(
-            cwd.join(&path).exists(),
+            cwd.join(path).exists(),
             "\n\nFailed for: {}\nExpected '{}' to exist.",
             self.command,
             path,
@@ -222,7 +222,7 @@ impl TestBuilder {
         }
         TestAssertion::FileNotExists(path) => {
           assert!(
-            !cwd.join(&path).exists(),
+            !cwd.join(path).exists(),
             "\n\nFailed for: {}\nExpected '{}' to not exist.",
             self.command,
             path,
@@ -230,7 +230,7 @@ impl TestBuilder {
         }
         TestAssertion::FileTextEquals(path, text) => {
           let actual_text = std::fs::read_to_string(cwd.join(path))
-            .with_context(|| format!("Error reading {}", path))
+            .with_context(|| format!("Error reading {path}"))
             .unwrap();
           assert_eq!(
             &actual_text, text,

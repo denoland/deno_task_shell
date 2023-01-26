@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
@@ -18,7 +18,7 @@ pub async fn mkdir_command(
   match execute_mkdir(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      stderr.write_line(&format!("mkdir: {}", err)).unwrap();
+      stderr.write_line(&format!("mkdir: {err}")).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
@@ -27,7 +27,7 @@ pub async fn mkdir_command(
 async fn execute_mkdir(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
-    let path = cwd.join(&specified_path);
+    let path = cwd.join(specified_path);
     if path.is_file() || !flags.parents && path.is_dir() {
       bail!("cannot create directory '{}': File exists", specified_path);
     }

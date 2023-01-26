@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -23,7 +23,7 @@ pub async fn cp_command(
   match execute_cp(cwd, args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("cp: {}", err)).unwrap();
+      stderr.write_line(&format!("cp: {err}")).unwrap();
       ExecuteResult::from_exit_code(1)
     }
   }
@@ -148,7 +148,7 @@ pub async fn mv_command(
   match execute_mv(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      stderr.write_line(&format!("mv: {}", err)).unwrap();
+      stderr.write_line(&format!("mv: {err}")).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }
@@ -205,7 +205,7 @@ fn get_copy_and_move_operations(
 ) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>> {
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
-  let destination = cwd.join(&specified_destination);
+  let destination = cwd.join(specified_destination);
   let from_args = paths;
   let mut operations = Vec::new();
   if from_args.len() > 1 {

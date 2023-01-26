@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ pub fn cd_command(
       ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
     }
     Err(err) => {
-      stderr.write_line(&format!("cd: {}", err)).unwrap();
+      stderr.write_line(&format!("cd: {err}")).unwrap();
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

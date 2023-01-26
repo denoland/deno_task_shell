@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::Result;
 use std::fs::File;
@@ -24,7 +24,7 @@ pub fn cat_command(
   match execute_cat(cwd, args, stdin, stdout, stderr.clone(), token) {
     Ok(result) => result,
     Err(err) => {
-      let _ = stderr.write_line(&format!("cat: {}", err));
+      let _ = stderr.write_line(&format!("cat: {err}"));
       ExecuteResult::from_exit_code(1)
     }
   }
@@ -61,7 +61,7 @@ fn execute_cat(
           }
         },
         Err(err) => {
-          stderr.write_line(&format!("cat: {}: {}", path, err))?;
+          stderr.write_line(&format!("cat: {path}: {err}"))?;
           exit_code = 1;
         }
       }
