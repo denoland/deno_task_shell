@@ -11,6 +11,9 @@ use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::shell::commands::ShellCommand;
+pub use crate::shell::commands::ShellCommandContext;
+
 use crate::parser::Command;
 use crate::parser::CommandInner;
 use crate::parser::PipeSequence;
@@ -25,7 +28,6 @@ use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
-use crate::shell::commands::ShellCommandContext;
 use crate::shell::types::pipe;
 use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
@@ -49,11 +51,12 @@ pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<String, String>,
   cwd: &Path,
+  custom_commands: HashMap<String, Box<dyn ShellCommand>>,
 ) -> i32 {
+  let state = ShellState::new(env_vars, cwd, custom_commands);
   execute_with_pipes(
     list,
-    env_vars,
-    cwd,
+    state,
     ShellPipeReader::stdin(),
     ShellPipeWriter::stdout(),
     ShellPipeWriter::stderr(),
@@ -63,15 +66,11 @@ pub async fn execute(
 
 pub(crate) async fn execute_with_pipes(
   list: SequentialList,
-  env_vars: HashMap<String, String>,
-  cwd: &Path,
+  state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
   stderr: ShellPipeWriter,
 ) -> i32 {
-  assert!(cwd.is_absolute());
-  let state = ShellState::new(env_vars, cwd);
-
   // spawn a sequential list and pipe its output to the environment
   let result = execute_sequential_list(
     list,
@@ -854,8 +853,11 @@ mod local_test {
 
   #[test]
   fn should_resolve_current_exe_path_for_deno() {
-    let state =
-      ShellState::new(Default::default(), &std::env::current_dir().unwrap());
+    let state = ShellState::new(
+      Default::default(),
+      &std::env::current_dir().unwrap(),
+      Default::default(),
+    );
     let path =
       resolve_command_path("deno", &state, || Ok(PathBuf::from("/bin/deno")))
         .unwrap();

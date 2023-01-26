@@ -1,6 +1,9 @@
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
+use futures::FutureExt;
+
 use super::test_builder::TestBuilder;
+use super::types::ExecuteResult;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
@@ -859,6 +862,26 @@ pub async fn windows_resolve_command() {
     // handle trailing semi-colon
     .env_var("PATHEXT", ".EXE;")
     .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+pub async fn custom_command() {
+  // not cross platform, but still allow this
+  TestBuilder::new()
+    .command("add 1 2")
+    .custom_command("add", Box::new(|mut context| {
+      async move {
+        let mut sum = 0;
+        for val in context.args {
+          sum += val.parse::<usize>().unwrap();
+        }
+        let _ = context.stderr.write_line(&sum.to_string());
+        ExecuteResult::from_exit_code(0)
+      }.boxed_local()
+    }))
+    .assert_stderr("3\n")
     .run()
     .await;
 }

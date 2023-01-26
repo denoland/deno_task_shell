@@ -33,12 +33,19 @@ pub struct ShellState {
 }
 
 impl ShellState {
-  pub fn new(env_vars: HashMap<String, String>, cwd: &Path) -> Self {
+  pub fn new(
+    env_vars: HashMap<String, String>,
+    cwd: &Path,
+    custom_commands: HashMap<String, Box<dyn ShellCommand>>,
+  ) -> Self {
+    assert!(cwd.is_absolute());
+    let mut commands = builtin_commands();
+    commands.extend(custom_commands);
     let mut result = Self {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
-      commands: Arc::new(builtin_commands()),
+      commands: Arc::new(commands),
       token: CancellationToken::default(),
     };
     // ensure the data is normalized
