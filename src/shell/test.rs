@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use super::test_builder::TestBuilder;
 
@@ -559,8 +559,7 @@ pub async fn pwd() {
     .command("pwd && cd sub_dir && pwd && cd ../ && pwd")
     // the actual temp directory will get replaced here
     .assert_stdout(&format!(
-      "$TEMP_DIR\n$TEMP_DIR{}sub_dir\n$TEMP_DIR\n",
-      FOLDER_SEPERATOR
+      "$TEMP_DIR\n$TEMP_DIR{FOLDER_SEPERATOR}sub_dir\n$TEMP_DIR\n"
     ))
     .run()
     .await;

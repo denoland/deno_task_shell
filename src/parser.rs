@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
@@ -692,7 +692,7 @@ fn parse_word_parts(
         if "$?#*".contains(char) {
           return ParseError::fail(
             input,
-            format!("${} is currently not supported.", char),
+            format!("${char} is currently not supported."),
           );
         }
       }

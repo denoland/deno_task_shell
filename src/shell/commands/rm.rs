@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
@@ -19,7 +19,7 @@ pub async fn rm_command(
   match execute_remove(cwd, args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("rm: {}", err)).unwrap();
+      stderr.write_line(&format!("rm: {err}")).unwrap();
       ExecuteResult::from_exit_code(1)
     }
   }
@@ -28,7 +28,7 @@ pub async fn rm_command(
 async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
-    let path = cwd.join(&specified_path);
+    let path = cwd.join(specified_path);
     let result = if flags.recursive {
       if path.is_dir() {
         tokio::fs::remove_dir_all(&path).await
@@ -262,7 +262,7 @@ mod test {
     fs::write(&existent_file, "").unwrap();
     fs::create_dir(&existent_dir).unwrap();
     fs::create_dir(&existent_dir_files).unwrap();
-    fs::write(&existent_dir_files.join("file.txt"), "").unwrap();
+    fs::write(existent_dir_files.join("file.txt"), "").unwrap();
 
     assert!(execute_remove(
       dir.path(),

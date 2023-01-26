@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
@@ -17,7 +17,7 @@ pub fn exit_command(
     Ok(code) => ExecuteResult::Exit(code, Vec::new()),
     Err(err) => {
       // even if parsing args fails `exit` always exits
-      stderr.write_line(&format!("exit: {}", err)).unwrap();
+      stderr.write_line(&format!("exit: {err}")).unwrap();
       ExecuteResult::Exit(1, Vec::new())
     }
   }
