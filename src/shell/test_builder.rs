@@ -1,6 +1,7 @@
 // Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
 
 use anyhow::Context;
+use futures::future::LocalBoxFuture;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
@@ -12,6 +13,25 @@ use crate::parser::parse;
 use crate::shell::fs_util;
 use crate::shell::types::pipe;
 use crate::shell::types::ShellPipeWriter;
+use crate::shell::types::ShellState;
+use crate::ShellCommand;
+use crate::ShellCommandContext;
+
+use super::types::ExecuteResult;
+
+type FnShellCommandExecute =
+  Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>;
+
+struct FnShellCommand(FnShellCommandExecute);
+
+impl ShellCommand for FnShellCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    (self.0)(context)
+  }
+}
 
 // Clippy is complaining about them all having `File` prefixes,
 // but there might be non-file variants in the future.
@@ -43,6 +63,7 @@ pub struct TestBuilder {
   // it is much much faster to lazily create this
   temp_dir: Option<TempDir>,
   env_vars: HashMap<String, String>,
+  custom_commands: HashMap<String, Box<dyn ShellCommand>>,
   command: String,
   stdin: Vec<u8>,
   expected_exit_code: i32,
@@ -71,12 +92,13 @@ impl TestBuilder {
     Self {
       temp_dir: None,
       env_vars,
-      command: String::new(),
-      stdin: Vec::new(),
+      custom_commands: Default::default(),
+      command: Default::default(),
+      stdin: Default::default(),
       expected_exit_code: 0,
-      expected_stderr: String::new(),
-      expected_stdout: String::new(),
-      assertions: Vec::new(),
+      expected_stderr: Default::default(),
+      expected_stdout: Default::default(),
+      assertions: Default::default(),
     }
   }
 
@@ -110,6 +132,17 @@ impl TestBuilder {
 
   pub fn env_var(&mut self, name: &str, value: &str) -> &mut Self {
     self.env_vars.insert(name.to_string(), value.to_string());
+    self
+  }
+
+  pub fn custom_command(
+    &mut self,
+    name: &str,
+    execute: FnShellCommandExecute,
+  ) -> &mut Self {
+    self
+      .custom_commands
+      .insert(name.to_string(), Box::new(FnShellCommand(execute)));
     self
   }
 
@@ -177,15 +210,13 @@ impl TestBuilder {
     let (stderr, stderr_handle) = get_output_writer_and_handle();
 
     let local_set = tokio::task::LocalSet::new();
+    let state = ShellState::new(
+      self.env_vars.clone(),
+      &cwd,
+      self.custom_commands.drain().collect(),
+    );
     let exit_code = local_set
-      .run_until(execute_with_pipes(
-        list,
-        self.env_vars.clone(),
-        &cwd,
-        stdin,
-        stdout,
-        stderr,
-      ))
+      .run_until(execute_with_pipes(list, state, stdin, stdout, stderr))
       .await;
     let temp_dir = if let Some(temp_dir) = &self.temp_dir {
       temp_dir.cwd.display().to_string()
