@@ -19,9 +19,10 @@ use crate::ShellCommandContext;
 
 use super::types::ExecuteResult;
 
-struct FnShellCommand(
-  Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>,
-);
+type FnShellCommandExecute =
+  Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>;
+
+struct FnShellCommand(FnShellCommandExecute);
 
 impl ShellCommand for FnShellCommand {
   fn execute(
@@ -137,9 +138,7 @@ impl TestBuilder {
   pub fn custom_command(
     &mut self,
     name: &str,
-    execute: Box<
-      dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>,
-    >,
+    execute: FnShellCommandExecute,
   ) -> &mut Self {
     self
       .custom_commands
