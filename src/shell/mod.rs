@@ -13,6 +13,11 @@ use tokio_util::sync::CancellationToken;
 
 pub use crate::shell::commands::ShellCommand;
 pub use crate::shell::commands::ShellCommandContext;
+pub use crate::shell::types::EnvChange;
+pub use crate::shell::types::ExecuteResult;
+pub use crate::shell::types::FutureExecuteResult;
+pub use crate::shell::types::ShellPipeReader;
+pub use crate::shell::types::ShellPipeWriter;
 
 use crate::parser::Command;
 use crate::parser::CommandInner;
@@ -29,11 +34,6 @@ use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
 use crate::shell::types::pipe;
-use crate::shell::types::EnvChange;
-use crate::shell::types::ExecuteResult;
-use crate::shell::types::FutureExecuteResult;
-use crate::shell::types::ShellPipeReader;
-use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
 
 use self::types::CANCELLATION_EXIT_CODE;
