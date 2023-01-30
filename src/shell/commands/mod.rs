@@ -101,7 +101,6 @@ pub struct ShellCommandContext {
   pub stdin: ShellPipeReader,
   pub stdout: ShellPipeWriter,
   pub stderr: ShellPipeWriter,
-  #[allow(clippy::type_complexity)]
   pub execute_command_args:
     Box<dyn FnOnce(ExecuteCommandArgsContext) -> FutureExecuteResult>,
 }
