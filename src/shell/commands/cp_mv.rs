@@ -28,8 +28,8 @@ impl ShellCommand for CpCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        cp_command(&context.cwd, context.args, context.stderr),
-        context.token
+        cp_command(context.state.cwd(), context.args, context.stderr),
+        context.state.token()
       )
     }
     .boxed_local()
@@ -170,8 +170,8 @@ impl ShellCommand for MvCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        mv_command(&context.cwd, context.args, context.stderr),
-        context.token
+        mv_command(context.state.cwd(), context.args, context.stderr),
+        context.state.token()
       )
     }
     .boxed_local()

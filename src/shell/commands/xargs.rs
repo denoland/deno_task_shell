@@ -7,6 +7,7 @@ use futures::FutureExt;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeReader;
+use crate::ExecuteCommandArgsContext;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
@@ -24,12 +25,13 @@ impl ShellCommand for XargsCommand {
       match xargs_collect_args(context.args, context.stdin.clone()) {
         Ok(args) => {
           // don't select on cancellation here as that will occur at a lower level
-          (context.execute_command_args)(
+          (context.execute_command_args)(ExecuteCommandArgsContext {
             args,
-            context.stdin,
-            context.stdout,
-            context.stderr,
-          )
+            state: context.state,
+            stdin: context.stdin,
+            stdout: context.stdout,
+            stderr: context.stderr,
+          })
           .await
         }
         Err(err) => {

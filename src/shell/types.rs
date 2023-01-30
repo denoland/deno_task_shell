@@ -101,7 +101,7 @@ impl ShellState {
         }
       }
       EnvChange::Cd(new_dir) => {
-        self.cwd = new_dir.clone();
+        self.set_cwd(new_dir);
       }
     }
   }
@@ -131,8 +131,8 @@ impl ShellState {
     }
   }
 
-  pub fn token(&self) -> CancellationToken {
-    self.token.clone()
+  pub fn token(&self) -> &CancellationToken {
+    &self.token
   }
 
   pub fn resolve_command(&self, name: &str) -> Option<&dyn ShellCommand> {

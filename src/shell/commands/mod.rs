@@ -5,6 +5,7 @@ mod cat;
 mod cd;
 mod cp_mv;
 mod echo;
+mod executable;
 mod exit;
 mod export;
 mod mkdir;
@@ -14,15 +15,16 @@ mod sleep;
 mod xargs;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use futures::future::LocalBoxFuture;
-use tokio_util::sync::CancellationToken;
+
+pub use executable::ExecutableCommand;
 
 use super::types::ExecuteResult;
 use super::types::FutureExecuteResult;
 use super::types::ShellPipeReader;
 use super::types::ShellPipeWriter;
+use super::types::ShellState;
 
 pub fn builtin_commands() -> HashMap<String, Box<dyn ShellCommand>> {
   HashMap::from([
@@ -85,21 +87,23 @@ pub fn builtin_commands() -> HashMap<String, Box<dyn ShellCommand>> {
   ])
 }
 
-pub struct ShellCommandContext {
+pub struct ExecuteCommandArgsContext {
   pub args: Vec<String>,
-  pub cwd: PathBuf,
+  pub state: ShellState,
   pub stdin: ShellPipeReader,
   pub stdout: ShellPipeWriter,
   pub stderr: ShellPipeWriter,
-  pub token: CancellationToken,
-  pub execute_command_args: Box<
-    dyn FnOnce(
-      Vec<String>,
-      ShellPipeReader,
-      ShellPipeWriter,
-      ShellPipeWriter,
-    ) -> FutureExecuteResult,
-  >,
+}
+
+pub struct ShellCommandContext {
+  pub args: Vec<String>,
+  pub state: ShellState,
+  pub stdin: ShellPipeReader,
+  pub stdout: ShellPipeWriter,
+  pub stderr: ShellPipeWriter,
+  #[allow(clippy::type_complexity)]
+  pub execute_command_args:
+    Box<dyn FnOnce(ExecuteCommandArgsContext) -> FutureExecuteResult>,
 }
 
 pub trait ShellCommand {

@@ -24,8 +24,8 @@ impl ShellCommand for MkdirCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        mkdir_command(&context.cwd, context.args, context.stderr),
-        context.token
+        mkdir_command(context.state.cwd(), context.args, context.stderr),
+        context.state.token()
       )
     }
     .boxed_local()
