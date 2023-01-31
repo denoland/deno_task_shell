@@ -6,6 +6,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::rc::Rc;
 use tokio::task::JoinHandle;
 
 use crate::execute_with_pipes;
@@ -63,7 +64,7 @@ pub struct TestBuilder {
   // it is much much faster to lazily create this
   temp_dir: Option<TempDir>,
   env_vars: HashMap<String, String>,
-  custom_commands: HashMap<String, Box<dyn ShellCommand>>,
+  custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
   command: String,
   stdin: Vec<u8>,
   expected_exit_code: i32,
@@ -142,7 +143,7 @@ impl TestBuilder {
   ) -> &mut Self {
     self
       .custom_commands
-      .insert(name.to_string(), Box::new(FnShellCommand(execute)));
+      .insert(name.to_string(), Rc::new(FnShellCommand(execute)));
     self
   }
 

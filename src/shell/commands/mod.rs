@@ -15,6 +15,7 @@ mod sleep;
 mod xargs;
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use futures::future::LocalBoxFuture;
 
@@ -26,63 +27,63 @@ use super::types::ShellPipeReader;
 use super::types::ShellPipeWriter;
 use super::types::ShellState;
 
-pub fn builtin_commands() -> HashMap<String, Box<dyn ShellCommand>> {
+pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
   HashMap::from([
     (
       "cat".to_string(),
-      Box::new(cat::CatCommand) as Box<dyn ShellCommand>,
+      Rc::new(cat::CatCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "cd".to_string(),
-      Box::new(cd::CdCommand) as Box<dyn ShellCommand>,
+      Rc::new(cd::CdCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "cp".to_string(),
-      Box::new(cp_mv::CpCommand) as Box<dyn ShellCommand>,
+      Rc::new(cp_mv::CpCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "echo".to_string(),
-      Box::new(echo::EchoCommand) as Box<dyn ShellCommand>,
+      Rc::new(echo::EchoCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "exit".to_string(),
-      Box::new(exit::ExitCommand) as Box<dyn ShellCommand>,
+      Rc::new(exit::ExitCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "export".to_string(),
-      Box::new(export::ExportCommand) as Box<dyn ShellCommand>,
+      Rc::new(export::ExportCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "mkdir".to_string(),
-      Box::new(mkdir::MkdirCommand) as Box<dyn ShellCommand>,
+      Rc::new(mkdir::MkdirCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "mv".to_string(),
-      Box::new(cp_mv::MvCommand) as Box<dyn ShellCommand>,
+      Rc::new(cp_mv::MvCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "pwd".to_string(),
-      Box::new(pwd::PwdCommand) as Box<dyn ShellCommand>,
+      Rc::new(pwd::PwdCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "rm".to_string(),
-      Box::new(rm::RmCommand) as Box<dyn ShellCommand>,
+      Rc::new(rm::RmCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "sleep".to_string(),
-      Box::new(sleep::SleepCommand) as Box<dyn ShellCommand>,
+      Rc::new(sleep::SleepCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "true".to_string(),
-      Box::new(ExitCodeCommand(0)) as Box<dyn ShellCommand>,
+      Rc::new(ExitCodeCommand(0)) as Rc<dyn ShellCommand>,
     ),
     (
       "false".to_string(),
-      Box::new(ExitCodeCommand(1)) as Box<dyn ShellCommand>,
+      Rc::new(ExitCodeCommand(1)) as Rc<dyn ShellCommand>,
     ),
     (
       "xargs".to_string(),
-      Box::new(xargs::XargsCommand) as Box<dyn ShellCommand>,
+      Rc::new(xargs::XargsCommand) as Rc<dyn ShellCommand>,
     ),
   ])
 }

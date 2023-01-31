@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::Result;
 use futures::future;
@@ -52,7 +53,7 @@ pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<String, String>,
   cwd: &Path,
-  custom_commands: HashMap<String, Box<dyn ShellCommand>>,
+  custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
 ) -> i32 {
   let state = ShellState::new(env_vars, cwd, custom_commands);
   execute_with_pipes(
@@ -533,9 +534,12 @@ fn execute_command_args(
       );
     Box::pin(future::ready(ExecuteResult::from_exit_code(1)))
   } else {
-    let command_context = ShellCommandContext {
+    let command = state.resolve_command(&command_name).unwrap_or_else(|| {
+      Rc::new(ExecutableCommand::new(command_name)) as Rc<dyn ShellCommand>
+    });
+    command.execute(ShellCommandContext {
       args,
-      state: state.clone(),
+      state,
       stdin,
       stdout,
       stderr,
@@ -548,12 +552,7 @@ fn execute_command_args(
           context.stderr,
         )
       }),
-    };
-    if let Some(command) = state.resolve_command(&command_name) {
-      command.execute(command_context)
-    } else {
-      ExecutableCommand::new(command_name).execute(command_context)
-    }
+    })
   }
 }
 

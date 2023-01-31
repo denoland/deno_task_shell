@@ -6,6 +6,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -27,7 +28,7 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
-  commands: Arc<HashMap<String, Box<dyn ShellCommand>>>,
+  commands: Arc<HashMap<String, Rc<dyn ShellCommand>>>,
   /// Token to cancel execution.
   token: CancellationToken,
 }
@@ -36,7 +37,7 @@ impl ShellState {
   pub fn new(
     env_vars: HashMap<String, String>,
     cwd: &Path,
-    custom_commands: HashMap<String, Box<dyn ShellCommand>>,
+    custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
   ) -> Self {
     assert!(cwd.is_absolute());
     let mut commands = builtin_commands();
@@ -135,8 +136,9 @@ impl ShellState {
     &self.token
   }
 
-  pub fn resolve_command(&self, name: &str) -> Option<&dyn ShellCommand> {
-    self.commands.get(name).map(|c| &**c)
+  pub fn resolve_command(&self, name: &str) -> Option<Rc<dyn ShellCommand>> {
+    // uses an Rc to allow resolving a command without borrowing from self
+    self.commands.get(name).cloned()
   }
 
   pub fn with_child_token(&self) -> ShellState {
