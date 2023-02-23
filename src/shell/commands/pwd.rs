@@ -20,7 +20,7 @@ impl ShellCommand for PwdCommand {
     &self,
     mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
-    let result = match execute_pwd(&context.cwd, context.args) {
+    let result = match execute_pwd(context.state.cwd(), context.args) {
       Ok(output) => {
         let _ = context.stdout.write_line(&output);
         ExecuteResult::from_exit_code(0)

@@ -44,9 +44,9 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
     } else {
       // buffered to prevent reading an entire file
       // in memory
-      match File::open(context.cwd.join(&path)) {
+      match File::open(context.state.cwd().join(&path)) {
         Ok(mut file) => loop {
-          if context.token.is_cancelled() {
+          if context.state.token().is_cancelled() {
             return Ok(ExecuteResult::for_cancellation());
           }
 

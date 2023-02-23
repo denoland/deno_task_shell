@@ -24,7 +24,7 @@ impl ShellCommand for CdCommand {
     &self,
     mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
-    let result = match execute_cd(&context.cwd, context.args) {
+    let result = match execute_cd(context.state.cwd(), context.args) {
       Ok(new_dir) => {
         ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
       }

@@ -2,17 +2,25 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
+use std::rc::Rc;
 
-use anyhow::bail;
 use anyhow::Result;
+use futures::future;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub use crate::shell::commands::ExecutableCommand;
+pub use crate::shell::commands::ExecuteCommandArgsContext;
 pub use crate::shell::commands::ShellCommand;
 pub use crate::shell::commands::ShellCommandContext;
+pub use crate::shell::types::EnvChange;
+pub use crate::shell::types::ExecuteResult;
+pub use crate::shell::types::FutureExecuteResult;
+pub use crate::shell::types::ShellPipeReader;
+pub use crate::shell::types::ShellPipeWriter;
+pub use crate::shell::types::ShellState;
 
 use crate::parser::Command;
 use crate::parser::CommandInner;
@@ -29,12 +37,6 @@ use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
 use crate::shell::types::pipe;
-use crate::shell::types::EnvChange;
-use crate::shell::types::ExecuteResult;
-use crate::shell::types::FutureExecuteResult;
-use crate::shell::types::ShellPipeReader;
-use crate::shell::types::ShellPipeWriter;
-use crate::shell::types::ShellState;
 
 use self::types::CANCELLATION_EXIT_CODE;
 
@@ -51,7 +53,7 @@ pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<String, String>,
   cwd: &Path,
-  custom_commands: HashMap<String, Box<dyn ShellCommand>>,
+  custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
 ) -> i32 {
   let state = ShellState::new(env_vars, cwd, custom_commands);
   execute_with_pipes(
@@ -114,7 +116,7 @@ fn execute_sequential_list(
         let stdout = stdout.clone();
         let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn_local(async move {
-          let main_token = state.token();
+          let main_token = state.token().clone();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
           let (exit_code, handles) = result.into_exit_code_and_handles();
@@ -152,7 +154,7 @@ fn execute_sequential_list(
       final_exit_code = wait_handles(
         final_exit_code,
         async_handles.drain(..).collect(),
-        state.token(),
+        state.token().clone(),
       )
       .await;
     }
@@ -513,19 +515,15 @@ fn execute_command_args(
   stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
-  // requires boxing because of recursive async
-  async move {
-    let command_name = if args.is_empty() {
-      String::new()
-    } else {
-      args.remove(0)
-    };
-    let token = state.token();
-    if token.is_cancelled() {
-      return ExecuteResult::for_cancellation();
-    }
-    if let Some(stripped_name) = command_name.strip_prefix('!') {
-      let _ = stderr.write_line(
+  let command_name = if args.is_empty() {
+    String::new()
+  } else {
+    args.remove(0)
+  };
+  if state.token().is_cancelled() {
+    Box::pin(future::ready(ExecuteResult::for_cancellation()))
+  } else if let Some(stripped_name) = command_name.strip_prefix('!') {
+    let _ = stderr.write_line(
         &format!(concat!(
           "History expansion is not supported:\n",
           "  {}\n",
@@ -534,168 +532,28 @@ fn execute_command_args(
           "  ! {}",
         ), command_name, stripped_name)
       );
-      ExecuteResult::from_exit_code(1)
-    } else if let Some(command) = state.resolve_command(&command_name) {
-      let state = state.clone();
-      let command_context = ShellCommandContext {
-        args,
-        cwd: state.cwd().clone(),
-        stdin,
-        stdout,
-        stderr,
-        token,
-        execute_command_args: Box::new(move |args, stdin, stdout, stderr| {
-          execute_command_args(args, state, stdin, stdout, stderr)
-        })
-      };
-      command.execute(command_context).await
-    } else {
-      let command_path = match resolve_command_path(&command_name, &state, || {
-        Ok(std::env::current_exe()?)
-      })
-      {
-        Ok(command_path) => command_path,
-        Err(err) => {
-          stderr.write_line(&err.to_string()).unwrap();
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-        }
-      };
-
-      let mut sub_command = tokio::process::Command::new(&command_path);
-      let child = sub_command
-        .current_dir(state.cwd())
-        .args(&args)
-        .env_clear()
-        .envs(state.env_vars())
-        .stdout(stdout.into_stdio())
-        .stdin(stdin.into_stdio())
-        .stderr(stderr.clone().into_stdio())
-        .spawn();
-
-      let mut child = match child {
-        Ok(child) => child,
-        Err(err) => {
-          stderr
-            .write_line(&format!("Error launching '{command_name}': {err}"))
-            .unwrap();
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
-        }
-      };
-
-      // avoid deadlock since this is holding onto the pipes
-      drop(sub_command);
-
-      tokio::select! {
-        result = child.wait() => match result {
-          Ok(status) => ExecuteResult::Continue(
-            status.code().unwrap_or(1),
-            Vec::new(),
-            Vec::new(),
-          ),
-          Err(err) => {
-            stderr.write_line(&format!("{err}")).unwrap();
-            ExecuteResult::Continue(1, Vec::new(), Vec::new())
-          }
-        },
-        _ = token.cancelled() => {
-          let _ = child.kill().await;
-          ExecuteResult::for_cancellation()
-        }
-      }
-    }
-  }.boxed_local()
-}
-
-fn resolve_command_path(
-  command_name: &str,
-  state: &ShellState,
-  current_exe: impl FnOnce() -> Result<PathBuf>,
-) -> Result<PathBuf> {
-  if command_name.is_empty() {
-    bail!("command name was empty");
-  }
-
-  // Special handling to use the current executable for deno.
-  // This is to ensure deno tasks that use deno work in environments
-  // that don't have deno on the path and to ensure it use the current
-  // version of deno being executed rather than the one on the path,
-  // which has caused some confusion.
-  if command_name == "deno" {
-    if let Ok(exe_path) = current_exe() {
-      // this condition exists to make the tests pass because it's not
-      // using the deno as the current executable
-      let file_stem = exe_path.file_stem().map(|s| s.to_string_lossy());
-      if file_stem.map(|s| s.to_string()) == Some("deno".to_string()) {
-        return Ok(exe_path);
-      }
-    }
-  }
-
-  // check for absolute
-  if PathBuf::from(command_name).is_absolute() {
-    return Ok(PathBuf::from(command_name));
-  }
-
-  // then relative
-  if command_name.contains('/')
-    || (cfg!(windows) && command_name.contains('\\'))
-  {
-    return Ok(state.cwd().join(command_name));
-  }
-
-  // now search based on the current environment state
-  let mut search_dirs = vec![state.cwd().clone()];
-  if let Some(path) = state.get_var("PATH") {
-    for folder in path.split(if cfg!(windows) { ';' } else { ':' }) {
-      search_dirs.push(PathBuf::from(folder));
-    }
-  }
-  let path_exts = if cfg!(windows) {
-    let uc_command_name = command_name.to_uppercase();
-    let path_ext = state
-      .get_var("PATHEXT")
-      .map(|s| s.as_str())
-      .unwrap_or(".EXE;.CMD;.BAT;.COM");
-    let command_exts = path_ext
-      .split(';')
-      .map(|s| s.trim().to_uppercase())
-      .filter(|s| !s.is_empty())
-      .collect::<Vec<_>>();
-    if command_exts.is_empty()
-      || command_exts
-        .iter()
-        .any(|ext| uc_command_name.ends_with(ext))
-    {
-      None // use the command name as-is
-    } else {
-      Some(command_exts)
-    }
+    Box::pin(future::ready(ExecuteResult::from_exit_code(1)))
   } else {
-    None
-  };
-
-  for search_dir in search_dirs {
-    let paths = if let Some(path_exts) = &path_exts {
-      let mut paths = Vec::new();
-      for path_ext in path_exts {
-        paths.push(search_dir.join(format!("{command_name}{path_ext}")))
-      }
-      paths
-    } else {
-      vec![search_dir.join(command_name)]
-    };
-    for path in paths {
-      // don't use tokio::fs::metadata here as it was never returning
-      // in some circumstances for some reason
-      if let Ok(metadata) = std::fs::metadata(&path) {
-        if metadata.is_file() {
-          return Ok(path);
-        }
-      }
-    }
+    let command = state.resolve_command(&command_name).unwrap_or_else(|| {
+      Rc::new(ExecutableCommand::new(command_name)) as Rc<dyn ShellCommand>
+    });
+    command.execute(ShellCommandContext {
+      args,
+      state,
+      stdin,
+      stdout,
+      stderr,
+      execute_command_args: Box::new(move |context| {
+        execute_command_args(
+          context.args,
+          context.state,
+          context.stdin,
+          context.stdout,
+          context.stderr,
+        )
+      }),
+    })
   }
-
-  bail!("{}: command not found", command_name)
 }
 
 async fn evaluate_args(
@@ -845,28 +703,4 @@ async fn execute_with_stdout_as_text(
   let _ = spawned_output.await;
   let data = output_handle.await.unwrap();
   String::from_utf8_lossy(&data).to_string()
-}
-
-#[cfg(test)]
-mod local_test {
-  use super::*;
-
-  #[test]
-  fn should_resolve_current_exe_path_for_deno() {
-    let state = ShellState::new(
-      Default::default(),
-      &std::env::current_dir().unwrap(),
-      Default::default(),
-    );
-    let path =
-      resolve_command_path("deno", &state, || Ok(PathBuf::from("/bin/deno")))
-        .unwrap();
-    assert_eq!(path, PathBuf::from("/bin/deno"));
-
-    let path = resolve_command_path("deno", &state, || {
-      Ok(PathBuf::from("/bin/deno.exe"))
-    })
-    .unwrap();
-    assert_eq!(path, PathBuf::from("/bin/deno.exe"));
-  }
 }

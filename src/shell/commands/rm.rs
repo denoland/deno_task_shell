@@ -25,8 +25,8 @@ impl ShellCommand for RmCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        rm_command(&context.cwd, context.args, context.stderr),
-        context.token
+        rm_command(context.state.cwd(), context.args, context.stderr),
+        context.state.token()
       )
     }
     .boxed_local()
