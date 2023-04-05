@@ -101,6 +101,9 @@ impl ShellState {
           self.shell_vars.insert(name.to_string(), value.to_string());
         }
       }
+      EnvChange::UnsetVar(name) => {
+        self.env_vars.remove(name);
+      }
       EnvChange::Cd(new_dir) => {
         self.set_cwd(new_dir);
       }
@@ -150,6 +153,8 @@ pub enum EnvChange {
   SetEnvVar(String, String),
   // `ENV_VAR=VALUE`
   SetShellVar(String, String),
+  // `unset ENV_VAR`
+  UnsetVar(String),
   Cd(PathBuf),
 }
 
