@@ -12,6 +12,7 @@ mod mkdir;
 mod pwd;
 mod rm;
 mod sleep;
+mod unset;
 mod xargs;
 
 use std::collections::HashMap;
