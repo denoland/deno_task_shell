@@ -116,6 +116,8 @@ pub async fn commands() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  TestBuilder::new().command("unset").run().await;
 }
 
 #[tokio::test]
