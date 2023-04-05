@@ -44,7 +44,7 @@ async fn cp_command(
   match execute_cp(cwd, args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("cp: {err}")).unwrap();
+      let _ = stderr.write_line(&format!("cp: {err}"));
       ExecuteResult::from_exit_code(1)
     }
   }
@@ -186,7 +186,7 @@ async fn mv_command(
   match execute_mv(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      stderr.write_line(&format!("mv: {err}")).unwrap();
+      let _ = stderr.write_line(&format!("mv: {err}"));
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

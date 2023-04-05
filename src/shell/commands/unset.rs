@@ -24,7 +24,7 @@ impl ShellCommand for UnsetCommand {
         Vec::new(),
       ),
       Err(err) => {
-        context.stderr.write_line(&format!("unset: {err}")).unwrap();
+        let _ = context.stderr.write_line(&format!("unset: {err}"));
         ExecuteResult::Continue(1, Vec::new(), Vec::new())
       }
     };

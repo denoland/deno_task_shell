@@ -40,7 +40,7 @@ async fn mkdir_command(
   match execute_mkdir(cwd, args).await {
     Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
     Err(err) => {
-      stderr.write_line(&format!("mkdir: {err}")).unwrap();
+      let _ = stderr.write_line(&format!("mkdir: {err}"));
       ExecuteResult::Continue(1, Vec::new(), Vec::new())
     }
   }

@@ -40,7 +40,7 @@ async fn sleep_command(
   match execute_sleep(args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("sleep: {err}")).unwrap();
+      let _ = stderr.write_line(&format!("sleep: {err}"));
       ExecuteResult::from_exit_code(1)
     }
   }
