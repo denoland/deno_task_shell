@@ -102,6 +102,7 @@ impl ShellState {
         }
       }
       EnvChange::UnsetVar(name) => {
+        self.shell_vars.remove(name);
         self.env_vars.remove(name);
       }
       EnvChange::Cd(new_dir) => {
