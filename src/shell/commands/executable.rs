@@ -35,7 +35,7 @@ impl ShellCommand for ExecutableCommand {
         }) {
           Ok(command_path) => command_path,
           Err(err) => {
-            stderr.write_line(&err.to_string()).unwrap();
+            let _ = stderr.write_line(&err.to_string());
             return ExecuteResult::Continue(1, Vec::new(), Vec::new());
           }
         };
@@ -72,7 +72,7 @@ impl ShellCommand for ExecutableCommand {
             Vec::new(),
           ),
           Err(err) => {
-            stderr.write_line(&format!("{err}")).unwrap();
+            let _ = stderr.write_line(&format!("{err}"));
             ExecuteResult::Continue(1, Vec::new(), Vec::new())
           }
         },

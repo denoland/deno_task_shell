@@ -41,7 +41,7 @@ async fn rm_command(
   match execute_remove(cwd, args).await {
     Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("rm: {err}")).unwrap();
+      let _ = stderr.write_line(&format!("rm: {err}"));
       ExecuteResult::from_exit_code(1)
     }
   }
