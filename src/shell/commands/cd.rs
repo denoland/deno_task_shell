@@ -29,7 +29,7 @@ impl ShellCommand for CdCommand {
         ExecuteResult::Continue(0, vec![EnvChange::Cd(new_dir)], Vec::new())
       }
       Err(err) => {
-        _ = context.stderr.write_line(&format!("cd: {err}"));
+        let _ = context.stderr.write_line(&format!("cd: {err}"));
         ExecuteResult::Continue(1, Vec::new(), Vec::new())
       }
     };
