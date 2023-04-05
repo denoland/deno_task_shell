@@ -124,11 +124,7 @@ impl ShellState {
       }
     } else {
       self.shell_vars.remove(&name);
-      if value.is_empty() {
-        self.env_vars.remove(&name);
-      } else {
-        self.env_vars.insert(name, value.to_string());
-      }
+      self.env_vars.insert(name, value.to_string());
     }
   }
 

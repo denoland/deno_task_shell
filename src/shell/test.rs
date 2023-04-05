@@ -66,6 +66,14 @@ pub async fn commands() {
     .await;
 
   TestBuilder::new()
+    .command(
+      r#"EMPTY= deno eval 'console.log(`EMPTY: ${Deno.env.get("EMPTY")}`)'"#,
+    )
+    .assert_stdout("EMPTY: \n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .command(r#""echo" "1""#)
     .assert_stdout("1\n")
     .run()
