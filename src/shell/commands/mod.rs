@@ -83,6 +83,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
       Rc::new(ExitCodeCommand(1)) as Rc<dyn ShellCommand>,
     ),
     (
+      "unset".to_string(),
+      Rc::new(unset::UnsetCommand) as Rc<dyn ShellCommand>,
+    ),
+    (
       "xargs".to_string(),
       Rc::new(xargs::XargsCommand) as Rc<dyn ShellCommand>,
     ),
