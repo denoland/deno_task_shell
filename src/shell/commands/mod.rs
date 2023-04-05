@@ -12,6 +12,7 @@ mod mkdir;
 mod pwd;
 mod rm;
 mod sleep;
+mod unset;
 mod xargs;
 
 use std::collections::HashMap;
@@ -80,6 +81,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
     (
       "false".to_string(),
       Rc::new(ExitCodeCommand(1)) as Rc<dyn ShellCommand>,
+    ),
+    (
+      "unset".to_string(),
+      Rc::new(unset::UnsetCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "xargs".to_string(),

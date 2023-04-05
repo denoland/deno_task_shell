@@ -116,6 +116,8 @@ pub async fn commands() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  TestBuilder::new().command("unset").run().await;
 }
 
 #[tokio::test]
@@ -767,6 +769,82 @@ pub async fn rm() {
       "rm: cannot remove 'file.txt': {}\n",
       no_such_file_error_text()
     ))
+    .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+// Basic integration tests as there are unit tests in the commands
+#[tokio::test]
+pub async fn unset() {
+  // Unset 1 shell variable
+  TestBuilder::new()
+    .command(
+      r#"VAR1=1 && VAR2=2 && VAR3=3 && unset VAR1 && echo $VAR1 $VAR2 $VAR3"#,
+    )
+    .assert_stdout("2 3\n")
+    .run()
+    .await;
+
+  // Unset 1 env variable
+  TestBuilder::new()
+    .command(r#"export VAR1=1 VAR2=2 VAR3=3 && unset VAR1 && deno eval 'for (let i = 1; i <= 3; i++) { const val = Deno.env.get(`VAR${i}`); console.log(val); }'"#)
+    .assert_stdout("undefined\n2\n3\n")
+    .run()
+    .await;
+
+  // Unset 2 shell variables
+  TestBuilder::new()
+    .command(
+      r#"VAR1=1 && VAR2=2 && VAR3=3 && unset VAR1 VAR2 && echo $VAR1 $VAR2 $VAR3"#,
+    )
+    .assert_stdout("3\n")
+    .run()
+    .await;
+
+  // Unset 2 env variables
+  TestBuilder::new()
+    .command(r#"export VAR1=1 VAR2=2 VAR3=3 && unset VAR1 VAR2 && deno eval 'for (let i = 1; i <= 3; i++) { const val = Deno.env.get(`VAR${i}`); console.log(val); }'"#)
+    .assert_stdout("undefined\nundefined\n3\n")
+    .run()
+    .await;
+
+  // Unset 2 shell variables with -v enabled
+  TestBuilder::new()
+    .command(
+      r#"VAR1=1 && VAR2=2 && VAR3=3 && unset -v VAR1 VAR2 && echo $VAR1 $VAR2 $VAR3"#,
+    )
+    .assert_stdout("3\n")
+    .run()
+    .await;
+
+  // Unset 1 env variable with -v enabled
+  TestBuilder::new()
+    .command(r#"export VAR1=1 VAR2=2 VAR3=3 && unset -v VAR1 && deno eval 'for (let i = 1; i <= 3; i++) { const val = Deno.env.get(`VAR${i}`); console.log(val); }'"#)
+    .assert_stdout("undefined\n2\n3\n")
+    .run()
+    .await;
+
+  // Unset 2 env variables with -v enabled
+  TestBuilder::new()
+    .command(r#"export VAR1=1 VAR2=2 VAR3=3 && unset -v VAR1 VAR2 && deno eval 'for (let i = 1; i <= 3; i++) { const val = Deno.env.get(`VAR${i}`); console.log(val); }'"#)
+    .assert_stdout("undefined\nundefined\n3\n")
+    .run()
+    .await;
+
+  // Unset 1 shell variable and 1 env variable at the same time
+  TestBuilder::new()
+    .command(
+      r#"VAR=1 && export ENV_VAR=2 && unset VAR ENV_VAR && echo $VAR $ENV_VAR"#,
+    )
+    .assert_stdout("\n")
+    .run()
+    .await;
+
+  // -f is not supported
+  TestBuilder::new()
+    .command(r#"export VAR=42 && unset -f VAR"#)
+    .assert_stderr("unset: unsupported flag: -f\n")
     .assert_exit_code(1)
     .run()
     .await;
