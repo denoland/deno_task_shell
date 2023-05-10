@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use anyhow::Result;
 use futures::future;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
@@ -195,7 +194,7 @@ fn execute_sequence(
   mut state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  stderr: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
   // requires boxed async because of recursive async
   async move {
@@ -204,7 +203,12 @@ fn execute_sequence(
         0,
         vec![EnvChange::SetShellVar(
           var.name,
-          evaluate_word(var.value, &state, stdin, stderr).await,
+          match evaluate_word(var.value, &state, stdin, stderr.clone()).await {
+            Ok(value) => value,
+            Err(err) => {
+              return err.into_exit_code(&mut stderr);
+            }
+          },
         )],
         Vec::new(),
       ),
@@ -322,6 +326,12 @@ async fn resolve_redirect_pipe(
     stderr.clone(),
   )
   .await;
+  let words = match words {
+    Ok(word) => word,
+    Err(err) => {
+      return Err(err.into_exit_code(stderr));
+    }
+  };
   // edge case that's not supported
   if words.is_empty() {
     let _ = stderr.write_line("redirect path must be 1 argument, but found 0");
@@ -493,17 +503,27 @@ async fn execute_simple_command(
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
-  stderr: ShellPipeWriter,
+  mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   let args =
     evaluate_args(command.args, &state, stdin.clone(), stderr.clone()).await;
+  let args = match args {
+    Ok(args) => args,
+    Err(err) => {
+      return err.into_exit_code(&mut stderr);
+    }
+  };
   let mut state = state.clone();
   for env_var in command.env_vars {
-    state.apply_env_var(
-      &env_var.name,
-      &evaluate_word(env_var.value, &state, stdin.clone(), stderr.clone())
-        .await,
-    );
+    let value =
+      evaluate_word(env_var.value, &state, stdin.clone(), stderr.clone()).await;
+    let value = match value {
+      Ok(value) => value,
+      Err(err) => {
+        return err.into_exit_code(&mut stderr);
+      }
+    };
+    state.apply_env_var(&env_var.name, &value);
   }
   execute_command_args(args, state, stdin, stdout, stderr).await
 }
@@ -561,7 +581,7 @@ async fn evaluate_args(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> Vec<String> {
+) -> Result<Vec<String>, EvaluateWordTextError> {
   let mut result = Vec::new();
   for arg in args {
     let parts = evaluate_word_parts(
@@ -570,10 +590,10 @@ async fn evaluate_args(
       stdin.clone(),
       stderr.clone(),
     )
-    .await;
+    .await?;
     result.extend(parts);
   }
-  result
+  Ok(result)
 }
 
 async fn evaluate_word(
@@ -581,10 +601,40 @@ async fn evaluate_word(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> String {
-  evaluate_word_parts(word.into_parts(), state, stdin, stderr)
-    .await
-    .join(" ")
+) -> Result<String, EvaluateWordTextError> {
+  Ok(
+    evaluate_word_parts(word.into_parts(), state, stdin, stderr)
+      .await?
+      .join(" "),
+  )
+}
+
+enum EvaluateWordTextError {
+  InvalidPattern {
+    pattern: String,
+    err: glob::PatternError,
+  },
+  NoFilesMatched {
+    pattern: String,
+  },
+}
+
+impl EvaluateWordTextError {
+  pub fn message(&self) -> String {
+    match self {
+      EvaluateWordTextError::InvalidPattern { pattern, err } => {
+        format!("glob: no matches found '{pattern}'. {err}")
+      }
+      EvaluateWordTextError::NoFilesMatched { pattern } => {
+        format!("glob: no matches found '{pattern}'")
+      }
+    }
+  }
+
+  pub fn into_exit_code(self, stderr: &mut ShellPipeWriter) -> ExecuteResult {
+    let _ = stderr.write_line(&self.message());
+    ExecuteResult::from_exit_code(1)
+  }
 }
 
 fn evaluate_word_parts(
@@ -592,71 +642,209 @@ fn evaluate_word_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> LocalBoxFuture<Vec<String>> {
-  // recursive async, so requires boxing
-  async move {
-    let mut result = Vec::new();
-    let mut current_text = String::new();
-    for part in parts {
-      let evaluation_result_text = match part {
-        WordPart::Text(text) => {
-          current_text.push_str(&text);
-          None
-        }
-        WordPart::Variable(name) => state.get_var(&name).map(|v| v.to_string()),
-        WordPart::Command(list) => Some(
-          evaluate_command_substitution(
-            list,
-            // contain cancellation to the command substitution
-            &state.with_child_token(),
-            stdin.clone(),
-            stderr.clone(),
-          )
-          .await,
-        ),
-        WordPart::Quoted(parts) => {
-          let text =
-            evaluate_word_parts(parts, state, stdin.clone(), stderr.clone())
-              .await
-              .join(" ");
-          current_text.push_str(&text);
-          continue;
-        }
-      };
+) -> LocalBoxFuture<Result<Vec<String>, EvaluateWordTextError>> {
+  enum TextPart {
+    Quoted(String),
+    Text(String),
+  }
 
-      // This text needs to be turned into a vector of strings.
-      // For now we do a very basic string split on whitespace, but in the future
-      // we should continue to improve this functionality.
-      if let Some(text) = evaluation_result_text {
-        let mut parts = text
-          .split(' ')
-          .map(|p| p.trim())
-          .filter(|p| !p.is_empty())
-          .collect::<Vec<_>>();
-
-        if !parts.is_empty() {
-          // append the first part to the current text
-          let first_part = parts.remove(0);
-          current_text.push_str(first_part);
-
-          // store the current text
-          result.push(current_text);
-
-          // store all the parts
-          result.extend(parts.into_iter().map(|p| p.to_string()));
-
-          // use the last part as the current text so it maybe
-          // gets appended to in the future
-          current_text = result.pop().unwrap();
-        }
+  impl TextPart {
+    pub fn as_str(&self) -> &str {
+      match self {
+        TextPart::Quoted(text) => text,
+        TextPart::Text(text) => text,
       }
     }
-    if !current_text.is_empty() {
-      result.push(current_text);
+  }
+
+  fn text_parts_to_string(parts: Vec<TextPart>) -> String {
+    let mut result =
+      String::with_capacity(parts.iter().map(|p| p.as_str().len()).sum());
+    for part in parts {
+      result.push_str(part.as_str());
     }
     result
   }
-  .boxed_local()
+
+  fn evaluate_word_text(
+    state: &ShellState,
+    text_parts: Vec<TextPart>,
+    is_quoted: bool,
+  ) -> Result<Vec<String>, EvaluateWordTextError> {
+    if !is_quoted
+      && text_parts
+        .iter()
+        .filter_map(|p| match p {
+          TextPart::Quoted(_) => None,
+          TextPart::Text(text) => Some(text.as_str()),
+        })
+        .any(|text| text.chars().any(|c| matches!(c, '?' | '*' | '[')))
+    {
+      let mut current_text = String::new();
+      for text_part in text_parts {
+        match text_part {
+          TextPart::Quoted(text) => {
+            for c in text.chars() {
+              match c {
+                '?' | '*' | '[' | ']' => {
+                  // escape because it was quoted
+                  current_text.push('[');
+                  current_text.push(c);
+                  current_text.push(']');
+                }
+                _ => current_text.push(c),
+              }
+            }
+          }
+          TextPart::Text(text) => {
+            current_text.push_str(&text);
+          }
+        }
+      }
+      let is_absolute = std::path::PathBuf::from(&current_text).is_absolute();
+      let cwd = state.cwd();
+      let pattern = if is_absolute {
+        current_text
+      } else {
+        format!("{}/{}", cwd.display(), current_text)
+      };
+      let result = glob::glob_with(
+        &pattern,
+        glob::MatchOptions {
+          // false because it should work the same way on case insensitive file systems
+          case_sensitive: false,
+          // true because it copies what sh does
+          require_literal_separator: true,
+          // true because it copies with sh does—these files are considered "hidden"
+          require_literal_leading_dot: true,
+        },
+      );
+      match result {
+        Ok(paths) => {
+          let paths =
+            paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
+          if paths.is_empty() {
+            Err(EvaluateWordTextError::NoFilesMatched { pattern })
+          } else {
+            let paths = if is_absolute {
+              paths
+                .into_iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+            } else {
+              paths
+                .into_iter()
+                .map(|p| {
+                  let path = p.strip_prefix(cwd).unwrap();
+                  path.display().to_string()
+                })
+                .collect::<Vec<_>>()
+            };
+            Ok(paths)
+          }
+        }
+        Err(err) => Err(EvaluateWordTextError::InvalidPattern { pattern, err }),
+      }
+    } else {
+      Ok(vec![text_parts_to_string(text_parts)])
+    }
+  }
+
+  fn evaluate_word_parts_inner(
+    parts: Vec<WordPart>,
+    is_quoted: bool,
+    state: &ShellState,
+    stdin: ShellPipeReader,
+    stderr: ShellPipeWriter,
+  ) -> LocalBoxFuture<Result<Vec<String>, EvaluateWordTextError>> {
+    // recursive async, so requires boxing
+    async move {
+      let mut result = Vec::new();
+      let mut current_text = Vec::new();
+      for part in parts {
+        let evaluation_result_text = match part {
+          WordPart::Text(text) => {
+            current_text.push(TextPart::Text(text));
+            None
+          }
+          WordPart::Variable(name) => {
+            state.get_var(&name).map(|v| v.to_string())
+          }
+          WordPart::Command(list) => Some(
+            evaluate_command_substitution(
+              list,
+              // contain cancellation to the command substitution
+              &state.with_child_token(),
+              stdin.clone(),
+              stderr.clone(),
+            )
+            .await,
+          ),
+          WordPart::Quoted(parts) => {
+            let text = evaluate_word_parts_inner(
+              parts,
+              true,
+              state,
+              stdin.clone(),
+              stderr.clone(),
+            )
+            .await?
+            .join(" ");
+
+            current_text.push(TextPart::Quoted(text));
+            continue;
+          }
+        };
+
+        // This text needs to be turned into a vector of strings.
+        // For now we do a very basic string split on whitespace, but in the future
+        // we should continue to improve this functionality.
+        if let Some(text) = evaluation_result_text {
+          let mut parts = text
+            .split(' ')
+            .map(|p| p.trim())
+            .filter(|p| !p.is_empty())
+            .map(|p| TextPart::Text(p.to_string()))
+            .collect::<Vec<_>>();
+
+          if !parts.is_empty() {
+            // append the first part to the current text
+            let first_part = parts.remove(0);
+            current_text.push(first_part);
+
+            if !parts.is_empty() {
+              // evaluate and store the current text
+              result.extend(evaluate_word_text(
+                state,
+                current_text,
+                is_quoted,
+              )?);
+
+              // store all the parts except the last one
+              for part in parts.drain(..parts.len() - 1) {
+                result.extend(evaluate_word_text(
+                  state,
+                  vec![part],
+                  is_quoted,
+                )?);
+              }
+
+              // use the last part as the current text so it maybe
+              // gets appended to in the future
+              current_text = parts;
+            }
+          }
+        }
+      }
+      if !current_text.is_empty() {
+        result.extend(evaluate_word_text(state, current_text, is_quoted)?);
+      }
+      Ok(result)
+    }
+    .boxed_local()
+  }
+
+  evaluate_word_parts_inner(parts, false, state, stdin, stderr)
 }
 
 async fn evaluate_command_substitution(

@@ -17,6 +17,7 @@ serialization = ["serde"]
 [dependencies]
 anyhow = "1.0.55"
 futures = { version = "0.3.16", optional = true }
+glob = "0.3.1"
 path-dedot = { version = "3.0.17", optional = true }
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
 tokio-util = { version = "0.7.4", optional = true }
