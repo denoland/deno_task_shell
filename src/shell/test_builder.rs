@@ -76,7 +76,6 @@ pub struct TestBuilder {
 impl TestBuilder {
   pub fn new() -> Self {
     let env_vars = std::env::vars()
-      .into_iter()
       .map(|(key, value)| {
         // For some very strange reason, key will sometimes be cased as "Path"
         // or other times "PATH" on Windows. Since keys are case-insensitive on
