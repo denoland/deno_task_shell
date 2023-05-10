@@ -1055,6 +1055,15 @@ async fn glob_basic() {
     .await;
 
   TestBuilder::new()
+    .directory("dir")
+    .file("dir/1.txt", "1\n")
+    .file("dir_1.txt", "2\n")
+    .command("cat dir*1.txt")
+    .assert_stdout("2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts")

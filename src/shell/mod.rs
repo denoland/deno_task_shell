@@ -713,9 +713,9 @@ fn evaluate_word_parts(
         glob::MatchOptions {
           // false because it should work the same way on case insensitive file systems
           case_sensitive: false,
-          // todo: evaluate
-          require_literal_separator: false,
-          // true because it copies with sh does. These files are considered "hidden"
+          // true because it copies what sh does
+          require_literal_separator: true,
+          // true because it copies with sh does—these files are considered "hidden"
           require_literal_leading_dot: true,
         },
       );
