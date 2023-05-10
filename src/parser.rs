@@ -750,7 +750,7 @@ fn parse_word_parts(
         if_true(next_char, |&c| match mode {
           ParseWordPartsMode::DoubleQuotes => c != '"',
           ParseWordPartsMode::Unquoted => {
-            !c.is_whitespace() && !"*~(){}<>?|&;\"'".contains(c)
+            !c.is_whitespace() && !"~(){}<>|&;\"'".contains(c)
           }
         }),
         PendingPart::Char,
@@ -866,14 +866,7 @@ fn is_reserved_word(text: &str) -> bool {
 }
 
 fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
-  if input.starts_with('*') || input.starts_with('?') {
-    ParseErrorFailure::new(
-      input,
-      "Globs are currently not supported, but will be soon.",
-    )
-  } else {
-    ParseErrorFailure::new(input, "Unexpected character.")
-  }
+  ParseErrorFailure::new(input, "Unexpected character.")
 }
 
 #[cfg(test)]
@@ -892,22 +885,8 @@ mod test {
       parse("test { test").err().unwrap().to_string(),
       concat!("Unexpected character.\n", "  { test\n", "  ~",),
     );
-    assert_eq!(
-      parse("cp test/* other").err().unwrap().to_string(),
-      concat!(
-        "Globs are currently not supported, but will be soon.\n",
-        "  * other\n",
-        "  ~",
-      ),
-    );
-    assert_eq!(
-      parse("cp test/? other").err().unwrap().to_string(),
-      concat!(
-        "Globs are currently not supported, but will be soon.\n",
-        "  ? other\n",
-        "  ~",
-      ),
-    );
+    assert!(parse("cp test/* other").is_ok());
+    assert!(parse("cp test/? other").is_ok());
     assert_eq!(
       parse("(test").err().unwrap().to_string(),
       concat!(

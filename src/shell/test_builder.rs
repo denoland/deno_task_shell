@@ -115,6 +115,10 @@ impl TestBuilder {
     self.temp_dir.as_mut().unwrap()
   }
 
+  pub fn temp_dir_path(&mut self) -> PathBuf {
+    self.get_temp_dir().cwd.clone()
+  }
+
   pub fn command(&mut self, command: &str) -> &mut Self {
     self.command = command.to_string();
     self

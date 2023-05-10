@@ -8,7 +8,7 @@ use super::types::ExecuteResult;
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
 #[tokio::test]
-pub async fn commands() {
+async fn commands() {
   TestBuilder::new()
     .command("echo 1")
     .assert_stdout("1\n")
@@ -121,7 +121,7 @@ pub async fn commands() {
 }
 
 #[tokio::test]
-pub async fn boolean_logic() {
+async fn boolean_logic() {
   TestBuilder::new()
     .command("echo 1 && echo 2 || echo 3")
     .assert_stdout("1\n2\n")
@@ -148,7 +148,7 @@ pub async fn boolean_logic() {
 }
 
 #[tokio::test]
-pub async fn exit() {
+async fn exit() {
   TestBuilder::new()
     .command("exit 1")
     .assert_exit_code(1)
@@ -194,7 +194,7 @@ pub async fn exit() {
 }
 
 #[tokio::test]
-pub async fn async_commands() {
+async fn async_commands() {
   TestBuilder::new()
     .command("sleep 0.1 && echo 2 & echo 1")
     .assert_stdout("1\n2\n")
@@ -267,7 +267,7 @@ pub async fn async_commands() {
 }
 
 #[tokio::test]
-pub async fn command_substition() {
+async fn command_substition() {
   TestBuilder::new()
     .command("echo $(echo 1)")
     .assert_stdout("1\n")
@@ -295,7 +295,7 @@ pub async fn command_substition() {
 }
 
 #[tokio::test]
-pub async fn shell_variables() {
+async fn shell_variables() {
   TestBuilder::new()
     .command(r#"echo $VAR && VAR=1 && echo $VAR && deno eval 'console.log(Deno.env.get("VAR"))'"#)
     .assert_stdout("\n1\nundefined\n")
@@ -317,7 +317,7 @@ pub async fn shell_variables() {
 }
 
 #[tokio::test]
-pub async fn env_variables() {
+async fn env_variables() {
   TestBuilder::new()
     .command(r#"echo $VAR && export VAR=1 && echo $VAR && deno eval 'console.log(Deno.env.get("VAR"))'"#)
     .assert_stdout("\n1\n1\n")
@@ -332,7 +332,7 @@ pub async fn env_variables() {
 }
 
 #[tokio::test]
-pub async fn sequential_lists() {
+async fn sequential_lists() {
   TestBuilder::new()
     .command(r#"echo 1 ; sleep 0.1 && echo 4 & echo 2 ; echo 3;"#)
     .assert_stdout("1\n2\n3\n4\n")
@@ -341,7 +341,7 @@ pub async fn sequential_lists() {
 }
 
 #[tokio::test]
-pub async fn pipeline() {
+async fn pipeline() {
   TestBuilder::new()
     .command(r#"echo 1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
     .assert_stdout("1\n")
@@ -412,7 +412,7 @@ pub async fn pipeline() {
 }
 
 #[tokio::test]
-pub async fn negated() {
+async fn negated() {
   TestBuilder::new()
     .command(r#"! echo 1 && echo 2"#)
     .assert_stdout("1\n")
@@ -463,7 +463,7 @@ pub async fn negated() {
 }
 
 #[tokio::test]
-pub async fn redirects() {
+async fn redirects() {
   TestBuilder::new()
     .command(r#"echo 5 6 7 > test.txt"#)
     .assert_file_equals("test.txt", "5 6 7\n")
@@ -565,7 +565,7 @@ pub async fn redirects() {
 }
 
 #[tokio::test]
-pub async fn pwd() {
+async fn pwd() {
   TestBuilder::new()
     .directory("sub_dir")
     .file("file.txt", "test")
@@ -587,7 +587,7 @@ pub async fn pwd() {
 
 #[tokio::test]
 #[cfg(unix)]
-pub async fn pwd_logical() {
+async fn pwd_logical() {
   TestBuilder::new()
     .directory("main")
     .command("ln -s main symlinked_main && cd symlinked_main && pwd && pwd -L")
@@ -597,7 +597,7 @@ pub async fn pwd_logical() {
 }
 
 #[tokio::test]
-pub async fn cat() {
+async fn cat() {
   // no args
   TestBuilder::new()
     .command("cat")
@@ -662,7 +662,7 @@ pub async fn cat() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn mv() {
+async fn mv() {
   // single file
   TestBuilder::new()
     .command("mv file1.txt file2.txt")
@@ -698,7 +698,7 @@ pub async fn mv() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn cp() {
+async fn cp() {
   // single file
   TestBuilder::new()
     .command("cp file1.txt file2.txt")
@@ -734,7 +734,7 @@ pub async fn cp() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn mkdir() {
+async fn mkdir() {
   TestBuilder::new()
     .command("mkdir sub_dir")
     .assert_exists("sub_dir")
@@ -753,7 +753,7 @@ pub async fn mkdir() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn rm() {
+async fn rm() {
   TestBuilder::new()
     .command("mkdir sub_dir && rm -d sub_dir && rm file.txt")
     .file("file.txt", "")
@@ -776,7 +776,7 @@ pub async fn rm() {
 
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
-pub async fn unset() {
+async fn unset() {
   // Unset 1 shell variable
   TestBuilder::new()
     .command(
@@ -851,7 +851,7 @@ pub async fn unset() {
 }
 
 #[tokio::test]
-pub async fn xargs() {
+async fn xargs() {
   TestBuilder::new()
     .command("echo '1   2   3  ' | xargs")
     .assert_stdout("1 2 3\n")
@@ -917,7 +917,7 @@ VAR2="other"
 }
 
 #[tokio::test]
-pub async fn stdin() {
+async fn stdin() {
   TestBuilder::new()
     .command(r#"deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)" && deno eval "const b = new Uint8Array(1);Deno.stdin.readSync(b);console.log(b)""#)
     .stdin("12345")
@@ -935,7 +935,7 @@ pub async fn stdin() {
 
 #[cfg(windows)]
 #[tokio::test]
-pub async fn windows_resolve_command() {
+async fn windows_resolve_command() {
   // not cross platform, but still allow this
   TestBuilder::new()
     .command("deno.exe eval 'console.log(1)'")
@@ -953,7 +953,7 @@ pub async fn windows_resolve_command() {
 }
 
 #[tokio::test]
-pub async fn custom_command() {
+async fn custom_command() {
   // not cross platform, but still allow this
   TestBuilder::new()
     .command("add 1 2")
@@ -972,6 +972,185 @@ pub async fn custom_command() {
       }),
     )
     .assert_stderr("3\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn glob_basic() {
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat *.txt")
+    .assert_stdout("test\ntest2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat test?.txt")
+    .assert_stdout("test2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("testa.txt", "testa\n")
+    .file("test2.txt", "test2\n")
+    .command("cat test[0-9].txt")
+    .assert_stdout("test2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("testa.txt", "testa\n")
+    .file("test2.txt", "test2\n")
+    .command("cat test[!a-z].txt")
+    .assert_stdout("test2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("testa.txt", "testa\n")
+    .file("test2.txt", "test2\n")
+    .command("cat test[a-z].txt")
+    .assert_stdout("testa\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .directory("sub_dir/sub")
+    .file("sub_dir/sub/1.txt", "1\n")
+    .file("sub_dir/2.txt", "2\n")
+    .file("sub_dir/other.ts", "other\n")
+    .file("3.txt", "3\n")
+    .command("cat */*.txt")
+    .assert_stdout("2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .directory("sub_dir/sub")
+    .file("sub_dir/sub/1.txt", "1\n")
+    .file("sub_dir/2.txt", "2\n")
+    .file("sub_dir/other.ts", "other\n")
+    .file("3.txt", "3\n")
+    .command("cat **/*.txt")
+    .assert_stdout("3\n2\n1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .directory("sub_dir/sub")
+    .file("sub_dir/sub/1.txt", "1\n")
+    .file("sub_dir/2.txt", "2\n")
+    .file("sub_dir/other.ts", "other\n")
+    .file("3.txt", "3\n")
+    .command("cat $PWD/**/*.txt")
+    .assert_stdout("3\n2\n1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat *.ts")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  let mut builder = TestBuilder::new();
+  let temp_dir_path = builder.temp_dir_path();
+  let error_pos = temp_dir_path.to_string_lossy().len() + 1;
+  builder.file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat [].ts")
+    .assert_stderr(&format!("glob: no matches found '$TEMP_DIR/[].ts'. Pattern syntax error near position {}: invalid range pattern\n", error_pos))
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat *.ts || echo 2")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_stdout("2\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .file("test2.txt", "test2\n")
+    .command("cat *.ts 2> /dev/null || echo 2")
+    .assert_stderr("")
+    .assert_stdout("2\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn glob_case_insensitive() {
+  TestBuilder::new()
+    .file("TEST.txt", "test\n")
+    .file("testa.txt", "testa\n")
+    .file("test2.txt", "test2\n")
+    .command("cat tes*.txt")
+    .assert_stdout("test\ntest2\ntesta\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn glob_escapes() {
+  // no escape
+  TestBuilder::new()
+    .file("[test].txt", "test\n")
+    .file("t.txt", "t\n")
+    .command("cat [test].txt")
+    .assert_stdout("t\n")
+    .run()
+    .await;
+
+  // escape
+  TestBuilder::new()
+    .file("[test].txt", "test\n")
+    .file("t.txt", "t\n")
+    .command("cat [[]test[]].txt")
+    .assert_stdout("test\n")
+    .run()
+    .await;
+
+  // single quotes
+  TestBuilder::new()
+    .file("[test].txt", "test\n")
+    .file("t.txt", "t\n")
+    .command("cat '[test].txt'")
+    .assert_stdout("test\n")
+    .run()
+    .await;
+
+  // double quotes
+  TestBuilder::new()
+    .file("[test].txt", "test\n")
+    .file("t.txt", "t\n")
+    .command("cat \"[test].txt\"")
+    .assert_stdout("test\n")
+    .run()
+    .await;
+
+  // mix
+  TestBuilder::new()
+    .file("[test].txt", "test\n")
+    .file("t.txt", "t\n")
+    .command("cat \"[\"test\"]\".txt")
+    .assert_stdout("test\n")
     .run()
     .await;
 }
