@@ -193,7 +193,7 @@ impl ExecuteResult {
 }
 
 /// Reader side of a pipe.
-pub struct ShellPipeReader(os_pipe::PipeReader);
+pub struct ShellPipeReader(pub os_pipe::PipeReader);
 
 impl Clone for ShellPipeReader {
   fn clone(&self) -> Self {
@@ -345,10 +345,4 @@ impl ShellPipeWriter {
     let bytes = format!("{line}\n");
     self.write_all(bytes.as_bytes())
   }
-}
-
-/// Used to communicate between commands.
-pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
-  let (reader, writer) = os_pipe::pipe().unwrap();
-  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
 }

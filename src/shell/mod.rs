@@ -35,7 +35,6 @@ use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
-use crate::shell::types::pipe;
 
 use self::types::CANCELLATION_EXIT_CODE;
 
@@ -48,6 +47,20 @@ mod test;
 #[cfg(test)]
 mod test_builder;
 
+/// Executes a `SequentialList` of commands in a deno_task_shell environment.
+///
+/// This function accepts a list of commands, a map of environment variables, the current working directory,
+/// and a map of custom shell commands. It sets up the shell state and then calls `execute_with_pipes`
+/// with the standard input, output, and error streams.
+///
+/// # Arguments
+/// * `list` - A `SequentialList` of commands to execute.
+/// * `env_vars` - A map of environment variables which are set in the shell.
+/// * `cwd` - The current working directory.
+/// * `custom_commands` - A map of custom shell commands and there ShellCommand implementation.
+///
+/// # Returns
+/// The exit code of the command execution.
 pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<String, String>,
@@ -65,7 +78,24 @@ pub async fn execute(
   .await
 }
 
-pub(crate) async fn execute_with_pipes(
+/// Executes a `SequentialList` of commands with specified input and output pipes.
+///
+/// This function accepts a list of commands, a shell state, and pipes for standard input, output, and error.
+/// This function allows the user to retrive the data outputted by the execution and act on it using code.
+/// This is made public for the use-case of running tests with shell execution in application depending on the library.
+///
+/// # Arguments
+///
+/// * `list` - A `SequentialList` of commands to execute.
+/// * `state` - The current state of the shell, including environment variables and the current directory.
+/// * `stdin` - A reader for the standard input stream.
+/// * `stdout` - A writer for the standard output stream.
+/// * `stderr` - A writer for the standard error stream.
+///
+/// # Returns
+///
+/// The exit code of the command execution.
+pub async fn execute_with_pipes(
   list: SequentialList,
   state: ShellState,
   stdin: ShellPipeReader,
@@ -891,4 +921,29 @@ async fn execute_with_stdout_as_text(
   let _ = spawned_output.await;
   let data = output_handle.await.unwrap();
   String::from_utf8_lossy(&data).to_string()
+}
+
+/// Used to communicate between commands.
+pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
+  let (reader, writer) = os_pipe::pipe().unwrap();
+  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
+}
+
+/// Creates and returns a new `ShellPipeWriter` and its associated output handler.
+///
+/// The output handler reads from the writer, stores the data in a buffer, and converts that buffer to a `String`.
+/// This function is useful when reading the output of an execution, in for instance tests.
+///
+/// # Returns
+///
+/// * A `ShellPipeWriter` for writing to the pipe.
+/// * A `JoinHandle<String>` that will return the output when awaited.
+pub fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
+  let (stdout_reader, stdout_writer) = pipe();
+  let stdout_handle = tokio::task::spawn_blocking(|| {
+    let mut buf = Vec::new();
+    stdout_reader.pipe_to(&mut buf).unwrap();
+    String::from_utf8_lossy(&buf).to_string()
+  });
+  (stdout_writer, stdout_handle)
 }

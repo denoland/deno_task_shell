@@ -7,16 +7,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
-use tokio::task::JoinHandle;
 
-use crate::execute_with_pipes;
 use crate::parser::parse;
 use crate::shell::fs_util;
-use crate::shell::types::pipe;
-use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
+use crate::{execute_with_pipes, get_output_writer_and_handle, pipe};
 
 use super::types::ExecuteResult;
 
@@ -276,14 +273,4 @@ impl TestBuilder {
       }
     }
   }
-}
-
-fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
-  let (stdout_reader, stdout_writer) = pipe();
-  let stdout_handle = tokio::task::spawn_blocking(|| {
-    let mut buf = Vec::new();
-    stdout_reader.pipe_to(&mut buf).unwrap();
-    String::from_utf8_lossy(&buf).to_string()
-  });
-  (stdout_writer, stdout_handle)
 }
