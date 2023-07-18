@@ -262,6 +262,16 @@ impl ShellPipeReader {
       ShellPipeWriter::Null => Ok(()),
     }
   }
+
+  /// Pipes the reader to a string handle that is resolved when the pipe's
+  /// writer is closed.
+  pub fn pipe_to_string_handle(self) -> JoinHandle<String> {
+    tokio::task::spawn_blocking(|| {
+      let mut buf = Vec::new();
+      self.pipe_to(&mut buf).unwrap();
+      String::from_utf8_lossy(&buf).to_string()
+    })
+  }
 }
 
 /// Writer side of a pipe.
