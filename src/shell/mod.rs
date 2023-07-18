@@ -933,7 +933,8 @@ async fn execute_with_stdout_as_text(
 ///
 /// * A `ShellPipeWriter` for writing to the pipe.
 /// * A `JoinHandle<String>` that will return the output when awaited.
-pub fn writer_and_string_handle() -> (ShellPipeWriter, JoinHandle<String>) {
+pub fn pipe_writer_with_string_output() -> (ShellPipeWriter, JoinHandle<String>)
+{
   let (stdout_reader, stdout_writer) = pipe();
   let stdout_handle = tokio::task::spawn_blocking(|| {
     let mut buf = Vec::new();
