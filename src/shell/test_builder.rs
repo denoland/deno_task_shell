@@ -7,15 +7,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use tokio::task::JoinHandle;
 
 use crate::execute_with_pipes;
 use crate::parser::parse;
 use crate::pipe;
-use crate::pipe_writer_with_string_output;
+use crate::pipe_reader_to_string_handle;
 use crate::shell::fs_util;
 use crate::shell::types::ShellState;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
+use crate::ShellPipeWriter;
 
 use super::types::ExecuteResult;
 
@@ -209,8 +211,8 @@ impl TestBuilder {
     let (stdin, mut stdin_writer) = pipe();
     stdin_writer.write_all(&self.stdin).unwrap();
     drop(stdin_writer); // prevent a deadlock by dropping the writer
-    let (stdout, stdout_handle) = pipe_writer_with_string_output();
-    let (stderr, stderr_handle) = pipe_writer_with_string_output();
+    let (stdout, stdout_handle) = get_output_writer_and_handle();
+    let (stderr, stderr_handle) = get_output_writer_and_handle();
 
     let local_set = tokio::task::LocalSet::new();
     let state = ShellState::new(
@@ -275,4 +277,10 @@ impl TestBuilder {
       }
     }
   }
+}
+
+fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
+  let (reader, writer) = pipe();
+  let handle = reader.pipe_to_string_handle();
+  (writer, handle)
 }

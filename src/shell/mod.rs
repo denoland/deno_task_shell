@@ -923,23 +923,3 @@ async fn execute_with_stdout_as_text(
   let data = output_handle.await.unwrap();
   String::from_utf8_lossy(&data).to_string()
 }
-
-/// Creates and returns a new `ShellPipeWriter` and its associated output handler.
-///
-/// The output handler reads from the writer, stores the data in a buffer, and converts that buffer to a `String`.
-/// This function is useful when reading the output of an execution, in for instance tests.
-///
-/// # Returns
-///
-/// * A `ShellPipeWriter` for writing to the pipe.
-/// * A `JoinHandle<String>` that will return the output when awaited.
-pub fn pipe_writer_with_string_output() -> (ShellPipeWriter, JoinHandle<String>)
-{
-  let (stdout_reader, stdout_writer) = pipe();
-  let stdout_handle = tokio::task::spawn_blocking(|| {
-    let mut buf = Vec::new();
-    stdout_reader.pipe_to(&mut buf).unwrap();
-    String::from_utf8_lossy(&buf).to_string()
-  });
-  (stdout_writer, stdout_handle)
-}
