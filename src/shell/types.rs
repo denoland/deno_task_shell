@@ -346,3 +346,9 @@ impl ShellPipeWriter {
     self.write_all(bytes.as_bytes())
   }
 }
+
+/// Used to communicate between commands.
+pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
+  let (reader, writer) = os_pipe::pipe().unwrap();
+  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
+}

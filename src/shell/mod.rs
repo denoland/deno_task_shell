@@ -14,6 +14,7 @@ pub use crate::shell::commands::ExecutableCommand;
 pub use crate::shell::commands::ExecuteCommandArgsContext;
 pub use crate::shell::commands::ShellCommand;
 pub use crate::shell::commands::ShellCommandContext;
+pub use crate::shell::types::pipe;
 pub use crate::shell::types::EnvChange;
 pub use crate::shell::types::ExecuteResult;
 pub use crate::shell::types::FutureExecuteResult;
@@ -923,12 +924,6 @@ async fn execute_with_stdout_as_text(
   String::from_utf8_lossy(&data).to_string()
 }
 
-/// Used to communicate between commands.
-pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
-  let (reader, writer) = os_pipe::pipe().unwrap();
-  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
-}
-
 /// Creates and returns a new `ShellPipeWriter` and its associated output handler.
 ///
 /// The output handler reads from the writer, stores the data in a buffer, and converts that buffer to a `String`.
@@ -938,7 +933,7 @@ pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
 ///
 /// * A `ShellPipeWriter` for writing to the pipe.
 /// * A `JoinHandle<String>` that will return the output when awaited.
-pub fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
+pub fn writer_and_string_handle() -> (ShellPipeWriter, JoinHandle<String>) {
   let (stdout_reader, stdout_writer) = pipe();
   let stdout_handle = tokio::task::spawn_blocking(|| {
     let mut buf = Vec::new();

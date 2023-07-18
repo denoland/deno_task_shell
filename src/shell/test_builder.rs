@@ -8,12 +8,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use crate::execute_with_pipes;
 use crate::parser::parse;
+use crate::pipe;
 use crate::shell::fs_util;
 use crate::shell::types::ShellState;
+use crate::writer_and_string_handle;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use crate::{execute_with_pipes, get_output_writer_and_handle, pipe};
 
 use super::types::ExecuteResult;
 
@@ -207,8 +209,8 @@ impl TestBuilder {
     let (stdin, mut stdin_writer) = pipe();
     stdin_writer.write_all(&self.stdin).unwrap();
     drop(stdin_writer); // prevent a deadlock by dropping the writer
-    let (stdout, stdout_handle) = get_output_writer_and_handle();
-    let (stderr, stderr_handle) = get_output_writer_and_handle();
+    let (stdout, stdout_handle) = writer_and_string_handle();
+    let (stderr, stderr_handle) = writer_and_string_handle();
 
     let local_set = tokio::task::LocalSet::new();
     let state = ShellState::new(
