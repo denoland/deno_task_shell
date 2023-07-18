@@ -193,7 +193,7 @@ impl ExecuteResult {
 }
 
 /// Reader side of a pipe.
-pub struct ShellPipeReader(pub os_pipe::PipeReader);
+pub struct ShellPipeReader(os_pipe::PipeReader);
 
 impl Clone for ShellPipeReader {
   fn clone(&self) -> Self {

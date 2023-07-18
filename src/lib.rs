@@ -3,7 +3,7 @@
 pub mod parser;
 
 #[cfg(feature = "shell")]
-pub mod shell;
+mod shell;
 
 #[cfg(feature = "shell")]
 pub use shell::*;
