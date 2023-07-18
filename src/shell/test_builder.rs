@@ -11,13 +11,12 @@ use tokio::task::JoinHandle;
 
 use crate::execute_with_pipes;
 use crate::parser::parse;
-use crate::pipe;
-use crate::pipe_reader_to_string_handle;
 use crate::shell::fs_util;
+use crate::shell::types::pipe;
+use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use crate::ShellPipeWriter;
 
 use super::types::ExecuteResult;
 
