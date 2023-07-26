@@ -674,6 +674,7 @@ fn evaluate_word_parts(
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
 ) -> LocalBoxFuture<Result<Vec<String>, EvaluateWordTextError>> {
+  #[derive(Debug)]
   enum TextPart {
     Quoted(String),
     Text(String),
