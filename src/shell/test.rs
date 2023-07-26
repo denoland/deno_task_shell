@@ -1102,6 +1102,14 @@ async fn glob_basic() {
     .assert_exit_code(0)
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("echo --inspect='[::0]:3366'")
+    .assert_stderr("")
+    .assert_stdout("--inspect=[::0]:3366\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
 }
 
 #[tokio::test]

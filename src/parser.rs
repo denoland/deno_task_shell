@@ -758,7 +758,10 @@ fn parse_word_parts(
       |input| match mode {
         ParseWordPartsMode::DoubleQuotes => ParseError::backtrace(),
         ParseWordPartsMode::Unquoted => {
-          let (input, parts) = parse_quoted_string(input)?;
+          let (input, parts) =
+            map(parse_quoted_string, |parts| vec![WordPart::Quoted(parts)])(
+              input,
+            )?;
           Ok((input, PendingPart::Parts(parts)))
         }
       },
@@ -1313,6 +1316,18 @@ mod test {
       parse_quoted_string,
       "'  ",
       Err("Expected closing single quote."),
+    );
+  }
+
+  #[test]
+  fn test_single_quotes_mid_word() {
+    run_test(
+      parse_word,
+      "--inspect='[::0]:3366'",
+      Ok(Word(vec![
+        WordPart::Text("--inspect=".to_string()),
+        WordPart::Quoted(vec![WordPart::Text("[::0]:3366".to_string())]),
+      ])),
     );
   }
 
