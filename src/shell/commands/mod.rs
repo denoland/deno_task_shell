@@ -8,6 +8,7 @@ mod echo;
 mod executable;
 mod exit;
 mod export;
+mod head;
 mod mkdir;
 mod pwd;
 mod rm;
