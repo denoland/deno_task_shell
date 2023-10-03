@@ -49,17 +49,19 @@ fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
       return Ok(ExecuteResult::for_cancellation());
     }
     let read_bytes = read(&mut buffer)?;
-    let mut split_lines = buffer.split(|&b| b == b'\n');
     if read_bytes == 0 {
       break;
     }
+
     if cancellation_token.is_cancelled() {
       return Ok(ExecuteResult::for_cancellation());
     }
+
     let mut written_bytes: usize = 0;
-    while let Some(line) = split_lines.next() {
+    let split_lines = buffer[..read_bytes].split(|&b| b == b'\n');
+    for line in split_lines {
       if written_lines >= max_lines
-        || (written_bytes + line.len() + 1) > read_bytes
+        || (written_bytes + line.len()) >= read_bytes
       {
         break;
       }

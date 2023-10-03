@@ -56,6 +56,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
       Rc::new(export::ExportCommand) as Rc<dyn ShellCommand>,
     ),
     (
+      "head".to_string(),
+      Rc::new(head::HeadCommand) as Rc<dyn ShellCommand>,
+    ),
+    (
       "mkdir".to_string(),
       Rc::new(mkdir::MkdirCommand) as Rc<dyn ShellCommand>,
     ),
