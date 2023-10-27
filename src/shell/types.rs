@@ -272,6 +272,10 @@ impl ShellPipeReader {
       String::from_utf8_lossy(&buf).to_string()
     })
   }
+
+  pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    self.0.read(buf).map_err(|e| e.into())
+  }
 }
 
 /// Writer side of a pipe.

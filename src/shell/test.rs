@@ -660,6 +660,99 @@ async fn cat() {
     .await;
 }
 
+#[tokio::test]
+async fn head() {
+  // no args
+  TestBuilder::new()
+    .command("head")
+    .stdin(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\nplugh\n",
+    )
+    .assert_stdout(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\n",
+    )
+    .run()
+    .await;
+
+  // dash
+  TestBuilder::new()
+    .command("head -")
+    .stdin(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\nplugh\n",
+    )
+    .assert_stdout(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\n",
+    )
+    .run()
+    .await;
+
+  // file
+  TestBuilder::new()
+    .command("head file")
+    .file(
+      "file",
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\nplugh\n",
+    )
+    .assert_stdout(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\n",
+    )
+    .run()
+    .await;
+
+  // dash + longer than internal buffer (512)
+  TestBuilder::new()
+    .command("head -")
+    .stdin(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\nplugh\n"
+        .repeat(10)
+        .as_str(),
+    )
+    .assert_stdout(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\n",
+    )
+    .run()
+    .await;
+
+  // file + longer than internal buffer (512)
+  TestBuilder::new()
+    .command("head file")
+    .file(
+      "file",
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\nplugh\n"
+        .repeat(1024)
+        .as_str(),
+    )
+    .assert_stdout(
+      "foo\nbar\nbaz\nqux\nquuux\ncorge\ngrault\ngarply\nwaldo\nfred\n",
+    )
+    .run()
+    .await;
+
+  // shorter than 10 lines
+  TestBuilder::new()
+    .command("head")
+    .stdin("foo\nbar")
+    .assert_stdout("foo\nbar")
+    .run()
+    .await;
+
+  // -n
+  TestBuilder::new()
+    .command("head -n 2")
+    .stdin("foo\nbar\nbaz\nqux\nquuux")
+    .assert_stdout("foo\nbar\n")
+    .run()
+    .await;
+
+  // --lines
+  TestBuilder::new()
+    .command("head --lines=3")
+    .stdin("foo\nbar\nbaz\nqux\nquuux")
+    .assert_stdout("foo\nbar\nbaz\n")
+    .run()
+    .await;
+}
+
 // Basic integration tests as there are unit tests in the commands
 #[tokio::test]
 async fn mv() {

@@ -8,6 +8,7 @@ mod echo;
 mod executable;
 mod exit;
 mod export;
+mod head;
 mod mkdir;
 mod pwd;
 mod rm;
@@ -53,6 +54,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
     (
       "export".to_string(),
       Rc::new(export::ExportCommand) as Rc<dyn ShellCommand>,
+    ),
+    (
+      "head".to_string(),
+      Rc::new(head::HeadCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "mkdir".to_string(),
