@@ -1298,13 +1298,13 @@ mod test {
     );
     run_test(
       parse_quoted_string,
-      r#"'te\\'"#,
-      Ok(vec![WordPart::Text(r#"te\\"#.to_string())]),
+      r"'te\\'",
+      Ok(vec![WordPart::Text(r"te\\".to_string())]),
     );
     run_test_with_end(
       parse_quoted_string,
-      r#"'te\'st'"#,
-      Ok(vec![WordPart::Text(r#"te\"#.to_string())]),
+      r"'te\'st'",
+      Ok(vec![WordPart::Text(r"te\".to_string())]),
       "st'",
     );
     run_test(
