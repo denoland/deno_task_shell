@@ -183,7 +183,7 @@ fn execute_sequential_list(
     if async_command_behavior == AsyncCommandBehavior::Wait {
       final_exit_code = wait_handles(
         final_exit_code,
-        async_handles.drain(..).collect(),
+        std::mem::take(&mut async_handles),
         state.token().clone(),
       )
       .await;

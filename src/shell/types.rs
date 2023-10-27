@@ -7,7 +7,6 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
@@ -28,7 +27,7 @@ pub struct ShellState {
   /// not passed down to any sub commands.
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
-  commands: Arc<HashMap<String, Rc<dyn ShellCommand>>>,
+  commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
   /// Token to cancel execution.
   token: CancellationToken,
 }
@@ -46,7 +45,7 @@ impl ShellState {
       env_vars: Default::default(),
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
-      commands: Arc::new(commands),
+      commands: Rc::new(commands),
       token: CancellationToken::default(),
     };
     // ensure the data is normalized

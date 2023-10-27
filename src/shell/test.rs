@@ -28,7 +28,7 @@ async fn commands() {
     .await;
 
   TestBuilder::new()
-    .command(r#"echo 1 2\ \ \ 3"#)
+    .command(r"echo 1 2\ \ \ 3")
     .assert_stdout("1 2   3\n")
     .run()
     .await;
@@ -546,7 +546,7 @@ async fn redirects() {
 
   // multiple arguments after re-direct
   TestBuilder::new()
-    .command(r#"export TwoArgs=testing\ this && echo 1 > $TwoArgs"#)
+    .command(r"export TwoArgs=testing\ this && echo 1 > $TwoArgs")
     .assert_stderr(concat!(
       "redirect path must be 1 argument, but found 2 ",
       "(testing this). Did you mean to quote it (ex. \"testing this\")?\n"
