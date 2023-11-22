@@ -11,7 +11,7 @@ use futures::FutureExt;
 /// Errors for executable commands.
 #[derive(Debug, PartialEq)]
 enum ExecutableCommandError {
-  CommandNotFound(String),
+  CommandNotFound,
   CommandEmpty,
 }
 
@@ -40,8 +40,9 @@ impl ShellCommand for ExecutableCommand {
           Ok(std::env::current_exe()?)
         }) {
           Ok(command_path) => command_path,
-          Err(ExecutableCommandError::CommandNotFound(err)) => {
-            let _ = stderr.write_line(&format!("{}: command not found", err));
+          Err(ExecutableCommandError::CommandNotFound) => {
+            let _ = stderr
+              .write_line(&format!("{}: command not found", command_name));
             // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
             return ExecuteResult::Continue(127, Vec::new(), Vec::new());
           }
@@ -185,9 +186,7 @@ fn resolve_command_path(
       }
     }
   }
-  Err(ExecutableCommandError::CommandNotFound(
-    command_name.to_string(),
-  ))
+  Err(ExecutableCommandError::CommandNotFound)
 }
 
 #[cfg(test)]
@@ -223,12 +222,7 @@ mod local_test {
     // Command not found
     let result =
       resolve_command_path("foobar", &state, || Ok(PathBuf::from("/bin/deno")));
-    assert_eq!(
-      result,
-      Err(ExecutableCommandError::CommandNotFound(
-        "foobar".to_string()
-      ))
-    );
+    assert_eq!(result, Err(ExecutableCommandError::CommandNotFound));
     // Command empty
     let result =
       resolve_command_path("", &state, || Ok(PathBuf::from("/bin/deno")));
