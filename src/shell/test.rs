@@ -1268,7 +1268,7 @@ async fn glob_escapes() {
 #[tokio::test]
 async fn paren_escapes() {
   TestBuilder::new()
-    .command(r#"echo \( foo bar \)"#)
+    .command(r"echo \( foo bar \)")
     .assert_stdout("( foo bar )\n")
     .run()
     .await;
