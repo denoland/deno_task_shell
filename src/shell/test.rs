@@ -1265,6 +1265,15 @@ async fn glob_escapes() {
     .await;
 }
 
+#[tokio::test]
+async fn paren_escapes() {
+  TestBuilder::new()
+    .command(r#"echo \( foo bar \)"#)
+    .assert_stdout("( foo bar )\n")
+    .run()
+    .await;
+}
+
 fn no_such_file_error_text() -> &'static str {
   if cfg!(windows) {
     "The system cannot find the file specified. (os error 2)"
