@@ -43,7 +43,7 @@ impl ShellCommand for ExecutableCommand {
           Err(ExecutableCommandError::CommandNotFound(err)) => {
             let _ = stderr.write_line(&format!("{}: command not found", err));
             // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
-            return ExecuteResult::Exit(127, Vec::new());
+            return ExecuteResult::Continue(127, Vec::new(), Vec::new());
           }
           Err(ExecutableCommandError::CommandEmpty) => {
             let _ = stderr.write_line("command name was empty");
