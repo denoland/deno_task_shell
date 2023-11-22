@@ -4,10 +4,16 @@ use crate::shell::types::ShellState;
 use crate::ExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use anyhow::bail;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+
+/// Errors for executable commands.
+#[derive(Debug, PartialEq)]
+enum ExecutableCommandError {
+  CommandNotFound(String),
+  CommandEmpty,
+}
 
 /// Command that resolves the command name and
 /// executes it in a separate process.
@@ -34,8 +40,13 @@ impl ShellCommand for ExecutableCommand {
           Ok(std::env::current_exe()?)
         }) {
           Ok(command_path) => command_path,
-          Err(err) => {
-            let _ = stderr.write_line(&err.to_string());
+          Err(ExecutableCommandError::CommandNotFound(err)) => {
+            let _ = stderr.write_line(&format!("{}: command not found", err));
+            // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
+            return ExecuteResult::Exit(127, Vec::new());
+          }
+          Err(ExecutableCommandError::CommandEmpty) => {
+            let _ = stderr.write_line("command name was empty");
             return ExecuteResult::Continue(1, Vec::new(), Vec::new());
           }
         };
@@ -90,9 +101,9 @@ fn resolve_command_path(
   command_name: &str,
   state: &ShellState,
   current_exe: impl FnOnce() -> Result<PathBuf>,
-) -> Result<PathBuf> {
+) -> Result<PathBuf, ExecutableCommandError> {
   if command_name.is_empty() {
-    bail!("command name was empty");
+    return Err(ExecutableCommandError::CommandEmpty);
   }
 
   // Special handling to use the current executable for deno.
@@ -174,8 +185,9 @@ fn resolve_command_path(
       }
     }
   }
-
-  bail!("{}: command not found", command_name)
+  Err(ExecutableCommandError::CommandNotFound(
+    command_name.to_string(),
+  ))
 }
 
 #[cfg(test)]
@@ -199,5 +211,27 @@ mod local_test {
     })
     .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
+  }
+
+  #[test]
+  fn should_error_on_unknown_command() {
+    let state = ShellState::new(
+      Default::default(),
+      &std::env::current_dir().unwrap(),
+      Default::default(),
+    );
+    // Command not found
+    let result =
+      resolve_command_path("foobar", &state, || Ok(PathBuf::from("/bin/deno")));
+    assert_eq!(
+      result,
+      Err(ExecutableCommandError::CommandNotFound(
+        "foobar".to_string()
+      ))
+    );
+    // Command empty
+    let result =
+      resolve_command_path("", &state, || Ok(PathBuf::from("/bin/deno")));
+    assert_eq!(result, Err(ExecutableCommandError::CommandEmpty));
   }
 }
