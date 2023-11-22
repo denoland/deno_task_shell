@@ -113,7 +113,7 @@ async fn commands() {
     .command("deno eval 'console.log(1)'")
     .env_var("PATH", "")
     .assert_stderr("deno: command not found\n")
-    .assert_exit_code(1)
+    .assert_exit_code(127)
     .run()
     .await;
 
