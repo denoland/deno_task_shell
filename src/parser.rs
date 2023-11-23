@@ -709,11 +709,13 @@ fn parse_word_parts(
   fn first_escaped_char<'a>(
     mode: ParseWordPartsMode,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
-    or5(
+    or7(
       parse_special_shell_var,
       parse_escaped_dollar_sign,
       parse_escaped_char('`'),
       parse_escaped_char('"'),
+      parse_escaped_char('('),
+      parse_escaped_char(')'),
       if_true(parse_escaped_char('\''), move |_| {
         mode == ParseWordPartsMode::DoubleQuotes
       }),
