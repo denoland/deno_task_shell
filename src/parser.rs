@@ -257,7 +257,7 @@ pub enum WordPart {
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
 #[cfg_attr(
   feature = "serialization",
-  serde(rename_all = "camelCase", tag = "kind")
+  serde(rename_all = "camelCase", tag = "kind", content = "fd")
 )]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RedirectFd {
@@ -1555,5 +1555,127 @@ mod test {
       Err("Redirects in pipe sequence commands are currently not supported."),
       "echo 1 1> stdout.txt | cat",
     );
+  }
+
+  #[cfg(feature = "serialization")]
+  #[test]
+  fn serializes_command_to_json() {
+    assert_json_equals(
+      serialize_to_json("./example > output.txt"),
+      serde_json::json!({
+        "items": [{
+          "isAsync": false,
+          "sequence": {
+            "inner": {
+              "inner": {
+                "args": [[{
+                  "kind": "text",
+                  "value": "./example"
+                }]],
+                "envVars": [],
+                "kind": "simple"
+              },
+              "kind": "command",
+              "redirect": {
+                "ioFile": [{
+                  "kind": "text",
+                  "value": "output.txt"
+                }],
+                "maybeFd": null,
+                "op": "redirect"
+              }
+            },
+            "kind": "pipeline",
+            "negated": false
+          }
+        }]
+      }),
+    );
+    assert_json_equals(
+      serialize_to_json("./example 2> output.txt"),
+      serde_json::json!({
+        "items": [{
+          "isAsync": false,
+          "sequence": {
+            "inner": {
+              "inner": {
+                "args": [[{
+                  "kind": "text",
+                  "value": "./example"
+                }]],
+                "envVars": [],
+                "kind": "simple"
+              },
+              "kind": "command",
+              "redirect": {
+                "ioFile": [{
+                  "kind": "text",
+                  "value": "output.txt"
+                }],
+                "maybeFd": {
+                  "kind": "fd",
+                  "fd": 2,
+                },
+                "op": "redirect"
+              }
+            },
+            "kind": "pipeline",
+            "negated": false
+          }
+        }]
+      }),
+    );
+    assert_json_equals(
+      serialize_to_json("./example &> output.txt"),
+      serde_json::json!({
+        "items": [{
+          "isAsync": false,
+          "sequence": {
+            "inner": {
+              "inner": {
+                "args": [[{
+                  "kind": "text",
+                  "value": "./example"
+                }]],
+                "envVars": [],
+                "kind": "simple"
+              },
+              "kind": "command",
+              "redirect": {
+                "ioFile": [{
+                  "kind": "text",
+                  "value": "output.txt"
+                }],
+                "maybeFd": {
+                  "kind": "stdoutStderr"
+                },
+                "op": "redirect"
+              }
+            },
+            "kind": "pipeline",
+            "negated": false
+          }
+        }]
+      }),
+    );
+  }
+
+  #[cfg(feature = "serialization")]
+  #[track_caller]
+  fn assert_json_equals(
+    actual: serde_json::Value,
+    expected: serde_json::Value,
+  ) {
+    if actual != expected {
+      let actual = serde_json::to_string_pretty(&actual).unwrap();
+      let expected = serde_json::to_string_pretty(&expected).unwrap();
+      assert_eq!(actual, expected);
+    }
+  }
+
+  #[cfg(feature = "serialization")]
+  fn serialize_to_json(text: &str) -> serde_json::Value {
+    let command = parse(text).unwrap();
+    serde_json::to_value(command).unwrap()
   }
 }

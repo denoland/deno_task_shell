@@ -28,4 +28,5 @@ monch = "0.5.0"
 [dev-dependencies]
 parking_lot = "0.12.1"
 pretty_assertions = "1"
+serde_json = "1.0.111"
 tempfile = "3.8.1"
