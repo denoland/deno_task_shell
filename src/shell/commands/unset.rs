@@ -33,7 +33,7 @@ impl ShellCommand for UnsetCommand {
 }
 
 fn parse_names(mut args: Vec<String>) -> Result<Vec<String>> {
-  match args.get(0) {
+  match args.first() {
     None => {
       // Running the actual `unset` with no argument completes with success.
       Ok(args)
