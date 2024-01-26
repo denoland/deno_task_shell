@@ -1,4 +1,4 @@
-// Copyright 2018-2023 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
 
 use futures::FutureExt;
 
@@ -383,7 +383,7 @@ async fn pipeline() {
 
   TestBuilder::new()
     // add bit of a delay while outputting stdout so that it doesn't race with stderr
-    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval --unstable 'setTimeout(async () => { await Deno.stdin.readable.pipeTo(Deno.stderr.writable) }, 10)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
+    .command(r#"deno eval 'console.log(1); console.error(2);' | deno eval 'setTimeout(async () => { await Deno.stdin.readable.pipeTo(Deno.stderr.writable) }, 10)' |& deno eval 'await Deno.stdin.readable.pipeTo(Deno.stderr.writable)'"#)
     // still outputs 2 because the first command didn't pipe stderr
     .assert_stderr("2\n1\n")
     .run()
