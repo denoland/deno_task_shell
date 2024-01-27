@@ -10,6 +10,8 @@ use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::parser::RedirectOpInput;
+use crate::parser::RedirectOpOutput;
 pub use crate::shell::commands::ExecutableCommand;
 pub use crate::shell::commands::ExecuteCommandArgsContext;
 pub use crate::shell::commands::ShellCommand;
@@ -344,12 +346,35 @@ async fn execute_pipeline_inner(
   }
 }
 
+enum RedirectPipe {
+  Input(ShellPipeReader),
+  Output(ShellPipeWriter),
+}
+
 async fn resolve_redirect_pipe(
   redirect: &Redirect,
   state: &ShellState,
   stdin: &ShellPipeReader,
   stderr: &mut ShellPipeWriter,
-) -> Result<ShellPipeWriter, ExecuteResult> {
+) -> Result<RedirectPipe, ExecuteResult> {
+  fn handle_std_result(
+    output_path: &Path,
+    std_file_result: std::io::Result<std::fs::File>,
+    stderr: &mut ShellPipeWriter,
+  ) -> Result<std::fs::File, ExecuteResult> {
+    match std_file_result {
+      Ok(std_file) => Ok(std_file),
+      Err(err) => {
+        let _ = stderr.write_line(&format!(
+          "error opening file for redirect ({}). {:#}",
+          output_path.display(),
+          err
+        ));
+        Err(ExecuteResult::from_exit_code(1))
+      }
+    }
+  }
+
   let words = evaluate_word_parts(
     redirect.io_file.clone().into_parts(),
     state,
@@ -380,27 +405,31 @@ async fn resolve_redirect_pipe(
   }
   let output_path = &words[0];
 
-  // cross platform suppress output
-  if output_path == "/dev/null" {
-    return Ok(ShellPipeWriter::null());
-  }
-
-  let output_path = state.cwd().join(output_path);
-  let std_file_result = std::fs::OpenOptions::new()
-    .write(true)
-    .create(true)
-    .append(redirect.op == RedirectOp::Append)
-    .truncate(redirect.op != RedirectOp::Append)
-    .open(&output_path);
-  match std_file_result {
-    Ok(std_file) => Ok(ShellPipeWriter::from_std(std_file)),
-    Err(err) => {
-      let _ = stderr.write_line(&format!(
-        "error opening file for redirect ({}). {:#}",
-        output_path.display(),
-        err
-      ));
-      Err(ExecuteResult::from_exit_code(1))
+  match &redirect.op {
+    RedirectOp::Input(RedirectOpInput::Redirect) => {
+      let output_path = state.cwd().join(output_path);
+      let std_file_result =
+        std::fs::OpenOptions::new().read(true).open(&output_path);
+      handle_std_result(&output_path, std_file_result, stderr).map(|std_file| {
+        RedirectPipe::Input(ShellPipeReader::from_std(std_file))
+      })
+    }
+    RedirectOp::Output(op) => {
+      // cross platform suppress output
+      if output_path == "/dev/null" {
+        return Ok(RedirectPipe::Output(ShellPipeWriter::null()));
+      }
+      let output_path = state.cwd().join(output_path);
+      let is_append = *op == RedirectOpOutput::Append;
+      let std_file_result = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(is_append)
+        .truncate(!is_append)
+        .open(&output_path);
+      handle_std_result(&output_path, std_file_result, stderr).map(|std_file| {
+        RedirectPipe::Output(ShellPipeWriter::from_std(std_file))
+      })
     }
   }
 }
@@ -412,7 +441,7 @@ async fn execute_command(
   stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
-  let (stdout, stderr) = if let Some(redirect) = &command.redirect {
+  let (stdin, stdout, stderr) = if let Some(redirect) = &command.redirect {
     let pipe = match resolve_redirect_pipe(
       redirect,
       &state,
@@ -424,20 +453,30 @@ async fn execute_command(
       Ok(value) => value,
       Err(value) => return value,
     };
-
-    match redirect.maybe_fd {
-      Some(RedirectFd::Fd(2)) => (stdout, pipe),
-      Some(RedirectFd::Fd(1)) | None => (pipe, stderr),
-      Some(RedirectFd::Fd(_)) => {
-        let _ = stderr.write_line(
-          "only redirecting to stdout (1) and stderr (2) is supported",
-        );
-        return ExecuteResult::from_exit_code(1);
-      }
-      Some(RedirectFd::StdoutStderr) => (pipe.clone(), pipe),
+    match pipe {
+      RedirectPipe::Input(pipe) => match redirect.maybe_fd {
+        Some(_) => {
+          let _ = stderr.write_line(
+            "input redirects with file descriptors are not supported",
+          );
+          return ExecuteResult::from_exit_code(1);
+        }
+        None => (pipe, stdout, stderr),
+      },
+      RedirectPipe::Output(pipe) => match redirect.maybe_fd {
+        Some(RedirectFd::Fd(2)) => (stdin, stdout, pipe),
+        Some(RedirectFd::Fd(1)) | None => (stdin, pipe, stderr),
+        Some(RedirectFd::Fd(_)) => {
+          let _ = stderr.write_line(
+            "only redirecting to stdout (1) and stderr (2) is supported",
+          );
+          return ExecuteResult::from_exit_code(1);
+        }
+        Some(RedirectFd::StdoutStderr) => (stdin, pipe.clone(), pipe),
+      },
     }
   } else {
-    (stdout, stderr)
+    (stdin, stdout, stderr)
   };
   match command.inner {
     CommandInner::Simple(command) => {

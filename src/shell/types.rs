@@ -192,11 +192,17 @@ impl ExecuteResult {
 }
 
 /// Reader side of a pipe.
-pub struct ShellPipeReader(os_pipe::PipeReader);
+pub enum ShellPipeReader {
+  OsPipe(os_pipe::PipeReader),
+  StdFile(std::fs::File),
+}
 
 impl Clone for ShellPipeReader {
   fn clone(&self) -> Self {
-    Self(self.0.try_clone().unwrap())
+    match self {
+      Self::OsPipe(pipe) => Self::OsPipe(pipe.try_clone().unwrap()),
+      Self::StdFile(file) => Self::StdFile(file.try_clone().unwrap()),
+    }
   }
 }
 
@@ -206,11 +212,18 @@ impl ShellPipeReader {
   }
 
   pub fn from_raw(reader: os_pipe::PipeReader) -> Self {
-    Self(reader)
+    Self::OsPipe(reader)
+  }
+
+  pub fn from_std(std_file: std::fs::File) -> Self {
+    Self::StdFile(std_file)
   }
 
   pub fn into_stdio(self) -> std::process::Stdio {
-    self.0.into()
+    match self {
+      Self::OsPipe(pipe) => pipe.into(),
+      Self::StdFile(file) => file.into(),
+    }
   }
 
   /// Pipe everything to the specified writer
@@ -231,7 +244,10 @@ impl ShellPipeReader {
   ) -> Result<()> {
     loop {
       let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
-      let size = self.0.read(&mut buffer)?;
+      let size = match &mut self {
+        ShellPipeReader::OsPipe(pipe) => pipe.read(&mut buffer)?,
+        ShellPipeReader::StdFile(file) => file.read(&mut buffer)?,
+      };
       if size == 0 {
         break;
       }
@@ -273,7 +289,10 @@ impl ShellPipeReader {
   }
 
   pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-    self.0.read(buf).map_err(|e| e.into())
+    match self {
+      ShellPipeReader::OsPipe(pipe) => pipe.read(buf).map_err(|e| e.into()),
+      ShellPipeReader::StdFile(file) => file.read(buf).map_err(|e| e.into()),
+    }
   }
 }
 
@@ -363,5 +382,8 @@ impl ShellPipeWriter {
 /// Used to communicate between commands.
 pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
   let (reader, writer) = os_pipe::pipe().unwrap();
-  (ShellPipeReader(reader), ShellPipeWriter::OsPipe(writer))
+  (
+    ShellPipeReader::OsPipe(reader),
+    ShellPipeWriter::OsPipe(writer),
+  )
 }

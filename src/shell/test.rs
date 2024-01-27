@@ -463,7 +463,7 @@ async fn negated() {
 }
 
 #[tokio::test]
-async fn redirects() {
+async fn redirects_output() {
   TestBuilder::new()
     .command(r#"echo 5 6 7 > test.txt"#)
     .assert_file_equals("test.txt", "5 6 7\n")
@@ -560,6 +560,23 @@ async fn redirects() {
     .command(r#"echo 1 > $EMPTY"#)
     .assert_stderr("redirect path must be 1 argument, but found 0\n")
     .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn redirects_input() {
+  TestBuilder::new()
+    .file("test.txt", "Hi!")
+    .command(r#"cat - < test.txt"#)
+    .assert_stdout("Hi!")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .file("test.txt", "Hi!\n")
+    .command(r#"cat - < test.txt && echo There"#)
+    .assert_stdout("Hi!\nThere\n")
     .run()
     .await;
 }
