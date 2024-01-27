@@ -271,7 +271,20 @@ pub enum RedirectFd {
 pub struct Redirect {
   pub maybe_fd: Option<RedirectFd>,
   pub op: RedirectOp,
-  pub io_file: Word,
+  pub io_file: IoFile,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind", content = "value")
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IoFile {
+  /// Filename to redirect to/from (ex. `file.txt`` in `cmd < file.txt`)
+  Word(Word),
+  /// File descriptor to redirect to/from (ex. `2` in `cmd >&2`)
+  Fd(u32),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
@@ -564,10 +577,12 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
     map(or(tag(">"), tag(">|")), |_| {
       RedirectOp::Output(RedirectOpOutput::Overwrite)
     }),
-    map(tag("<"), |_| RedirectOp::Input(RedirectOpInput::Redirect)),
+    map(ch('<'), |_| RedirectOp::Input(RedirectOpInput::Redirect)),
   )(input)?;
-  let (input, _) = skip_whitespace(input)?;
-  let (input, io_file) = parse_word(input)?;
+  let (input, io_file) = or(
+    map(preceded(ch('&'), parse_u32), IoFile::Fd),
+    map(preceded(skip_whitespace, parse_word), IoFile::Word),
+  )(input)?;
 
   let maybe_fd = if let Some(fd) = maybe_fd {
     Some(RedirectFd::Fd(fd))
@@ -1458,6 +1473,7 @@ mod test {
     run_test(parse_u32, "4294967296", Err("backtrace"));
   }
 
+  #[track_caller]
   fn run_test<'a, T: PartialEq + std::fmt::Debug>(
     combinator: impl Fn(&'a str) -> ParseResult<'a, T>,
     input: &'a str,
@@ -1466,6 +1482,7 @@ mod test {
     run_test_with_end(combinator, input, expected, "");
   }
 
+  #[track_caller]
   fn run_test_with_end<'a, T: PartialEq + std::fmt::Debug>(
     combinator: impl Fn(&'a str) -> ParseResult<'a, T>,
     input: &'a str,
@@ -1503,7 +1520,9 @@ mod test {
       redirect: Some(Redirect {
         maybe_fd: None,
         op: RedirectOp::Output(RedirectOpOutput::Overwrite),
-        io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
+        io_file: IoFile::Word(Word(vec![WordPart::Text(
+          "test.txt".to_string(),
+        )])),
       }),
     });
 
@@ -1522,9 +1541,9 @@ mod test {
         redirect: Some(Redirect {
           maybe_fd: None,
           op: RedirectOp::Output(RedirectOpOutput::Append),
-          io_file: Word(vec![WordPart::Quoted(vec![WordPart::Text(
-            "test.txt".to_string(),
-          )])]),
+          io_file: IoFile::Word(Word(vec![WordPart::Quoted(vec![
+            WordPart::Text("test.txt".to_string()),
+          ])])),
         }),
       }),
     );
@@ -1541,7 +1560,9 @@ mod test {
         redirect: Some(Redirect {
           maybe_fd: Some(RedirectFd::Fd(2)),
           op: RedirectOp::Output(RedirectOpOutput::Overwrite),
-          io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
+          io_file: IoFile::Word(Word(vec![WordPart::Text(
+            "test.txt".to_string(),
+          )])),
         }),
       }),
     );
@@ -1558,7 +1579,43 @@ mod test {
         redirect: Some(Redirect {
           maybe_fd: Some(RedirectFd::StdoutStderr),
           op: RedirectOp::Output(RedirectOpOutput::Overwrite),
-          io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
+          io_file: IoFile::Word(Word(vec![WordPart::Text(
+            "test.txt".to_string(),
+          )])),
+        }),
+      }),
+    );
+
+    // output redirect to fd
+    run_test(
+      parse_command,
+      r#"command 2>&1"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![Word::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: Some(RedirectFd::Fd(2)),
+          op: RedirectOp::Output(RedirectOpOutput::Overwrite),
+          io_file: IoFile::Fd(1),
+        }),
+      }),
+    );
+
+    // input redirect to fd
+    run_test(
+      parse_command,
+      r#"command <&0"#,
+      Ok(Command {
+        inner: CommandInner::Simple(SimpleCommand {
+          env_vars: vec![],
+          args: vec![Word::new_word("command")],
+        }),
+        redirect: Some(Redirect {
+          maybe_fd: None,
+          op: RedirectOp::Input(RedirectOpInput::Redirect),
+          io_file: IoFile::Fd(0),
         }),
       }),
     );
@@ -1599,10 +1656,13 @@ mod test {
               },
               "kind": "command",
               "redirect": {
-                "ioFile": [{
-                  "kind": "text",
-                  "value": "output.txt"
-                }],
+                "ioFile": {
+                  "kind": "word",
+                  "value": [{
+                    "kind": "text",
+                    "value": "output.txt"
+                  }],
+                },
                 "maybeFd": null,
                 "op": {
                   "kind": "output",
@@ -1633,10 +1693,13 @@ mod test {
               },
               "kind": "command",
               "redirect": {
-                "ioFile": [{
-                  "kind": "text",
-                  "value": "output.txt"
-                }],
+                "ioFile": {
+                  "kind": "word",
+                  "value": [{
+                    "kind": "text",
+                    "value": "output.txt"
+                  }],
+                },
                 "maybeFd": {
                   "kind": "fd",
                   "fd": 2,
@@ -1670,10 +1733,13 @@ mod test {
               },
               "kind": "command",
               "redirect": {
-                "ioFile": [{
-                  "kind": "text",
-                  "value": "output.txt"
-                }],
+                "ioFile": {
+                  "kind": "word",
+                  "value": [{
+                    "kind": "text",
+                    "value": "output.txt"
+                  }],
+                },
                 "maybeFd": {
                   "kind": "stdoutStderr"
                 },
@@ -1706,10 +1772,48 @@ mod test {
               },
               "kind": "command",
               "redirect": {
-                "ioFile": [{
+                "ioFile": {
+                  "kind": "word",
+                  "value": [{
+                    "kind": "text",
+                    "value": "output.txt"
+                  }],
+                },
+                "maybeFd": null,
+                "op": {
+                  "kind": "input",
+                  "value": "redirect",
+                }
+              }
+            },
+            "kind": "pipeline",
+            "negated": false
+          }
+        }]
+      }),
+    );
+
+    assert_json_equals(
+      serialize_to_json("./example <&0"),
+      serde_json::json!({
+        "items": [{
+          "isAsync": false,
+          "sequence": {
+            "inner": {
+              "inner": {
+                "args": [[{
                   "kind": "text",
-                  "value": "output.txt"
-                }],
+                  "value": "./example"
+                }]],
+                "envVars": [],
+                "kind": "simple"
+              },
+              "kind": "command",
+              "redirect": {
+                "ioFile": {
+                  "kind": "fd",
+                  "value": 0,
+                },
                 "maybeFd": null,
                 "op": {
                   "kind": "input",

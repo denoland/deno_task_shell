@@ -10,6 +10,7 @@ use futures::FutureExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::parser::IoFile;
 use crate::parser::RedirectOpInput;
 use crate::parser::RedirectOpOutput;
 pub use crate::shell::commands::ExecutableCommand;
@@ -375,8 +376,17 @@ async fn resolve_redirect_pipe(
     }
   }
 
+  let word = match redirect.io_file.clone() {
+    IoFile::Word(word) => word,
+    IoFile::Fd(_) => {
+      let _ = stderr.write_line(
+        "deno_task_shell: redirecting file descriptors is not implemented",
+      );
+      return Err(ExecuteResult::from_exit_code(1));
+    }
+  };
   let words = evaluate_word_parts(
-    redirect.io_file.clone().into_parts(),
+    word.into_parts(),
     state,
     stdin.clone(),
     stderr.clone(),
