@@ -275,11 +275,30 @@ pub struct Redirect {
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
-#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[cfg_attr(
+  feature = "serialization",
+  serde(rename_all = "camelCase", tag = "kind", content = "value")
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RedirectOp {
-  /// >
+  Input(RedirectOpInput),
+  Output(RedirectOpOutput),
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedirectOpInput {
+  /// <
   Redirect,
+}
+
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedirectOpOutput {
+  /// >
+  Overwrite,
   /// >>
   Append,
 }
@@ -540,9 +559,12 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   } else {
     (input, None)
   };
-  let (input, op) = or(
-    map(tag(">>"), |_| RedirectOp::Append),
-    map(or(tag(">"), tag(">|")), |_| RedirectOp::Redirect),
+  let (input, op) = or3(
+    map(tag(">>"), |_| RedirectOp::Output(RedirectOpOutput::Append)),
+    map(or(tag(">"), tag(">|")), |_| {
+      RedirectOp::Output(RedirectOpOutput::Overwrite)
+    }),
+    map(tag("<"), |_| RedirectOp::Input(RedirectOpInput::Redirect)),
   )(input)?;
   let (input, _) = skip_whitespace(input)?;
   let (input, io_file) = parse_word(input)?;
@@ -1480,7 +1502,7 @@ mod test {
       }),
       redirect: Some(Redirect {
         maybe_fd: None,
-        op: RedirectOp::Redirect,
+        op: RedirectOp::Output(RedirectOpOutput::Overwrite),
         io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
       }),
     });
@@ -1499,7 +1521,7 @@ mod test {
         }),
         redirect: Some(Redirect {
           maybe_fd: None,
-          op: RedirectOp::Append,
+          op: RedirectOp::Output(RedirectOpOutput::Append),
           io_file: Word(vec![WordPart::Quoted(vec![WordPart::Text(
             "test.txt".to_string(),
           )])]),
@@ -1518,7 +1540,7 @@ mod test {
         }),
         redirect: Some(Redirect {
           maybe_fd: Some(RedirectFd::Fd(2)),
-          op: RedirectOp::Redirect,
+          op: RedirectOp::Output(RedirectOpOutput::Overwrite),
           io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
         }),
       }),
@@ -1535,7 +1557,7 @@ mod test {
         }),
         redirect: Some(Redirect {
           maybe_fd: Some(RedirectFd::StdoutStderr),
-          op: RedirectOp::Redirect,
+          op: RedirectOp::Output(RedirectOpOutput::Overwrite),
           io_file: Word(vec![WordPart::Text("test.txt".to_string())]),
         }),
       }),
@@ -1582,7 +1604,10 @@ mod test {
                   "value": "output.txt"
                 }],
                 "maybeFd": null,
-                "op": "redirect"
+                "op": {
+                  "kind": "output",
+                  "value": "overwrite",
+                }
               }
             },
             "kind": "pipeline",
@@ -1616,7 +1641,10 @@ mod test {
                   "kind": "fd",
                   "fd": 2,
                 },
-                "op": "redirect"
+                "op": {
+                  "kind": "output",
+                  "value": "overwrite",
+                }
               }
             },
             "kind": "pipeline",
@@ -1649,7 +1677,44 @@ mod test {
                 "maybeFd": {
                   "kind": "stdoutStderr"
                 },
-                "op": "redirect"
+                "op": {
+                  "kind": "output",
+                  "value": "overwrite",
+                }
+              }
+            },
+            "kind": "pipeline",
+            "negated": false
+          }
+        }]
+      }),
+    );
+    assert_json_equals(
+      serialize_to_json("./example < output.txt"),
+      serde_json::json!({
+        "items": [{
+          "isAsync": false,
+          "sequence": {
+            "inner": {
+              "inner": {
+                "args": [[{
+                  "kind": "text",
+                  "value": "./example"
+                }]],
+                "envVars": [],
+                "kind": "simple"
+              },
+              "kind": "command",
+              "redirect": {
+                "ioFile": [{
+                  "kind": "text",
+                  "value": "output.txt"
+                }],
+                "maybeFd": null,
+                "op": {
+                  "kind": "input",
+                  "value": "redirect",
+                }
               }
             },
             "kind": "pipeline",
