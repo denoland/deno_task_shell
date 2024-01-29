@@ -600,23 +600,6 @@ async fn redirects_input() {
 }
 
 #[tokio::test]
-async fn redirects_input() {
-  TestBuilder::new()
-    .file("test.txt", "Hi!")
-    .command(r#"cat - < test.txt"#)
-    .assert_stdout("Hi!")
-    .run()
-    .await;
-
-  TestBuilder::new()
-    .file("test.txt", "Hi!\n")
-    .command(r#"cat - < test.txt && echo There"#)
-    .assert_stdout("Hi!\nThere\n")
-    .run()
-    .await;
-}
-
-#[tokio::test]
 async fn pwd() {
   TestBuilder::new()
     .directory("sub_dir")
