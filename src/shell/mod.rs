@@ -172,6 +172,7 @@ fn execute_sequential_list(
           }
           ExecuteResult::Continue(exit_code, changes, handles) => {
             state.apply_changes(&changes);
+            state.apply_env_var("?", &exit_code.to_string());
             final_changes.extend(changes);
             async_handles.extend(handles);
             // use the final sequential item's exit code
