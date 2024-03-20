@@ -259,6 +259,7 @@ fn execute_sequence(
         let (exit_code, mut async_handles) = match first_result {
           ExecuteResult::Exit(_, _) => return first_result,
           ExecuteResult::Continue(exit_code, sub_changes, async_handles) => {
+            state.apply_env_var("?", &exit_code.to_string());
             state.apply_changes(&sub_changes);
             changes.extend(sub_changes);
             (exit_code, async_handles)
