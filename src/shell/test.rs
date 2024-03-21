@@ -332,6 +332,30 @@ async fn env_variables() {
 }
 
 #[tokio::test]
+async fn exit_code_var() {
+  TestBuilder::new()
+    .command(r#"echo $? ; echo $? ; false ; echo $?"#)
+    .assert_stdout("\n0\n1\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"(false || echo $?) && echo $?"#)
+    .assert_stdout("1\n0\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"! false && echo $?"#)
+    .assert_stdout("0\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(r#"(deno eval 'Deno.exit(25)') || echo $?"#)
+    .assert_stdout("25\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn sequential_lists() {
   TestBuilder::new()
     .command(r#"echo 1 ; sleep 0.1 && echo 4 & echo 2 ; echo 3;"#)

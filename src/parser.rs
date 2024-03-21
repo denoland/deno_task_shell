@@ -708,10 +708,9 @@ fn parse_word_parts(
     preceded(ch('$'), |input| {
       if let Some(char) = input.chars().next() {
         // $$ - process id
-        // $? - last exit code
         // $# - number of arguments in $*
         // $* - list of arguments passed to the current process
-        if "$?#*".contains(char) {
+        if "$#*".contains(char) {
           return ParseError::fail(
             input,
             format!("${char} is currently not supported."),
@@ -753,7 +752,10 @@ fn parse_word_parts(
     }
 
     let (input, parts) = many0(or7(
-      map(first_escaped_char(mode), PendingPart::Char),
+      or(
+        map(tag("$?"), |_| PendingPart::Variable("?")),
+        map(first_escaped_char(mode), PendingPart::Char),
+      ),
       map(parse_command_substitution, PendingPart::Command),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
@@ -1421,11 +1423,6 @@ mod test {
     );
     run_test(
       parse_unquoted_word,
-      "$?",
-      Err("$? is currently not supported."),
-    );
-    run_test(
-      parse_unquoted_word,
       "$#",
       Err("$# is currently not supported."),
     );
@@ -1458,6 +1455,7 @@ mod test {
     run_test(parse_u32, "4294967296", Err("backtrace"));
   }
 
+  #[track_caller]
   fn run_test<'a, T: PartialEq + std::fmt::Debug>(
     combinator: impl Fn(&'a str) -> ParseResult<'a, T>,
     input: &'a str,
@@ -1466,6 +1464,7 @@ mod test {
     run_test_with_end(combinator, input, expected, "");
   }
 
+  #[track_caller]
   fn run_test_with_end<'a, T: PartialEq + std::fmt::Debug>(
     combinator: impl Fn(&'a str) -> ParseResult<'a, T>,
     input: &'a str,
