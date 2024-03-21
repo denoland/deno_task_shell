@@ -349,6 +349,7 @@ async fn execute_pipeline_inner(
   }
 }
 
+#[derive(Debug)]
 enum RedirectPipe {
   Input(ShellPipeReader),
   Output(ShellPipeWriter),
@@ -356,6 +357,39 @@ enum RedirectPipe {
 
 async fn resolve_redirect_pipe(
   redirect: &Redirect,
+  state: &ShellState,
+  stdin: &ShellPipeReader,
+  stdout: &ShellPipeWriter,
+  stderr: &mut ShellPipeWriter,
+) -> Result<RedirectPipe, ExecuteResult> {
+  match redirect.io_file.clone() {
+    IoFile::Word(word) => {
+      resolve_redirect_word_pipe(word, &redirect.op, state, stdin, stderr).await
+    }
+    IoFile::Fd(fd) => match &redirect.op {
+      RedirectOp::Input(RedirectOpInput::Redirect) => {
+        let _ = stderr.write_line(
+            "deno_task_shell: input redirecting file descriptors is not implemented",
+          );
+        Err(ExecuteResult::from_exit_code(1))
+      }
+      RedirectOp::Output(_op) => match fd {
+        1 => Ok(RedirectPipe::Output(stdout.clone())),
+        2 => Ok(RedirectPipe::Output(stderr.clone())),
+        _ => {
+          let _ = stderr.write_line(
+            "deno_task_shell: output redirecting file descriptors beyond stdout and stderr is not implemented",
+          );
+          Err(ExecuteResult::from_exit_code(1))
+        }
+      },
+    },
+  }
+}
+
+async fn resolve_redirect_word_pipe(
+  word: Word,
+  redirect_op: &RedirectOp,
   state: &ShellState,
   stdin: &ShellPipeReader,
   stderr: &mut ShellPipeWriter,
@@ -378,15 +412,6 @@ async fn resolve_redirect_pipe(
     }
   }
 
-  let word = match redirect.io_file.clone() {
-    IoFile::Word(word) => word,
-    IoFile::Fd(_) => {
-      let _ = stderr.write_line(
-        "deno_task_shell: redirecting file descriptors is not implemented",
-      );
-      return Err(ExecuteResult::from_exit_code(1));
-    }
-  };
   let words = evaluate_word_parts(
     word.into_parts(),
     state,
@@ -417,7 +442,7 @@ async fn resolve_redirect_pipe(
   }
   let output_path = &words[0];
 
-  match &redirect.op {
+  match &redirect_op {
     RedirectOp::Input(RedirectOpInput::Redirect) => {
       let output_path = state.cwd().join(output_path);
       let std_file_result =
@@ -458,6 +483,7 @@ async fn execute_command(
       redirect,
       &state,
       &stdin,
+      &stdout,
       &mut stderr,
     )
     .await
@@ -465,6 +491,7 @@ async fn execute_command(
       Ok(value) => value,
       Err(value) => return value,
     };
+    eprintln!("PIPE: {:?}", pipe);
     match pipe {
       RedirectPipe::Input(pipe) => match redirect.maybe_fd {
         Some(_) => {
@@ -490,6 +517,7 @@ async fn execute_command(
   } else {
     (stdin, stdout, stderr)
   };
+  eprintln!("STDOUT: {:#?}", stdout);
   match command.inner {
     CommandInner::Simple(command) => {
       execute_simple_command(command, state, stdin, stdout, stderr).await

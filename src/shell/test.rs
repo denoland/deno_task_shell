@@ -588,11 +588,38 @@ async fn redirects_output() {
     .await;
 
   TestBuilder::new()
-    .command(r#"echo 1 >&2"#)
+    .command(r#"echo 1 >&3"#)
     .assert_stderr(
-      "deno_task_shell: redirecting file descriptors is not implemented\n",
+      "deno_task_shell: output redirecting file descriptors beyond stdout and stderr is not implemented\n",
     )
     .assert_exit_code(1)
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 >&1"#)
+    .assert_stdout(
+      "1\n",
+    )
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 >&2"#)
+    .assert_stderr(
+      "1\n",
+    )
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"deno eval 'console.error(2)' 2>&1"#)
+    .assert_stdout(
+      "2\n",
+    )
+    .assert_exit_code(0)
     .run()
     .await;
 }
@@ -616,7 +643,7 @@ async fn redirects_input() {
   TestBuilder::new()
     .command(r#"cat - <&0"#)
     .assert_stderr(
-      "deno_task_shell: redirecting file descriptors is not implemented\n",
+      "deno_task_shell: input redirecting file descriptors is not implemented\n",
     )
     .assert_exit_code(1)
     .run()
