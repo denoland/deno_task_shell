@@ -491,7 +491,6 @@ async fn execute_command(
       Ok(value) => value,
       Err(value) => return value,
     };
-    eprintln!("PIPE: {:?}", pipe);
     match pipe {
       RedirectPipe::Input(pipe) => match redirect.maybe_fd {
         Some(_) => {
@@ -517,7 +516,6 @@ async fn execute_command(
   } else {
     (stdin, stdout, stderr)
   };
-  eprintln!("STDOUT: {:#?}", stdout);
   match command.inner {
     CommandInner::Simple(command) => {
       execute_simple_command(command, state, stdin, stdout, stderr).await
