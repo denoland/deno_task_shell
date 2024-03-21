@@ -586,6 +586,15 @@ async fn redirects_output() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  TestBuilder::new()
+    .command(r#"echo 1 >&2"#)
+    .assert_stderr(
+      "deno_task_shell: redirecting file descriptors is not implemented\n",
+    )
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]
@@ -601,6 +610,15 @@ async fn redirects_input() {
     .file("test.txt", "Hi!\n")
     .command(r#"cat - < test.txt && echo There"#)
     .assert_stdout("Hi!\nThere\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r#"cat - <&0"#)
+    .assert_stderr(
+      "deno_task_shell: redirecting file descriptors is not implemented\n",
+    )
+    .assert_exit_code(1)
     .run()
     .await;
 }
