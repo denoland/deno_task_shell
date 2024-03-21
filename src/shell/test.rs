@@ -598,27 +598,21 @@ async fn redirects_output() {
 
   TestBuilder::new()
     .command(r#"echo 1 >&1"#)
-    .assert_stdout(
-      "1\n",
-    )
+    .assert_stdout("1\n")
     .assert_exit_code(0)
     .run()
     .await;
 
   TestBuilder::new()
     .command(r#"echo 1 >&2"#)
-    .assert_stderr(
-      "1\n",
-    )
+    .assert_stderr("1\n")
     .assert_exit_code(0)
     .run()
     .await;
 
   TestBuilder::new()
     .command(r#"deno eval 'console.error(2)' 2>&1"#)
-    .assert_stdout(
-      "2\n",
-    )
+    .assert_stdout("2\n")
     .assert_exit_code(0)
     .run()
     .await;
