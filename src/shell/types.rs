@@ -192,6 +192,7 @@ impl ExecuteResult {
 }
 
 /// Reader side of a pipe.
+#[derive(Debug)]
 pub enum ShellPipeReader {
   OsPipe(os_pipe::PipeReader),
   StdFile(std::fs::File),
@@ -300,6 +301,7 @@ impl ShellPipeReader {
 ///
 /// Ensure that all of these are dropped when complete in order to
 /// prevent deadlocks where the reader hangs waiting for a read.
+#[derive(Debug)]
 pub enum ShellPipeWriter {
   OsPipe(os_pipe::PipeWriter),
   StdFile(std::fs::File),
