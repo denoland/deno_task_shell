@@ -21,9 +21,8 @@ impl ShellCommand for ExitCommand {
     let result = match execute_exit(context.args) {
       Ok(code) => ExecuteResult::Exit(code, Vec::new()),
       Err(err) => {
-        // even if parsing args fails `exit` always exits
         context.stderr.write_line(&format!("exit: {err}")).unwrap();
-        ExecuteResult::Exit(1, Vec::new())
+        ExecuteResult::Exit(2, Vec::new())
       }
     };
     Box::pin(futures::future::ready(result))
