@@ -191,6 +191,13 @@ async fn exit() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  TestBuilder::new()
+    .command("exit bad args")
+    .assert_stderr("exit: too many arguments\n")
+    .assert_exit_code(2)
+    .run()
+    .await;
 }
 
 #[tokio::test]
