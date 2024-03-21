@@ -21,7 +21,6 @@ impl ShellCommand for ExitCommand {
     let result = match execute_exit(context.args) {
       Ok(code) => ExecuteResult::Exit(code, Vec::new()),
       Err(err) => {
-        // exit exits with exit code 2 on argument parse failure
         context.stderr.write_line(&format!("exit: {err}")).unwrap();
         ExecuteResult::Exit(2, Vec::new())
       }
