@@ -723,10 +723,9 @@ fn parse_word_parts(
     preceded(ch('$'), |input| {
       if let Some(char) = input.chars().next() {
         // $$ - process id
-        // $? - last exit code
         // $# - number of arguments in $*
         // $* - list of arguments passed to the current process
-        if "$?#*".contains(char) {
+        if "$#*".contains(char) {
           return ParseError::fail(
             input,
             format!("${char} is currently not supported."),
@@ -768,7 +767,10 @@ fn parse_word_parts(
     }
 
     let (input, parts) = many0(or7(
-      map(first_escaped_char(mode), PendingPart::Char),
+      or(
+        map(tag("$?"), |_| PendingPart::Variable("?")),
+        map(first_escaped_char(mode), PendingPart::Char),
+      ),
       map(parse_command_substitution, PendingPart::Command),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
@@ -1433,11 +1435,6 @@ mod test {
       parse_unquoted_word,
       "$$",
       Err("$$ is currently not supported."),
-    );
-    run_test(
-      parse_unquoted_word,
-      "$?",
-      Err("$? is currently not supported."),
     );
     run_test(
       parse_unquoted_word,
