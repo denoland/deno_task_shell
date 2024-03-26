@@ -1398,6 +1398,19 @@ async fn cross_platform_shebang() {
     .assert_stdout("Hello\n")
     .run()
     .await;
+
+  // arguments
+  TestBuilder::new()
+    .file(
+      "file.ts",
+      "#!/usr/bin/env -S deno run --allow-read\nconsole.log(Deno.args)\nconst text = Deno.readTextFileSync(import.meta.filename);\nconsole.log(text.length)\n",
+    )
+    .command("./file.ts 1 2 3")
+    .assert_stdout(r#"[ "1", "2", "3" ]
+146
+"#)
+    .run()
+    .await;
 }
 
 fn no_such_file_error_text() -> &'static str {
