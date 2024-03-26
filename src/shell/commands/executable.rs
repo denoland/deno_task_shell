@@ -1,3 +1,8 @@
+use std::borrow::Cow;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::shell::types::ShellState;
@@ -7,22 +12,22 @@ use crate::ShellCommandContext;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use thiserror::Error;
 
-/// Errors for executable commands.
-#[derive(Debug, PartialEq)]
-enum ExecutableCommandError {
-  CommandNotFound,
-  CommandEmpty,
+#[derive(Debug, Clone)]
+pub struct UnresolvedCommandName {
+  pub name: String,
+  pub base_dir: PathBuf,
 }
 
 /// Command that resolves the command name and
 /// executes it in a separate process.
 pub struct ExecutableCommand {
-  command_name: String,
+  command_name: UnresolvedCommandName,
 }
 
 impl ExecutableCommand {
-  pub fn new(command_name: String) -> Self {
+  pub fn new(command_name: UnresolvedCommandName) -> Self {
     Self { command_name }
   }
 }
@@ -30,32 +35,44 @@ impl ExecutableCommand {
 impl ShellCommand for ExecutableCommand {
   fn execute(
     &self,
-    context: ShellCommandContext,
+    mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     let command_name = self.command_name.clone();
     async move {
-      let mut stderr = context.stderr;
-      let command_path =
-        match resolve_command_path(&command_name, &context.state, || {
-          Ok(std::env::current_exe()?)
-        }) {
+      let command =
+        match resolve_command(&command_name, &context, &context.args).await {
           Ok(command_path) => command_path,
-          Err(ExecutableCommandError::CommandNotFound) => {
-            let _ = stderr
-              .write_line(&format!("{}: command not found", command_name));
-            // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
-            return ExecuteResult::Continue(127, Vec::new(), Vec::new());
+          Err(ResolveCommandError::CommandPath(err)) => {
+            let _ = context.stderr.write_line(&format!("{}", err));
+            return ExecuteResult::Continue(
+              err.exit_code(),
+              Vec::new(),
+              Vec::new(),
+            );
           }
-          Err(ExecutableCommandError::CommandEmpty) => {
-            let _ = stderr.write_line("command name was empty");
-            return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+          Err(ResolveCommandError::FailedShebang(err)) => {
+            let _ = context
+              .stderr
+              .write_line(&format!("{}: {}", command_name.name, err));
+            return ExecuteResult::Continue(
+              err.exit_code(),
+              Vec::new(),
+              Vec::new(),
+            );
           }
         };
-
+      let command_path = match command.command_name {
+        CommandName::Resolved(path) => path,
+        CommandName::Unresolved(command_name) => {
+          context.args = command.args.into_owned();
+          return ExecutableCommand::new(command_name).execute(context).await;
+        }
+      };
+      let mut stderr = context.stderr;
       let mut sub_command = tokio::process::Command::new(&command_path);
       let child = sub_command
         .current_dir(context.state.cwd())
-        .args(&context.args)
+        .args(command.args.iter())
         .env_clear()
         .envs(context.state.env_vars())
         .stdout(context.stdout.into_stdio())
@@ -67,7 +84,10 @@ impl ShellCommand for ExecutableCommand {
         Ok(child) => child,
         Err(err) => {
           stderr
-            .write_line(&format!("Error launching '{command_name}': {err}"))
+            .write_line(&format!(
+              "Error launching '{}': {}",
+              command_name.name, err
+            ))
             .unwrap();
           return ExecuteResult::Continue(1, Vec::new(), Vec::new());
         }
@@ -98,13 +118,167 @@ impl ShellCommand for ExecutableCommand {
   }
 }
 
+enum CommandName {
+  Resolved(PathBuf),
+  Unresolved(UnresolvedCommandName),
+}
+
+struct ResolvedCommand<'a> {
+  command_name: CommandName,
+  args: Cow<'a, Vec<String>>,
+}
+
+#[derive(Error, Debug)]
+enum ResolveCommandError {
+  #[error(transparent)]
+  CommandPath(#[from] ResolveCommandPathError),
+  #[error(transparent)]
+  FailedShebang(#[from] FailedShebangError),
+}
+
+#[derive(Error, Debug)]
+enum FailedShebangError {
+  #[error(transparent)]
+  CommandPath(#[from] ResolveCommandPathError),
+  #[error(transparent)]
+  Any(#[from] anyhow::Error),
+}
+
+impl FailedShebangError {
+  pub fn exit_code(&self) -> i32 {
+    match self {
+      FailedShebangError::CommandPath(err) => err.exit_code(),
+      FailedShebangError::Any(_) => 1,
+    }
+  }
+}
+
+async fn resolve_command<'a>(
+  command_name: &UnresolvedCommandName,
+  context: &ShellCommandContext,
+  original_args: &'a Vec<String>,
+) -> Result<ResolvedCommand<'a>, ResolveCommandError> {
+  let command_path =
+    match resolve_command_path(command_name, &context.state, || {
+      Ok(std::env::current_exe()?)
+    }) {
+      Ok(command_path) => command_path,
+      Err(err) => return Err(err.into()),
+    };
+
+  // only bother checking for a shebang when the path has a slash
+  // in it because for global commands someone on Windows likely
+  // won't have a script with a shebang in it on Windows
+  if command_name.name.chars().any(|c| matches!(c, '\\' | '/')) {
+    if let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
+      ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
+    })? {
+      let (shebang_command_name, mut args) = if shebang.string_split {
+        let mut args = parse_shebang_args(&shebang.command, context)
+          .await
+          .map_err(FailedShebangError::Any)?;
+        args.push(command_path.to_string_lossy().to_string());
+        (args.remove(0), args)
+      } else {
+        (
+          shebang.command,
+          vec![command_path.to_string_lossy().to_string()],
+        )
+      };
+      args.extend(original_args.iter().cloned());
+      return Ok(ResolvedCommand {
+        command_name: CommandName::Unresolved(UnresolvedCommandName {
+          name: shebang_command_name,
+          base_dir: command_path.parent().unwrap().to_path_buf(),
+        }),
+        args: Cow::Owned(args),
+      });
+    }
+  }
+
+  return Ok(ResolvedCommand {
+    command_name: CommandName::Resolved(command_path),
+    args: Cow::Borrowed(original_args),
+  });
+}
+
+async fn parse_shebang_args(
+  text: &str,
+  context: &ShellCommandContext,
+) -> Result<Vec<String>> {
+  fn err_unsupported() -> Result<Vec<String>> {
+    anyhow::bail!("unsupported shebang. Please report this as a bug.")
+  }
+
+  let mut args = crate::parser::parse(text)?;
+  if args.items.len() != 1 {
+    return err_unsupported();
+  }
+  let item = args.items.remove(0);
+  if item.is_async {
+    return err_unsupported();
+  }
+  let pipeline = match item.sequence {
+    crate::parser::Sequence::Pipeline(pipeline) => pipeline,
+    _ => return err_unsupported(),
+  };
+  if pipeline.negated {
+    return err_unsupported();
+  }
+  let cmd = match pipeline.inner {
+    crate::parser::PipelineInner::Command(cmd) => cmd,
+    crate::parser::PipelineInner::PipeSequence(_) => return err_unsupported(),
+  };
+  if cmd.redirect.is_some() {
+    return err_unsupported();
+  }
+  let cmd = match cmd.inner {
+    crate::parser::CommandInner::Simple(cmd) => cmd,
+    crate::parser::CommandInner::Subshell(_) => return err_unsupported(),
+  };
+  if !cmd.env_vars.is_empty() {
+    return err_unsupported();
+  }
+
+  Ok(
+    crate::shell::evaluate_args(
+      cmd.args,
+      &context.state,
+      context.stdin.clone(),
+      context.stderr.clone(),
+    )
+    .await?,
+  )
+}
+
+/// Errors for executable commands.
+#[derive(Error, Debug, PartialEq)]
+enum ResolveCommandPathError {
+  #[error("{}: command not found", .0)]
+  CommandNotFound(String),
+  #[error("command name was empty")]
+  CommandEmpty,
+}
+
+impl ResolveCommandPathError {
+  pub fn exit_code(&self) -> i32 {
+    match self {
+      // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
+      ResolveCommandPathError::CommandNotFound(_) => 127,
+      ResolveCommandPathError::CommandEmpty => 1,
+    }
+  }
+}
+
 fn resolve_command_path(
-  command_name: &str,
+  command_name: &UnresolvedCommandName,
   state: &ShellState,
   current_exe: impl FnOnce() -> Result<PathBuf>,
-) -> Result<PathBuf, ExecutableCommandError> {
+) -> Result<PathBuf, ResolveCommandPathError> {
+  let base_dir = &command_name.base_dir;
+  let command_name = &command_name.name;
   if command_name.is_empty() {
-    return Err(ExecutableCommandError::CommandEmpty);
+    return Err(ResolveCommandPathError::CommandEmpty);
   }
 
   // Special handling to use the current executable for deno.
@@ -132,11 +306,11 @@ fn resolve_command_path(
   if command_name.contains('/')
     || (cfg!(windows) && command_name.contains('\\'))
   {
-    return Ok(state.cwd().join(command_name));
+    return Ok(base_dir.join(command_name));
   }
 
   // now search based on the current environment state
-  let mut search_dirs = vec![state.cwd().clone()];
+  let mut search_dirs = vec![base_dir.to_path_buf()];
   if let Some(path) = state.get_var("PATH") {
     for folder in path.split(if cfg!(windows) { ';' } else { ':' }) {
       search_dirs.push(PathBuf::from(folder));
@@ -186,7 +360,52 @@ fn resolve_command_path(
       }
     }
   }
-  Err(ExecutableCommandError::CommandNotFound)
+  Err(ResolveCommandPathError::CommandNotFound(
+    command_name.to_string(),
+  ))
+}
+
+struct Shebang {
+  string_split: bool,
+  command: String,
+}
+
+fn resolve_shebang(
+  file_path: &Path,
+) -> Result<Option<Shebang>, std::io::Error> {
+  let mut file = match std::fs::File::open(file_path) {
+    Ok(file) => file,
+    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+      return Ok(None);
+    }
+    Err(err) => return Err(err),
+  };
+  let text = b"#!/usr/bin/env ";
+  let mut buffer = vec![0; text.len()];
+  match file.read_exact(&mut buffer) {
+    Ok(_) if buffer == text => (),
+    _ => return Ok(None),
+  }
+
+  let mut reader = BufReader::new(file);
+  let mut line = String::new();
+  reader.read_line(&mut line)?;
+  if line.is_empty() {
+    return Ok(None);
+  }
+  let line = line.trim();
+
+  Ok(Some(if let Some(command) = line.strip_prefix("-S ") {
+    Shebang {
+      string_split: true,
+      command: command.to_string(),
+    }
+  } else {
+    Shebang {
+      string_split: false,
+      command: line.to_string(),
+    }
+  }))
 }
 
 #[cfg(test)]
@@ -195,17 +414,23 @@ mod local_test {
 
   #[test]
   fn should_resolve_current_exe_path_for_deno() {
+    let cwd = std::env::current_dir().unwrap();
     let state = ShellState::new(
       Default::default(),
       &std::env::current_dir().unwrap(),
       Default::default(),
     );
-    let path =
-      resolve_command_path("deno", &state, || Ok(PathBuf::from("/bin/deno")))
-        .unwrap();
+    let command_name = UnresolvedCommandName {
+      name: "deno".to_string(),
+      base_dir: cwd,
+    };
+    let path = resolve_command_path(&command_name, &state, || {
+      Ok(PathBuf::from("/bin/deno"))
+    })
+    .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno"));
 
-    let path = resolve_command_path("deno", &state, || {
+    let path = resolve_command_path(&command_name, &state, || {
       Ok(PathBuf::from("/bin/deno.exe"))
     })
     .unwrap();
@@ -214,18 +439,30 @@ mod local_test {
 
   #[test]
   fn should_error_on_unknown_command() {
-    let state = ShellState::new(
-      Default::default(),
-      &std::env::current_dir().unwrap(),
-      Default::default(),
-    );
+    let cwd = std::env::current_dir().unwrap();
+    let state = ShellState::new(Default::default(), &cwd, Default::default());
+    let command_name = UnresolvedCommandName {
+      name: "foobar".to_string(),
+      base_dir: cwd.clone(),
+    };
     // Command not found
-    let result =
-      resolve_command_path("foobar", &state, || Ok(PathBuf::from("/bin/deno")));
-    assert_eq!(result, Err(ExecutableCommandError::CommandNotFound));
+    let result = resolve_command_path(&command_name, &state, || {
+      Ok(PathBuf::from("/bin/deno"))
+    });
+    assert_eq!(
+      result,
+      Err(ResolveCommandPathError::CommandNotFound(
+        "foobar".to_string()
+      ))
+    );
     // Command empty
-    let result =
-      resolve_command_path("", &state, || Ok(PathBuf::from("/bin/deno")));
-    assert_eq!(result, Err(ExecutableCommandError::CommandEmpty));
+    let command_name = UnresolvedCommandName {
+      name: "".to_string(),
+      base_dir: cwd.clone(),
+    };
+    let result = resolve_command_path(&command_name, &state, || {
+      Ok(PathBuf::from("/bin/deno"))
+    });
+    assert_eq!(result, Err(ResolveCommandPathError::CommandEmpty));
   }
 }

@@ -7,6 +7,7 @@ use std::rc::Rc;
 use futures::future;
 use futures::future::LocalBoxFuture;
 use futures::FutureExt;
+use thiserror::Error;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -40,6 +41,7 @@ use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
 
+use self::commands::UnresolvedCommandName;
 use self::types::CANCELLATION_EXIT_CODE;
 
 mod commands;
@@ -663,7 +665,10 @@ fn execute_command_args(
     Box::pin(future::ready(ExecuteResult::from_exit_code(1)))
   } else {
     let command = state.resolve_command(&command_name).unwrap_or_else(|| {
-      Rc::new(ExecutableCommand::new(command_name)) as Rc<dyn ShellCommand>
+      Rc::new(ExecutableCommand::new(UnresolvedCommandName {
+        name: command_name,
+        base_dir: state.cwd().to_path_buf(),
+      })) as Rc<dyn ShellCommand>
     });
     command.execute(ShellCommandContext {
       args,
@@ -684,7 +689,7 @@ fn execute_command_args(
   }
 }
 
-async fn evaluate_args(
+pub(crate) async fn evaluate_args(
   args: Vec<Word>,
   state: &ShellState,
   stdin: ShellPipeReader,
@@ -717,30 +722,20 @@ async fn evaluate_word(
   )
 }
 
-enum EvaluateWordTextError {
+#[derive(Debug, Error)]
+pub(crate) enum EvaluateWordTextError {
+  #[error("glob: no matches found '{}'. {}", pattern, err)]
   InvalidPattern {
     pattern: String,
     err: glob::PatternError,
   },
-  NoFilesMatched {
-    pattern: String,
-  },
+  #[error("glob: no matches found '{}'", pattern)]
+  NoFilesMatched { pattern: String },
 }
 
 impl EvaluateWordTextError {
-  pub fn message(&self) -> String {
-    match self {
-      EvaluateWordTextError::InvalidPattern { pattern, err } => {
-        format!("glob: no matches found '{pattern}'. {err}")
-      }
-      EvaluateWordTextError::NoFilesMatched { pattern } => {
-        format!("glob: no matches found '{pattern}'")
-      }
-    }
-  }
-
   pub fn into_exit_code(self, stderr: &mut ShellPipeWriter) -> ExecuteResult {
-    let _ = stderr.write_line(&self.message());
+    let _ = stderr.write_line(&self.to_string());
     ExecuteResult::from_exit_code(1)
   }
 }

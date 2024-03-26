@@ -22,6 +22,7 @@ use std::rc::Rc;
 use futures::future::LocalBoxFuture;
 
 pub use executable::ExecutableCommand;
+pub use executable::UnresolvedCommandName;
 
 use super::types::ExecuteResult;
 use super::types::FutureExecuteResult;
