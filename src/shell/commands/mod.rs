@@ -1,4 +1,4 @@
-// Copyright 2018-2024 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 mod args;
 mod cat;
@@ -22,7 +22,6 @@ use std::rc::Rc;
 use futures::future::LocalBoxFuture;
 
 pub use executable::ExecutableCommand;
-pub use executable::UnresolvedCommandName;
 
 use super::types::ExecuteResult;
 use super::types::FutureExecuteResult;
