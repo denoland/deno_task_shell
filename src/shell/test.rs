@@ -1361,6 +1361,58 @@ async fn paren_escapes() {
     .await;
 }
 
+#[tokio::test]
+async fn cross_platform_shebang() {
+  // with -S
+  TestBuilder::new()
+    .file("file.ts", "#!/usr/bin/env -S deno run\nconsole.log(5)")
+    .command("./file.ts")
+    .assert_stdout("5\n")
+    .run()
+    .await;
+
+  // without -S and invalid
+  TestBuilder::new()
+    .file("file.ts", "#!/usr/bin/env deno run\nconsole.log(5)")
+    .command("./file.ts")
+    .assert_stderr("deno run: command not found\n")
+    .assert_exit_code(127)
+    .run()
+    .await;
+
+  // without -S, but valid
+  TestBuilder::new()
+    .file("file.ts", "#!/usr/bin/env ./echo_stdin.ts\nconsole.log('Hello')")
+    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-run\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
+    .command("./file.ts")
+    .assert_stdout("Hello\n")
+    .run()
+    .await;
+
+  // sub dir
+  TestBuilder::new()
+    .directory("sub")
+    .file("sub/file.ts", "#!/usr/bin/env ../echo_stdin.ts\nconsole.log('Hello')")
+    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-run\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
+    .command("./sub/file.ts")
+    .assert_stdout("Hello\n")
+    .run()
+    .await;
+
+  // arguments
+  TestBuilder::new()
+    .file(
+      "file.ts",
+      "#!/usr/bin/env -S deno run --allow-read\nconsole.log(Deno.args)\nconst text = Deno.readTextFileSync(import.meta.filename);\nconsole.log(text.length)\n",
+    )
+    .command("./file.ts 1 2 3")
+    .assert_stdout(r#"[ "1", "2", "3" ]
+146
+"#)
+    .run()
+    .await;
+}
+
 fn no_such_file_error_text() -> &'static str {
   if cfg!(windows) {
     "The system cannot find the file specified. (os error 2)"
