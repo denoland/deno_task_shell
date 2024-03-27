@@ -1,3 +1,5 @@
+// Copyright 2018-2024 the Deno authors. MIT license.
+
 use std::borrow::Cow;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -169,7 +171,7 @@ async fn resolve_command<'a>(
   // only bother checking for a shebang when the path has a slash
   // in it because for global commands someone on Windows likely
   // won't have a script with a shebang in it on Windows
-  if command_name.name.chars().any(|c| matches!(c, '\\' | '/')) {
+  if command_name.name.contains('/') {
     if let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
       ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
     })? {
@@ -206,38 +208,40 @@ async fn parse_shebang_args(
   text: &str,
   context: &ShellCommandContext,
 ) -> Result<Vec<String>> {
-  fn err_unsupported() -> Result<Vec<String>> {
-    anyhow::bail!("unsupported shebang. Please report this as a bug.")
+  fn err_unsupported(text: &str) -> Result<Vec<String>> {
+    anyhow::bail!("unsupported shebang. Please report this as a bug (https://github.com/denoland/deno).\n\nShebang: {}", text)
   }
 
   let mut args = crate::parser::parse(text)?;
   if args.items.len() != 1 {
-    return err_unsupported();
+    return err_unsupported(text);
   }
   let item = args.items.remove(0);
   if item.is_async {
-    return err_unsupported();
+    return err_unsupported(text);
   }
   let pipeline = match item.sequence {
     crate::parser::Sequence::Pipeline(pipeline) => pipeline,
-    _ => return err_unsupported(),
+    _ => return err_unsupported(text),
   };
   if pipeline.negated {
-    return err_unsupported();
+    return err_unsupported(text);
   }
   let cmd = match pipeline.inner {
     crate::parser::PipelineInner::Command(cmd) => cmd,
-    crate::parser::PipelineInner::PipeSequence(_) => return err_unsupported(),
+    crate::parser::PipelineInner::PipeSequence(_) => {
+      return err_unsupported(text)
+    }
   };
   if cmd.redirect.is_some() {
-    return err_unsupported();
+    return err_unsupported(text);
   }
   let cmd = match cmd.inner {
     crate::parser::CommandInner::Simple(cmd) => cmd,
-    crate::parser::CommandInner::Subshell(_) => return err_unsupported(),
+    crate::parser::CommandInner::Subshell(_) => return err_unsupported(text),
   };
   if !cmd.env_vars.is_empty() {
-    return err_unsupported();
+    return err_unsupported(text);
   }
 
   Ok(
