@@ -1157,6 +1157,26 @@ async fn custom_command() {
 }
 
 #[tokio::test]
+async fn custom_command_resolve_command_path() {
+  TestBuilder::new()
+    .command("$(custom_which deno) eval 'console.log(1)'")
+    .custom_command(
+      "custom_which",
+      Box::new(|mut context| {
+        async move {
+          let path = context.resolve_command_path(&context.args[0]).unwrap();
+          let _ = context.stdout.write_line(&path.to_string_lossy());
+          ExecuteResult::from_exit_code(0)
+        }
+        .boxed_local()
+      }),
+    )
+    .assert_stdout("1\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn glob_basic() {
   TestBuilder::new()
     .file("test.txt", "test\n")
