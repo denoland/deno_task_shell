@@ -17,6 +17,7 @@ mod unset;
 mod xargs;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use futures::future::LocalBoxFuture;
@@ -114,6 +115,22 @@ pub struct ShellCommandContext {
   pub stderr: ShellPipeWriter,
   pub execute_command_args:
     Box<dyn FnOnce(ExecuteCommandArgsContext) -> FutureExecuteResult>,
+}
+
+impl ShellCommandContext {
+  /// Resolves the path to a command from the current working directory.
+  ///
+  /// Does not take injected custom commands into account.
+  pub fn resolve_command_path(
+    &self,
+    command_name: &str,
+  ) -> Result<PathBuf, crate::ResolveCommandPathError> {
+    super::command::resolve_command_path(
+      command_name,
+      self.state.cwd(),
+      &self.state,
+    )
+  }
 }
 
 pub trait ShellCommand {

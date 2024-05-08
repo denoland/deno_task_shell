@@ -105,13 +105,14 @@ async fn resolve_command<'a>(
   context: &ShellCommandContext,
   original_args: &'a Vec<String>,
 ) -> Result<ResolvedCommand<'a>, ResolveCommandError> {
-  let command_path =
-    match resolve_command_path(command_name, &context.state, || {
-      Ok(std::env::current_exe()?)
-    }) {
-      Ok(command_path) => command_path,
-      Err(err) => return Err(err.into()),
-    };
+  let command_path = match resolve_command_path(
+    &command_name.name,
+    &command_name.base_dir,
+    &context.state,
+  ) {
+    Ok(command_path) => command_path,
+    Err(err) => return Err(err.into()),
+  };
 
   // only bother checking for a shebang when the path has a slash
   // in it because for global commands someone on Windows likely
@@ -202,7 +203,7 @@ async fn parse_shebang_args(
 
 /// Errors for executable commands.
 #[derive(Error, Debug, PartialEq)]
-enum ResolveCommandPathError {
+pub enum ResolveCommandPathError {
   #[error("{}: command not found", .0)]
   CommandNotFound(String),
   #[error("command name was empty")]
@@ -219,13 +220,22 @@ impl ResolveCommandPathError {
   }
 }
 
-fn resolve_command_path(
-  command_name: &UnresolvedCommandName,
+pub fn resolve_command_path(
+  command_name: &str,
+  base_dir: &Path,
+  state: &ShellState,
+) -> Result<PathBuf, ResolveCommandPathError> {
+  resolve_command_path_inner(command_name, base_dir, state, || {
+    Ok(std::env::current_exe()?)
+  })
+}
+
+fn resolve_command_path_inner(
+  command_name: &str,
+  base_dir: &Path,
   state: &ShellState,
   current_exe: impl FnOnce() -> Result<PathBuf>,
 ) -> Result<PathBuf, ResolveCommandPathError> {
-  let base_dir = &command_name.base_dir;
-  let command_name = &command_name.name;
   if command_name.is_empty() {
     return Err(ResolveCommandPathError::CommandEmpty);
   }
@@ -369,17 +379,13 @@ mod local_test {
       &std::env::current_dir().unwrap(),
       Default::default(),
     );
-    let command_name = UnresolvedCommandName {
-      name: "deno".to_string(),
-      base_dir: cwd,
-    };
-    let path = resolve_command_path(&command_name, &state, || {
+    let path = resolve_command_path_inner("deno", &cwd, &state, || {
       Ok(PathBuf::from("/bin/deno"))
     })
     .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno"));
 
-    let path = resolve_command_path(&command_name, &state, || {
+    let path = resolve_command_path_inner("deno", &cwd, &state, || {
       Ok(PathBuf::from("/bin/deno.exe"))
     })
     .unwrap();
@@ -390,12 +396,8 @@ mod local_test {
   fn should_error_on_unknown_command() {
     let cwd = std::env::current_dir().unwrap();
     let state = ShellState::new(Default::default(), &cwd, Default::default());
-    let command_name = UnresolvedCommandName {
-      name: "foobar".to_string(),
-      base_dir: cwd.clone(),
-    };
     // Command not found
-    let result = resolve_command_path(&command_name, &state, || {
+    let result = resolve_command_path_inner("foobar", &cwd, &state, || {
       Ok(PathBuf::from("/bin/deno"))
     });
     assert_eq!(
@@ -405,11 +407,7 @@ mod local_test {
       ))
     );
     // Command empty
-    let command_name = UnresolvedCommandName {
-      name: "".to_string(),
-      base_dir: cwd.clone(),
-    };
-    let result = resolve_command_path(&command_name, &state, || {
+    let result = resolve_command_path_inner("", &cwd, &state, || {
       Ok(PathBuf::from("/bin/deno"))
     });
     assert_eq!(result, Err(ResolveCommandPathError::CommandEmpty));
