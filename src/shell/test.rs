@@ -1164,7 +1164,10 @@ async fn custom_command_resolve_command_path() {
       "custom_which",
       Box::new(|mut context| {
         async move {
-          let path = context.resolve_command_path(&context.args[0]).unwrap();
+          let path = context
+            .state
+            .resolve_command_path(&context.args[0])
+            .unwrap();
           let _ = context.stdout.write_line(&path.to_string_lossy());
           ExecuteResult::from_exit_code(0)
         }

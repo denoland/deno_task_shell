@@ -135,9 +135,23 @@ impl ShellState {
     &self.token
   }
 
-  pub fn resolve_command(&self, name: &str) -> Option<Rc<dyn ShellCommand>> {
+  /// Resolves a custom command that was injected.
+  pub fn resolve_custom_command(
+    &self,
+    name: &str,
+  ) -> Option<Rc<dyn ShellCommand>> {
     // uses an Rc to allow resolving a command without borrowing from self
     self.commands.get(name).cloned()
+  }
+
+  /// Resolves the path to a command from the current working directory.
+  ///
+  /// Does not take injected custom commands into account.
+  pub fn resolve_command_path(
+    &self,
+    command_name: &str,
+  ) -> Result<PathBuf, crate::ResolveCommandPathError> {
+    super::command::resolve_command_path(command_name, self.cwd(), self)
   }
 
   pub fn with_child_token(&self) -> ShellState {

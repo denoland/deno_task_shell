@@ -670,7 +670,7 @@ fn execute_command_args(
         )
       }),
     };
-    match command_context.state.resolve_command(&command_name) {
+    match command_context.state.resolve_custom_command(&command_name) {
       Some(command) => command.execute(command_context),
       None => execute_unresolved_command_name(
         UnresolvedCommandName {
