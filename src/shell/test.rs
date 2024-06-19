@@ -673,6 +673,44 @@ async fn pwd() {
 }
 
 #[tokio::test]
+async fn subshells() {
+  TestBuilder::new()
+    .command("(export TEST=1) && echo $TEST")
+    .assert_stdout("\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+  TestBuilder::new()
+    .directory("sub_dir")
+    .command("echo $PWD && (cd sub_dir && echo $PWD) && echo $PWD")
+    .assert_stdout(&format!(
+      "$TEMP_DIR\n$TEMP_DIR{FOLDER_SEPERATOR}sub_dir\n$TEMP_DIR\n"
+    ))
+    .assert_exit_code(0)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command(
+      "export TEST=1 && (echo $TEST && unset TEST && echo $TEST) && echo $TEST",
+    )
+    .assert_stdout("1\n\n1\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("(exit 1) && echo 1")
+    .assert_exit_code(1)
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("(exit 1) || echo 1")
+    .assert_stdout("1\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
+
+#[tokio::test]
 #[cfg(unix)]
 async fn pwd_logical() {
   TestBuilder::new()
