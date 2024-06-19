@@ -589,12 +589,15 @@ async fn execute_subshell(
   )
   .await;
 
-  // sub shells do not cause an exit
   match result {
     ExecuteResult::Exit(code, handles) => {
+      // sub shells do not cause an exit
       ExecuteResult::Continue(code, Vec::new(), handles)
     }
-    ExecuteResult::Continue(_, _, _) => result,
+    ExecuteResult::Continue(code, _env_changes, handles) => {
+      // env changes are not propagated
+      ExecuteResult::Continue(code, Vec::new(), handles)
+    },
   }
 }
 
