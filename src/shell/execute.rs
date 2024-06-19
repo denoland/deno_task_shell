@@ -597,7 +597,7 @@ async fn execute_subshell(
     ExecuteResult::Continue(code, _env_changes, handles) => {
       // env changes are not propagated
       ExecuteResult::Continue(code, Vec::new(), handles)
-    },
+    }
   }
 }
 
