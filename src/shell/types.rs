@@ -150,7 +150,7 @@ impl ShellState {
   pub fn resolve_command_path(
     &self,
     command_name: &str,
-  ) -> Result<PathBuf, crate::ResolveCommandPathError> {
+  ) -> Result<PathBuf, crate::which::CommandPathResolutionError> {
     super::command::resolve_command_path(command_name, self.cwd(), self)
   }
 
