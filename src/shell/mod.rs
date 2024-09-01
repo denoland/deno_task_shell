@@ -1,6 +1,5 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-pub use command::ResolveCommandPathError;
 pub use commands::ExecutableCommand;
 pub use commands::ExecuteCommandArgsContext;
 pub use commands::ShellCommand;
@@ -20,6 +19,7 @@ mod commands;
 mod execute;
 mod fs_util;
 mod types;
+pub mod which;
 
 #[cfg(test)]
 mod test;
