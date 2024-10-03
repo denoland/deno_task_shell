@@ -145,6 +145,15 @@ mod local_test {
     )
     .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
+
+    let path = resolve_command_path(
+      "deno",
+      &cwd,
+      |_| None,
+      || Ok(PathBuf::from("/bin/deno_other")),
+    )
+    .unwrap();
+    assert_eq!(path, PathBuf::from("/bin/deno_other"));
   }
 
   #[test]
