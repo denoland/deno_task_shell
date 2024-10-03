@@ -46,7 +46,10 @@ pub fn resolve_command_path<'a>(
       // this condition exists to make the tests pass because it's not
       // using the deno as the current executable
       let file_stem = exe_path.file_stem().map(|s| s.to_string_lossy());
-      if file_stem.map(|s| s.to_string()) == Some("deno".to_string()) {
+      if file_stem
+        .map(|s| !s.starts_with("deno_task_shell-"))
+        .unwrap_or(true)
+      {
         return Ok(exe_path);
       }
     }
@@ -142,6 +145,15 @@ mod local_test {
     )
     .unwrap();
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
+
+    let path = resolve_command_path(
+      "deno",
+      &cwd,
+      |_| None,
+      || Ok(PathBuf::from("/bin/deno_other")),
+    )
+    .unwrap();
+    assert_eq!(path, PathBuf::from("/bin/deno_other"));
   }
 
   #[test]

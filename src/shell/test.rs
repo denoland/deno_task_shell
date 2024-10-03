@@ -1444,7 +1444,7 @@ async fn cross_platform_shebang() {
   // without -S, but valid
   TestBuilder::new()
     .file("file.ts", "#!/usr/bin/env ./echo_stdin.ts\nconsole.log('Hello')")
-    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-run\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
+    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-all\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
     .command("./file.ts")
     .assert_stdout("Hello\n")
     .run()
@@ -1454,7 +1454,7 @@ async fn cross_platform_shebang() {
   TestBuilder::new()
     .directory("sub")
     .file("sub/file.ts", "#!/usr/bin/env ../echo_stdin.ts\nconsole.log('Hello')")
-    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-run\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
+    .file("echo_stdin.ts", "#!/usr/bin/env -S deno run --allow-all\nawait new Deno.Command('deno', { args: ['run', ...Deno.args] }).spawn();")
     .command("./sub/file.ts")
     .assert_stdout("Hello\n")
     .run()
