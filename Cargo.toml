@@ -19,7 +19,7 @@ anyhow = "1.0.75"
 futures = { version = "0.3.29", optional = true }
 glob = { version = "0.3.1", optional = true }
 path-dedot = { version = "3.1.1", optional = true }
-tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
+tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time", "signal"], optional = true }
 tokio-util = { version = "0.7.10", optional = true }
 os_pipe = { version = "1.1.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }

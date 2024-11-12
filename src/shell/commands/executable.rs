@@ -7,6 +7,8 @@ use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
 use futures::FutureExt;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Command that resolves the command name and
 /// executes it in a separate process.
@@ -41,8 +43,8 @@ impl ShellCommand for ExecutableCommand {
         .stderr(stderr.clone().into_stdio())
         .spawn();
 
-      let mut child = match child {
-        Ok(child) => child,
+      let child = match child {
+        Ok(child) => Arc::new(Mutex::new(child)),
         Err(err) => {
           let _ = stderr.write_line(&format!(
             "Error launching '{}': {}",
@@ -55,22 +57,33 @@ impl ShellCommand for ExecutableCommand {
       // avoid deadlock since this is holding onto the pipes
       drop(sub_command);
 
-      tokio::select! {
-        result = child.wait() => match result {
-          Ok(status) => ExecuteResult::Continue(
-            status.code().unwrap_or(1),
-            Vec::new(),
-            Vec::new(),
-          ),
-          Err(err) => {
-            let _ = stderr.write_line(&format!("{}", err));
-            ExecuteResult::Continue(1, Vec::new(), Vec::new())
-          }
-        },
-        _ = context.state.token().cancelled() => {
+      let child_clone = Arc::clone(&child);
+
+      tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        let mut child = child_clone.lock().await;
+        if let Ok(None) = child.try_wait() {
           let _ = child.kill().await;
-          ExecuteResult::for_cancellation()
         }
+      });
+
+      let mut child_locked = child.lock().await;
+      tokio::select! {
+          result = child_locked.wait() => match result {
+              Ok(status) => ExecuteResult::Continue(
+                  status.code().unwrap_or(1),
+                  Vec::new(),
+                  Vec::new(),
+              ),
+              Err(err) => {
+                  let _ = stderr.write_line(&format!("{}", err));
+                  ExecuteResult::Continue(1, Vec::new(), Vec::new())
+              }
+          },
+          _ = context.state.token().cancelled() => {
+              let _ = child_locked.kill().await;
+              ExecuteResult::for_cancellation()
+          }
       }
     }
     .boxed_local()
