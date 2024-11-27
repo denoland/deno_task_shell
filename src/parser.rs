@@ -1,8 +1,10 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use crate::which;
 use anyhow::bail;
 use anyhow::Result;
 use monch::*;
+use std::path::PathBuf;
 
 // Shell grammar rules this is loosely based on:
 // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_10_02
@@ -758,6 +760,25 @@ fn parse_word_parts(
     )
   }
 
+  fn expand_tilde(result: &mut Vec<WordPart>) {
+    if let Some(WordPart::Text(text)) = result.last_mut() {
+      if text.contains(" ~ ")
+        || text.contains("~/")
+        || (text.find("~").unwrap_or(0) == text.len() - 1)
+      {
+        let temp = text.clone().replace(
+          "~",
+          which::home_dir()
+            .unwrap_or(PathBuf::from("~"))
+            .to_str()
+            .unwrap_or("~"),
+        );
+        text.clear();
+        text.push_str(temp.as_str());
+      }
+    }
+  }
+
   move |input| {
     enum PendingPart<'a> {
       Char(char),
@@ -791,7 +812,7 @@ fn parse_word_parts(
         if_true(next_char, |&c| match mode {
           ParseWordPartsMode::DoubleQuotes => c != '"',
           ParseWordPartsMode::Unquoted => {
-            !c.is_whitespace() && !"~(){}<>|&;\"'".contains(c)
+            !c.is_whitespace() && !"(){}<>|&;\"'".contains(c)
           }
         }),
         PendingPart::Char,
@@ -826,6 +847,10 @@ fn parse_word_parts(
           result.extend(parts);
         }
       }
+    }
+
+    if mode == ParseWordPartsMode::Unquoted {
+      expand_tilde(&mut result);
     }
 
     Ok((input, result))
@@ -1505,6 +1530,70 @@ mod test {
         );
       }
     }
+  }
+
+  #[test]
+  fn test_tilde_unquoted_expansion() {
+    let home_dir = which::home_dir()
+      .unwrap_or(PathBuf::from("~"))
+      .to_str()
+      .unwrap_or("~")
+      .to_string();
+    run_test(
+      parse_sequential_list,
+      "echo ~",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Pipeline(Pipeline {
+            negated: false,
+            inner: PipelineInner::Command(Command {
+              inner: CommandInner::Simple(SimpleCommand {
+                env_vars: [].to_vec(),
+                args: [
+                  Word([WordPart::Text("echo".to_string())].to_vec()),
+                  Word([WordPart::Text(home_dir)].to_vec()),
+                ]
+                .to_vec(),
+              }),
+              redirect: None,
+            }),
+          }),
+        }],
+      }),
+    );
+  }
+
+  #[test]
+  fn test_tilde_as_char() {
+    run_test(
+      parse_sequential_list,
+      "echo \"~\"",
+      Ok(SequentialList {
+        items: vec![SequentialListItem {
+          is_async: false,
+          sequence: Sequence::Pipeline(Pipeline {
+            negated: false,
+            inner: PipelineInner::Command(Command {
+              inner: CommandInner::Simple(SimpleCommand {
+                env_vars: [].to_vec(),
+                args: [
+                  Word([WordPart::Text("echo".to_string())].to_vec()),
+                  Word(
+                    [WordPart::Quoted(
+                      [WordPart::Text("~".to_string())].to_vec(),
+                    )]
+                    .to_vec(),
+                  ),
+                ]
+                .to_vec(),
+              }),
+              redirect: None,
+            }),
+          }),
+        }],
+      }),
+    );
   }
 
   #[test]
