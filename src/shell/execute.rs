@@ -9,7 +9,6 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 use crate::parser::IoFile;
 use crate::parser::RedirectOpInput;
@@ -23,6 +22,7 @@ use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
+use crate::shell::CancellationToken;
 
 use crate::parser::Command;
 use crate::parser::CommandInner;

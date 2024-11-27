@@ -8,7 +8,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 use crate::execute_with_pipes;
 use crate::parser::parse;
@@ -16,6 +15,7 @@ use crate::shell::fs_util;
 use crate::shell::types::pipe;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
+use crate::shell::CancellationToken;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
 

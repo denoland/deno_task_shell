@@ -3,10 +3,10 @@
 use std::time::Instant;
 
 use futures::FutureExt;
-use tokio_util::sync::CancellationToken;
 
 use super::test_builder::TestBuilder;
 use super::types::ExecuteResult;
+use super::CancellationToken;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 

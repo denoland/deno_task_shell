@@ -11,9 +11,9 @@ use std::rc::Rc;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 use crate::shell::fs_util;
+use crate::shell::CancellationToken;
 
 use super::commands::builtin_commands;
 use super::commands::ShellCommand;
