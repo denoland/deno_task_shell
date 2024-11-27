@@ -25,15 +25,6 @@ impl CommandPathResolutionError {
   }
 }
 
-pub fn home_dir() -> Option<PathBuf> {
-  if let Some(userprofile) = std::env::var_os("USERPROFILE") {
-    if !userprofile.is_empty() {
-      return Some(PathBuf::from(userprofile));
-    }
-  }
-  None
-}
-
 /// Resolves a command name to an absolute path.
 pub fn resolve_command_path<'a>(
   command_name: &str,

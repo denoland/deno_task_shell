@@ -1,6 +1,5 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use crate::which;
 use anyhow::bail;
 use anyhow::Result;
 use monch::*;
@@ -338,6 +337,15 @@ pub fn parse(input: &str) -> Result<SequentialList> {
       .map_err(|err| err.into()),
     Err(ParseError::Failure(e)) => e.into_result().map_err(|err| err.into()),
   }
+}
+
+fn home_dir() -> Option<PathBuf> {
+  if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+    if !userprofile.is_empty() {
+      return Some(PathBuf::from(userprofile));
+    }
+  }
+  None
 }
 
 fn parse_sequential_list(input: &str) -> ParseResult<SequentialList> {
@@ -768,7 +776,7 @@ fn parse_word_parts(
       {
         let temp = text.clone().replace(
           '~',
-          which::home_dir()
+          home_dir()
             .unwrap_or(PathBuf::from("~"))
             .to_str()
             .unwrap_or("~"),
@@ -1534,7 +1542,7 @@ mod test {
 
   #[test]
   fn test_tilde_unquoted_expansion() {
-    let home_dir = which::home_dir()
+    let home_dir = home_dir()
       .unwrap_or(PathBuf::from("~"))
       .to_str()
       .unwrap_or("~")
