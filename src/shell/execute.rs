@@ -9,7 +9,6 @@ use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 use thiserror::Error;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 use crate::parser::IoFile;
 use crate::parser::RedirectOpInput;
@@ -23,6 +22,7 @@ use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
+use crate::shell::CancellationToken;
 
 use crate::parser::Command;
 use crate::parser::CommandInner;
@@ -54,6 +54,7 @@ use super::types::CANCELLATION_EXIT_CODE;
 /// * `env_vars` - A map of environment variables which are set in the shell.
 /// * `cwd` - The current working directory.
 /// * `custom_commands` - A map of custom shell commands and there ShellCommand implementation.
+/// * `token` - Use to cancel the shell and all spawned executables.
 ///
 /// # Returns
 /// The exit code of the command execution.
@@ -62,8 +63,9 @@ pub async fn execute(
   env_vars: HashMap<String, String>,
   cwd: &Path,
   custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
+  token: CancellationToken,
 ) -> i32 {
-  let state = ShellState::new(env_vars, cwd, custom_commands);
+  let state = ShellState::new(env_vars, cwd, custom_commands, token);
   execute_with_pipes(
     list,
     state,

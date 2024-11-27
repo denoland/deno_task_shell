@@ -1,9 +1,12 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::time::Instant;
+
 use futures::FutureExt;
 
 use super::test_builder::TestBuilder;
 use super::types::ExecuteResult;
+use super::CancellationToken;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
@@ -1472,6 +1475,20 @@ async fn cross_platform_shebang() {
 "#)
     .run()
     .await;
+}
+
+#[tokio::test]
+async fn provided_token_cancel() {
+  let token = CancellationToken::new();
+  token.cancel();
+  let start_time = Instant::now();
+  TestBuilder::new()
+    .command("sleep 5")
+    .token(token)
+    .assert_exit_code(130)
+    .run()
+    .await;
+  assert!(start_time.elapsed().as_secs() < 1);
 }
 
 fn no_such_file_error_text() -> &'static str {

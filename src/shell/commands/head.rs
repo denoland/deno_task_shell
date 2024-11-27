@@ -6,8 +6,8 @@ use std::io::Read;
 use anyhow::bail;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
-use tokio_util::sync::CancellationToken;
 
+use crate::shell::CancellationToken;
 use crate::ExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
