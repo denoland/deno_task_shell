@@ -41,6 +41,8 @@ use crate::parser::WordPart;
 
 use super::command::execute_unresolved_command_name;
 use super::command::UnresolvedCommandName;
+use super::kill_signal::KillSignal;
+use super::kill_signal::Signal;
 use super::types::CANCELLATION_EXIT_CODE;
 
 /// Executes a `SequentialList` of commands in a deno_task_shell environment.
@@ -199,10 +201,11 @@ fn execute_sequential_list(
 async fn wait_handles(
   mut exit_code: i32,
   mut handles: Vec<JoinHandle<i32>>,
-  token: CancellationToken,
+  kill_signal: KillSignal,
 ) -> i32 {
   if exit_code != 0 {
-    token.cancel();
+    // todo(THIS PR): THIS SEEMS HIGHLY SUSPICIOUS. SHOULDN'T IT BE CREATING A LINKED TOKEN AND ONLY SEND THIS TO KILL THE ASYNC COMMANDS?
+    kill_signal.send(Signal::SIGKILL);
   }
   while !handles.is_empty() {
     let result = futures::future::select_all(handles).await;

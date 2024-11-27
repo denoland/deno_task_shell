@@ -17,6 +17,7 @@ use crate::shell::CancellationToken;
 
 use super::commands::builtin_commands;
 use super::commands::ShellCommand;
+use super::KillSignal;
 
 #[derive(Clone)]
 pub struct ShellState {
@@ -28,8 +29,8 @@ pub struct ShellState {
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
   commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
-  /// Token to cancel execution.
-  token: CancellationToken,
+  /// Kill signal to send signals to commands.
+  kill_signal: KillSignal,
 }
 
 impl ShellState {

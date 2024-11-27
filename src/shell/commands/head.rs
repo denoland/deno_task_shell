@@ -8,6 +8,7 @@ use anyhow::Result;
 use futures::future::LocalBoxFuture;
 
 use crate::shell::CancellationToken;
+use crate::shell::KillSignal;
 use crate::ExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
@@ -38,14 +39,14 @@ impl ShellCommand for HeadCommand {
 fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
   writer: &mut ShellPipeWriter,
   max_lines: u64,
-  cancellation_token: &CancellationToken,
+  kill_signal: &KillSignal,
   mut read: F,
   buffer_size: usize,
 ) -> Result<ExecuteResult> {
   let mut written_lines = 0;
   let mut buffer = vec![0; buffer_size];
   while written_lines < max_lines {
-    if cancellation_token.is_cancelled() {
+    if kill_signal.is_aborted() {
       return Ok(ExecuteResult::for_cancellation());
     }
     let read_bytes = read(&mut buffer)?;
@@ -53,7 +54,7 @@ fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
       break;
     }
 
-    if cancellation_token.is_cancelled() {
+    if kill_signal.is_aborted() {
       return Ok(ExecuteResult::for_cancellation());
     }
 
@@ -174,7 +175,7 @@ mod test {
     let result = copy_lines(
       &mut writer,
       2,
-      &CancellationToken::new(),
+      &KillSignal::default(),
       |buffer| {
         if offset >= data.len() {
           return Ok(0);
