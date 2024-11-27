@@ -8,6 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::execute_with_pipes;
 use crate::parser::parse;
@@ -71,6 +72,7 @@ pub struct TestBuilder {
   expected_stderr: String,
   expected_stdout: String,
   assertions: Vec<TestAssertion>,
+  token: CancellationToken,
 }
 
 impl TestBuilder {
@@ -99,6 +101,7 @@ impl TestBuilder {
       expected_stderr: Default::default(),
       expected_stdout: Default::default(),
       assertions: Default::default(),
+      token: Default::default(),
     }
   }
 
@@ -136,6 +139,11 @@ impl TestBuilder {
 
   pub fn env_var(&mut self, name: &str, value: &str) -> &mut Self {
     self.env_vars.insert(name.to_string(), value.to_string());
+    self
+  }
+
+  pub fn token(&mut self, token: CancellationToken) -> &mut Self {
+    self.token = token;
     self
   }
 
@@ -218,6 +226,7 @@ impl TestBuilder {
       self.env_vars.clone(),
       &cwd,
       self.custom_commands.drain().collect(),
+      self.token.clone(),
     );
     let exit_code = local_set
       .run_until(execute_with_pipes(list, state, stdin, stdout, stderr))

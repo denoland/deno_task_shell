@@ -37,6 +37,7 @@ impl ShellState {
     env_vars: HashMap<String, String>,
     cwd: &Path,
     custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
+    token: CancellationToken,
   ) -> Self {
     assert!(cwd.is_absolute());
     let mut commands = builtin_commands();
@@ -46,7 +47,7 @@ impl ShellState {
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
       commands: Rc::new(commands),
-      token: CancellationToken::default(),
+      token,
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
