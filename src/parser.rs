@@ -760,14 +760,14 @@ fn parse_word_parts(
     )
   }
 
-  fn expand_tilde(result: &mut Vec<WordPart>) {
+  fn expand_tilde(result: &mut [WordPart]) {
     if let Some(WordPart::Text(text)) = result.last_mut() {
       if text.contains(" ~ ")
         || text.contains("~/")
-        || (text.find("~").unwrap_or(0) == text.len() - 1)
+        || (text.find('~').unwrap_or(0) == text.len() - 1)
       {
         let temp = text.clone().replace(
-          "~",
+          '~',
           which::home_dir()
             .unwrap_or(PathBuf::from("~"))
             .to_str()

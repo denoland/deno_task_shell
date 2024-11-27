@@ -31,7 +31,7 @@ pub fn home_dir() -> Option<PathBuf> {
       return Some(PathBuf::from(userprofile));
     }
   }
-  return None;
+  None
 }
 
 /// Resolves a command name to an absolute path.
