@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use futures::FutureExt;
@@ -1503,6 +1504,29 @@ async fn provided_signal_cancel() {
       .await;
   }
   assert!(start_time.elapsed().as_secs() < 1);
+}
+
+#[tokio::test]
+async fn listens_for_signals() {
+  if cfg!(windows) {
+    return; // signals are terrible on windows
+  }
+
+  let kill_signal = KillSignal::default();
+  deno_unsync::spawn({
+    let kill_signal = kill_signal.clone();
+    async move {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      kill_signal.send(SignalKind::SIGINT);
+    }
+  });
+  TestBuilder::new()
+      .command(r#"deno eval 'Deno.addSignalListener("SIGINT", () => { console.log("interrupted!"); setTimeout(() => Deno.exit(0), 25); }); setInterval(() => {}, 1000)'"#)
+      .kill_signal(kill_signal)
+      .assert_exit_code(130) // signal was sent to the deno process, so exit code is 130
+      .assert_stdout("interrupted!\n")
+      .run()
+      .await;
 }
 
 fn no_such_file_error_text() -> &'static str {

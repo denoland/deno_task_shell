@@ -6,7 +6,6 @@ use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use crate::SignalKind;
 use futures::FutureExt;
 
 /// Command that resolves the command name and
@@ -70,8 +69,16 @@ impl ShellCommand for ExecutableCommand {
             }
           },
           signal = context.state.kill_signal().wait_any() => {
-            if let Some(id) = child.id() {
-              kill(id as i32, signal);
+            if let Some(_id) = child.id() {
+              #[cfg(unix)]
+              kill(_id as i32, signal);
+
+              if cfg!(not(unix)) {
+                if signal.causes_abort() {
+                  let _ = child.kill().await;
+                  return ExecuteResult::Continue(signal.aborted_code(), Vec::new(), Vec::new());
+                }
+              }
             }
           }
         }
@@ -82,38 +89,12 @@ impl ShellCommand for ExecutableCommand {
 }
 
 #[cfg(unix)]
-pub fn kill(pid: i32, signal: SignalKind) -> Option<()> {
+pub fn kill(pid: i32, signal: crate::SignalKind) -> Option<()> {
   use nix::sys::signal::kill as unix_kill;
   use nix::sys::signal::Signal;
   use nix::unistd::Pid;
   let signo: i32 = signal.into();
-  let sig = Signal::try_from(signo).map_err(ProcessError::Nix).ok()?;
+  let sig = Signal::try_from(signo).ok()?;
   unix_kill(Pid::from_raw(pid), Some(sig)).ok()?;
   Some(())
-}
-
-#[cfg(not(unix))]
-pub fn kill(pid: i32, signal: SignalKind) -> Option<()> {
-  use windows_sys::Win32::Foundation::CloseHandle;
-  use windows_sys::Win32::Foundation::FALSE;
-  use windows_sys::Win32::System::Threading::OpenProcess;
-  use windows_sys::Win32::System::Threading::TerminateProcess;
-  use windows_sys::Win32::System::Threading::PROCESS_TERMINATE;
-
-  if !matches!(signal, SignalKind::SIGKILL | SignalKind::SIGTERM) || pid <= 0 {
-    return None;
-  }
-  let handle =
-    // SAFETY: winapi call
-    unsafe { OpenProcess(PROCESS_TERMINATE, FALSE, pid as u32) };
-
-  if handle.is_null() {
-    return None;
-  }
-  // SAFETY: winapi calls
-  unsafe {
-    let _is_terminated = TerminateProcess(handle, 1);
-    CloseHandle(handle);
-    None
-  }
 }
