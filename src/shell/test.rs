@@ -1507,7 +1507,7 @@ async fn provided_signal_cancel() {
 }
 
 #[tokio::test]
-async fn listens_for_signals() {
+async fn listens_for_signals_exits_gracefully() {
   if cfg!(windows) {
     return; // signals are terrible on windows
   }
@@ -1523,7 +1523,7 @@ async fn listens_for_signals() {
   TestBuilder::new()
       .command(r#"deno eval 'Deno.addSignalListener("SIGINT", () => { console.log("interrupted!"); setTimeout(() => Deno.exit(0), 25); }); setInterval(() => {}, 1000)'"#)
       .kill_signal(kill_signal)
-      .assert_exit_code(130) // signal was sent to the deno process, so exit code is 130
+      .assert_exit_code(0) // signal was handled and a `Deno.exit(0)` was done
       .assert_stdout("interrupted!\n")
       .run()
       .await;
