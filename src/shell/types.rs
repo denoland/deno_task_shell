@@ -500,16 +500,16 @@ impl KillSignal {
   }
 
   /// Creates a `DropKillSignalGuard` that will send a `SignalKind::SIGTERM` on drop.
-  pub fn drop_guard(&self) -> KillSignalDropGuard {
+  pub fn drop_guard(self) -> KillSignalDropGuard {
     self.drop_guard_with_kind(SignalKind::SIGTERM)
   }
 
   /// Creates a `DropKillSignalGuard` that will send the specified signal on drop.
-  pub fn drop_guard_with_kind(&self, kind: SignalKind) -> KillSignalDropGuard {
+  pub fn drop_guard_with_kind(self, kind: SignalKind) -> KillSignalDropGuard {
     KillSignalDropGuard {
       disarmed: Cell::new(false),
       kill_signal_kind: kind,
-      signal: self.clone(),
+      signal: self,
     }
   }
 
@@ -752,14 +752,14 @@ mod test {
 
     // Disarmed drop guard
     {
-      let drop_guard = parent_signal.drop_guard();
+      let drop_guard = parent_signal.clone().drop_guard();
       drop_guard.disarm();
     }
     assert_eq!(parent_signal.aborted_code(), None);
 
     // Actually drop
     {
-      let drop_guard = parent_signal.drop_guard();
+      let drop_guard = parent_signal.clone().drop_guard();
       drop(drop_guard);
     }
     assert_eq!(
