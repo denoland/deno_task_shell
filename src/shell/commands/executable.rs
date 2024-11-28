@@ -29,6 +29,11 @@ impl ShellCommand for ExecutableCommand {
     let display_name = self.display_name.clone();
     let command_name = self.command_path.clone();
     async move {
+      // don't spawn if already aborted
+      if let Some(exit_code) = context.state.kill_signal().aborted_code() {
+        return ExecuteResult::from_exit_code(exit_code);
+      }
+
       let mut stderr = context.stderr;
       let mut sub_command = tokio::process::Command::new(&command_name);
       let child = sub_command
@@ -48,31 +53,54 @@ impl ShellCommand for ExecutableCommand {
             "Error launching '{}': {}",
             display_name, err
           ));
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+          return ExecuteResult::from_exit_code(1);
         }
       };
 
       // avoid deadlock since this is holding onto the pipes
       drop(sub_command);
 
-      tokio::select! {
-        result = child.wait() => match result {
-          Ok(status) => ExecuteResult::Continue(
-            status.code().unwrap_or(1),
-            Vec::new(),
-            Vec::new(),
-          ),
-          Err(err) => {
-            let _ = stderr.write_line(&format!("{}", err));
-            ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      loop {
+        tokio::select! {
+          result = child.wait() => match result {
+            Ok(status) => return ExecuteResult::Continue(
+              status.code().unwrap_or(1),
+              Vec::new(),
+              Vec::new(),
+            ),
+            Err(err) => {
+              let _ = stderr.write_line(&format!("{}", err));
+              return ExecuteResult::from_exit_code(1);
+            }
+          },
+          signal = context.state.kill_signal().wait_any() => {
+            if let Some(_id) = child.id() {
+              #[cfg(unix)]
+              kill(_id as i32, signal);
+
+              if cfg!(not(unix)) && signal.causes_abort() {
+                let _ = child.start_kill();
+                let status = child.wait().await.ok();
+                return ExecuteResult::from_exit_code(
+                  status.and_then(|s| s.code()).unwrap_or(signal.aborted_code()),
+                );
+              }
+            }
           }
-        },
-        _ = context.state.token().cancelled() => {
-          let _ = child.kill().await;
-          ExecuteResult::for_cancellation()
         }
       }
     }
     .boxed_local()
   }
+}
+
+#[cfg(unix)]
+pub fn kill(pid: i32, signal: crate::SignalKind) -> Option<()> {
+  use nix::sys::signal::kill as unix_kill;
+  use nix::sys::signal::Signal;
+  use nix::unistd::Pid;
+  let signo: i32 = signal.into();
+  let sig = Signal::try_from(signo).ok()?;
+  unix_kill(Pid::from_raw(pid), Some(sig)).ok()?;
+  Some(())
 }

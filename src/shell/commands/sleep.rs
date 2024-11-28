@@ -26,7 +26,7 @@ impl ShellCommand for SleepCommand {
     async move {
       execute_with_cancellation!(
         sleep_command(context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()

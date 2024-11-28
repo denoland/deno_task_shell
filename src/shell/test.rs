@@ -1,12 +1,15 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::time::Duration;
 use std::time::Instant;
 
 use futures::FutureExt;
 
+use crate::KillSignal;
+use crate::SignalKind;
+
 use super::test_builder::TestBuilder;
 use super::types::ExecuteResult;
-use super::CancellationToken;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
@@ -261,7 +264,7 @@ async fn async_commands() {
 
   // should cancel running command
   TestBuilder::new()
-    .command("sleep 10 & sleep 0.5 && deno eval 'Deno.exit(2)' & deno eval 'console.log(1); setTimeout(() => { console.log(3) }, 10_000);'")
+    .command("sleep 10 & sleep 0.5 && exit 2 & deno eval 'console.log(1); setTimeout(() => { console.log(3) }, 10_000);'")
     .assert_stdout("1\n")
     .assert_exit_code(2)
     .run()
@@ -1478,17 +1481,52 @@ async fn cross_platform_shebang() {
 }
 
 #[tokio::test]
-async fn provided_token_cancel() {
-  let token = CancellationToken::new();
-  token.cancel();
+async fn provided_signal_cancel() {
   let start_time = Instant::now();
-  TestBuilder::new()
-    .command("sleep 5")
-    .token(token)
-    .assert_exit_code(130)
-    .run()
-    .await;
+  {
+    let kill_signal = KillSignal::default();
+    kill_signal.send(SignalKind::SIGINT);
+    TestBuilder::new()
+      .command("sleep 5")
+      .kill_signal(kill_signal)
+      .assert_exit_code(130)
+      .run()
+      .await;
+  }
+  {
+    let kill_signal = KillSignal::default();
+    kill_signal.send(SignalKind::SIGKILL);
+    TestBuilder::new()
+      .command("sleep 5")
+      .kill_signal(kill_signal)
+      .assert_exit_code(137)
+      .run()
+      .await;
+  }
   assert!(start_time.elapsed().as_secs() < 1);
+}
+
+#[tokio::test]
+async fn listens_for_signals_exits_gracefully() {
+  if cfg!(windows) {
+    return; // signals are terrible on windows
+  }
+
+  let kill_signal = KillSignal::default();
+  deno_unsync::spawn({
+    let kill_signal = kill_signal.clone();
+    async move {
+      tokio::time::sleep(Duration::from_millis(100)).await;
+      kill_signal.send(SignalKind::SIGINT);
+    }
+  });
+  TestBuilder::new()
+      .command(r#"deno eval 'Deno.addSignalListener("SIGINT", () => { console.log("interrupted!"); setTimeout(() => Deno.exit(0), 25); }); setInterval(() => {}, 1000)'"#)
+      .kill_signal(kill_signal)
+      .assert_exit_code(0) // signal was handled and a `Deno.exit(0)` was done
+      .assert_stdout("interrupted!\n")
+      .run()
+      .await;
 }
 
 fn no_such_file_error_text() -> &'static str {

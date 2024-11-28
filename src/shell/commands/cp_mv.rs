@@ -29,7 +29,7 @@ impl ShellCommand for CpCommand {
     async move {
       execute_with_cancellation!(
         cp_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()
@@ -171,7 +171,7 @@ impl ShellCommand for MvCommand {
     async move {
       execute_with_cancellation!(
         mv_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()
@@ -184,10 +184,10 @@ async fn mv_command(
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mv(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
       let _ = stderr.write_line(&format!("mv: {err}"));
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      ExecuteResult::from_exit_code(1)
     }
   }
 }

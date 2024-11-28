@@ -25,7 +25,7 @@ impl ShellCommand for MkdirCommand {
     async move {
       execute_with_cancellation!(
         mkdir_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()
@@ -38,10 +38,10 @@ async fn mkdir_command(
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mkdir(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
       let _ = stderr.write_line(&format!("mkdir: {err}"));
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
