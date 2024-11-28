@@ -594,6 +594,17 @@ impl SignalKind {
 
 impl From<i32> for SignalKind {
   fn from(value: i32) -> Self {
+    #[cfg(unix)]
+    match value {
+      nix::libc::SIGINT => SignalKind::SIGINT,
+      nix::libc::SIGQUIT => SignalKind::SIGQUIT,
+      nix::libc::SIGABRT => SignalKind::SIGABRT,
+      nix::libc::SIGKILL => SignalKind::SIGKILL,
+      nix::libc::SIGTERM => SignalKind::SIGTERM,
+      nix::libc::SIGSTOP => SignalKind::SIGSTOP,
+      _ => SignalKind::Other(value),
+    }
+    #[cfg(not(unix))]
     match value {
       2 => SignalKind::SIGINT,
       3 => SignalKind::SIGQUIT,
@@ -608,6 +619,17 @@ impl From<i32> for SignalKind {
 
 impl From<SignalKind> for i32 {
   fn from(kind: SignalKind) -> i32 {
+    #[cfg(unix)]
+    match kind {
+      SignalKind::SIGINT => nix::libc::SIGINT,
+      SignalKind::SIGQUIT => nix::libc::SIGQUIT,
+      SignalKind::SIGABRT => nix::libc::SIGABRT,
+      SignalKind::SIGKILL => nix::libc::SIGKILL,
+      SignalKind::SIGTERM => nix::libc::SIGTERM,
+      SignalKind::SIGSTOP => nix::libc::SIGSTOP,
+      SignalKind::Other(value) => value,
+    }
+    #[cfg(not(unix))]
     match kind {
       SignalKind::SIGINT => 2,
       SignalKind::SIGQUIT => 3,
