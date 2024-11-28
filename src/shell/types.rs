@@ -1,23 +1,24 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::rc::Weak;
 
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
+use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::shell::fs_util;
-use crate::shell::CancellationToken;
 
 use super::commands::builtin_commands;
 use super::commands::ShellCommand;
-use super::KillSignal;
 
 #[derive(Clone)]
 pub struct ShellState {
@@ -38,7 +39,7 @@ impl ShellState {
     env_vars: HashMap<String, String>,
     cwd: &Path,
     custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
-    token: CancellationToken,
+    kill_signal: KillSignal,
   ) -> Self {
     assert!(cwd.is_absolute());
     let mut commands = builtin_commands();
@@ -48,7 +49,7 @@ impl ShellState {
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
       commands: Rc::new(commands),
-      token,
+      kill_signal,
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -133,8 +134,8 @@ impl ShellState {
     }
   }
 
-  pub fn token(&self) -> &CancellationToken {
-    &self.token
+  pub fn kill_signal(&self) -> &KillSignal {
+    &self.kill_signal
   }
 
   /// Resolves a custom command that was injected.
@@ -156,9 +157,9 @@ impl ShellState {
     super::command::resolve_command_path(command_name, self.cwd(), self)
   }
 
-  pub fn with_child_token(&self) -> ShellState {
+  pub fn with_child_signal(&self) -> ShellState {
     let mut state = self.clone();
-    state.token = self.token.child_token();
+    state.kill_signal = self.kill_signal.child_signal();
     state
   }
 }
@@ -176,10 +177,6 @@ pub enum EnvChange {
 
 pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;
 
-// https://unix.stackexchange.com/a/99117
-// SIGINT (2) + 128
-pub const CANCELLATION_EXIT_CODE: i32 = 130;
-
 #[derive(Debug)]
 pub enum ExecuteResult {
   Exit(i32, Vec<JoinHandle<i32>>),
@@ -187,10 +184,6 @@ pub enum ExecuteResult {
 }
 
 impl ExecuteResult {
-  pub fn for_cancellation() -> ExecuteResult {
-    ExecuteResult::Exit(CANCELLATION_EXIT_CODE, Vec::new())
-  }
-
   pub fn from_exit_code(exit_code: i32) -> ExecuteResult {
     ExecuteResult::Continue(exit_code, Vec::new(), Vec::new())
   }
@@ -404,4 +397,292 @@ pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
     ShellPipeReader::OsPipe(reader),
     ShellPipeWriter::OsPipe(writer),
   )
+}
+
+#[derive(Debug)]
+struct KillSignalInner {
+  aborted_code: RefCell<Option<i32>>,
+  sender: broadcast::Sender<SignalKind>,
+  children: RefCell<Vec<Weak<KillSignalInner>>>,
+}
+
+impl KillSignalInner {
+  pub fn send(&self, signal_kind: SignalKind, aborted_code: Option<i32>) {
+    if let Some(aborted_code) = aborted_code {
+      let mut stored_aborted_code = self.aborted_code.borrow_mut();
+      if stored_aborted_code.is_none() {
+        *stored_aborted_code = Some(aborted_code);
+      }
+    }
+    _ = self.sender.send(signal_kind);
+
+    // notify children
+    self.children.borrow_mut().retain(|weak_child| {
+      if let Some(child) = weak_child.upgrade() {
+        child.send(signal_kind, aborted_code);
+        true
+      } else {
+        false // clean-up dropped children
+      }
+    });
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct KillSignal(Rc<KillSignalInner>);
+
+impl Default for KillSignal {
+  fn default() -> Self {
+    let (sender, _) = broadcast::channel(100);
+    Self(Rc::new(KillSignalInner {
+      aborted_code: RefCell::new(None),
+      sender,
+      children: Default::default(),
+    }))
+  }
+}
+
+impl KillSignal {
+  /// Exit code to use when aborted.
+  pub fn aborted_code(&self) -> Option<i32> {
+    *self.0.aborted_code.borrow()
+  }
+
+  pub fn child_signal(&self) -> Self {
+    let (sender, _) = broadcast::channel(100);
+    let child = Rc::new(KillSignalInner {
+      aborted_code: RefCell::new(self.aborted_code()),
+      sender,
+      children: RefCell::new(Vec::new()),
+    });
+
+    // Add the child to the parent's list of children
+    self.0.children.borrow_mut().push(Rc::downgrade(&child));
+
+    Self(child)
+  }
+
+  pub fn send(&self, signal: SignalKind) {
+    self.0.send(
+      signal,
+      if signal.causes_abort() {
+        Some(signal.aborted_code())
+      } else {
+        None
+      },
+    )
+  }
+
+  pub(crate) fn send_and_try_set_aborted_code(
+    &self,
+    signal: SignalKind,
+    aborted_code: i32,
+  ) {
+    self.0.send(signal, Some(aborted_code))
+  }
+
+  /// Waits for only signals deemed to abort a command.
+  pub async fn wait_aborted(&self) -> SignalKind {
+    let mut receiver = self.0.sender.subscribe();
+    loop {
+      // unwrap is ok because we're holding a sender in `self`
+      let signal = receiver.recv().await.unwrap();
+      if signal.causes_abort() {
+        return signal;
+      }
+    }
+  }
+
+  /// Waits for any signal to be received.
+  pub async fn wait_any(&self) -> SignalKind {
+    let mut receiver = self.0.sender.subscribe();
+    // unwrap is ok because we're holding a sender in `self`
+    receiver.recv().await.unwrap()
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SignalKind {
+  SIGTERM,
+  SIGKILL,
+  SIGABRT,
+  SIGQUIT,
+  SIGINT,
+  SIGSTOP,
+  Other(i32),
+}
+
+impl SignalKind {
+  pub fn causes_abort(&self) -> bool {
+    match self {
+      SignalKind::SIGTERM
+      | SignalKind::SIGKILL
+      | SignalKind::SIGQUIT
+      | SignalKind::SIGINT
+      | SignalKind::SIGSTOP
+      // does this make sense?
+      | SignalKind::SIGABRT => true,
+      SignalKind::Other(_) => false,
+    }
+  }
+
+  pub fn aborted_code(&self) -> i32 {
+    let value: i32 = (*self).into();
+    128 + value
+  }
+}
+
+impl From<i32> for SignalKind {
+  fn from(value: i32) -> Self {
+    match value {
+      2 => SignalKind::SIGINT,
+      3 => SignalKind::SIGQUIT,
+      6 => SignalKind::SIGABRT,
+      9 => SignalKind::SIGKILL,
+      15 => SignalKind::SIGTERM,
+      19 => SignalKind::SIGSTOP,
+      _ => SignalKind::Other(value),
+    }
+  }
+}
+
+impl From<SignalKind> for i32 {
+  fn from(kind: SignalKind) -> i32 {
+    match kind {
+      SignalKind::SIGINT => 2,
+      SignalKind::SIGQUIT => 3,
+      SignalKind::SIGABRT => 6,
+      SignalKind::SIGKILL => 9,
+      SignalKind::SIGTERM => 15,
+      SignalKind::SIGSTOP => 19,
+      SignalKind::Other(value) => value,
+    }
+  }
+}
+
+#[cfg(test)]
+mod test {
+  use crate::KillSignal;
+  use crate::SignalKind;
+
+  #[tokio::test]
+  async fn test_send_and_wait_any() {
+    let kill_signal = KillSignal::default();
+
+    // Spawn a task to send a signal
+    let signal_sender = kill_signal.clone();
+    deno_unsync::spawn(async move {
+      signal_sender.send(SignalKind::SIGTERM);
+    });
+
+    // Wait for the signal in the main task
+    let signal = kill_signal.wait_any().await;
+    assert_eq!(signal, SignalKind::SIGTERM);
+  }
+
+  #[tokio::test]
+  async fn test_signal_propagation_to_child_and_grandchild() {
+    let parent_signal = KillSignal::default();
+    let child_signal = parent_signal.child_signal();
+    let sibling_signal = parent_signal.child_signal();
+    let grandchild_signal = child_signal.child_signal();
+
+    // Spawn a task to send a signal from the parent
+    let parent = parent_signal.clone();
+    deno_unsync::spawn(async move {
+      parent.send(SignalKind::SIGKILL);
+    });
+
+    let signals = futures::join!(
+      child_signal.wait_any(),
+      sibling_signal.wait_any(),
+      grandchild_signal.wait_any()
+    );
+
+    for signal in [signals.0, signals.1, signals.2].into_iter() {
+      assert_eq!(signal, SignalKind::SIGKILL);
+    }
+    assert_eq!(child_signal.aborted_code(), Some(128 + 9));
+    assert_eq!(sibling_signal.aborted_code(), Some(128 + 9));
+    assert_eq!(grandchild_signal.aborted_code(), Some(128 + 9));
+  }
+
+  #[tokio::test]
+  async fn test_signal_propagation_on_sub_tree() {
+    let parent_signal = KillSignal::default();
+    let child_signal = parent_signal.child_signal();
+    let sibling_signal = parent_signal.child_signal();
+    let grandchild_signal = child_signal.child_signal();
+    let grandchild2_signal = child_signal.child_signal();
+
+    child_signal.send(SignalKind::SIGABRT);
+
+    assert!(parent_signal.aborted_code().is_none());
+    assert!(sibling_signal.aborted_code().is_none());
+    assert!(child_signal.aborted_code().is_some());
+    assert!(grandchild_signal.aborted_code().is_some());
+    assert!(grandchild2_signal.aborted_code().is_some());
+  }
+
+  #[tokio::test]
+  async fn test_wait_aborted() {
+    let kill_signal = KillSignal::default();
+
+    // Spawn a task to send an aborting signal
+    let signal_sender = kill_signal.clone();
+    deno_unsync::spawn(async move {
+      signal_sender.send(SignalKind::SIGABRT);
+    });
+
+    // Wait for the aborting signal in the main task
+    let signal = kill_signal.wait_aborted().await;
+    assert_eq!(signal, SignalKind::SIGABRT);
+    assert!(kill_signal.aborted_code().is_some());
+  }
+
+  #[tokio::test]
+  async fn test_propagation_and_is_aborted_flag() {
+    let parent_signal = KillSignal::default();
+    let child_signal = parent_signal.child_signal();
+
+    assert!(parent_signal.aborted_code().is_none());
+    assert!(child_signal.aborted_code().is_none());
+
+    // Send an aborting signal from the parent
+    deno_unsync::spawn({
+      let parent_signal = parent_signal.clone();
+      async move {
+        parent_signal.send(SignalKind::SIGQUIT);
+      }
+    });
+
+    // Wait for the signal in the child
+    let signal = child_signal.wait_aborted().await;
+    assert_eq!(signal, SignalKind::SIGQUIT);
+    assert_eq!(parent_signal.aborted_code(), Some(128 + 3));
+    assert_eq!(child_signal.aborted_code(), Some(128 + 3));
+  }
+
+  #[tokio::test]
+  async fn test_dropped_child_signal_cleanup() {
+    let parent_signal = KillSignal::default();
+
+    // Create a child signal and immediately drop it
+    {
+      let child_signal = parent_signal.child_signal();
+      assert!(child_signal.aborted_code().is_none());
+    }
+
+    // Send a signal from the parent
+    deno_unsync::spawn({
+      let parent_signal = parent_signal.clone();
+      async move {
+        parent_signal.send(SignalKind::SIGTERM);
+      }
+    });
+
+    // Verify no panic occurred and the parent still functions
+    let signal = parent_signal.wait_any().await;
+    assert_eq!(signal, SignalKind::SIGTERM);
+  }
 }

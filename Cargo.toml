@@ -29,9 +29,10 @@ tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "proce
 nix = { version = "0.27.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59.0", features = ["Win32_System_Console"], default-features = false, optional = true }
+windows-sys = { version = "0.59.0", features = ["Win32_System_Threading"], default-features = false, optional = true }
 
 [dev-dependencies]
+deno_unsync = "0.4.1"
 parking_lot = "0.12.1"
 pretty_assertions = "1"
 serde_json = "1.0.111"

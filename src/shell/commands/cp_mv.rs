@@ -29,7 +29,7 @@ impl ShellCommand for CpCommand {
     async move {
       execute_with_cancellation!(
         cp_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()
@@ -171,7 +171,7 @@ impl ShellCommand for MvCommand {
     async move {
       execute_with_cancellation!(
         mv_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()

@@ -10,22 +10,9 @@ use futures::FutureExt;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
-use crate::parser::IoFile;
-use crate::parser::RedirectOpInput;
-use crate::parser::RedirectOpOutput;
-use crate::shell::commands::ShellCommand;
-use crate::shell::commands::ShellCommandContext;
-use crate::shell::types::pipe;
-use crate::shell::types::EnvChange;
-use crate::shell::types::ExecuteResult;
-use crate::shell::types::FutureExecuteResult;
-use crate::shell::types::ShellPipeReader;
-use crate::shell::types::ShellPipeWriter;
-use crate::shell::types::ShellState;
-use crate::shell::CancellationToken;
-
 use crate::parser::Command;
 use crate::parser::CommandInner;
+use crate::parser::IoFile;
 use crate::parser::PipeSequence;
 use crate::parser::PipeSequenceOperator;
 use crate::parser::Pipeline;
@@ -33,17 +20,27 @@ use crate::parser::PipelineInner;
 use crate::parser::Redirect;
 use crate::parser::RedirectFd;
 use crate::parser::RedirectOp;
+use crate::parser::RedirectOpInput;
+use crate::parser::RedirectOpOutput;
 use crate::parser::Sequence;
 use crate::parser::SequentialList;
 use crate::parser::SimpleCommand;
 use crate::parser::Word;
 use crate::parser::WordPart;
+use crate::shell::commands::ShellCommand;
+use crate::shell::commands::ShellCommandContext;
+use crate::shell::types::pipe;
+use crate::shell::types::EnvChange;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::FutureExecuteResult;
+use crate::shell::types::KillSignal;
+use crate::shell::types::ShellPipeReader;
+use crate::shell::types::ShellPipeWriter;
+use crate::shell::types::ShellState;
+use crate::shell::types::SignalKind;
 
 use super::command::execute_unresolved_command_name;
 use super::command::UnresolvedCommandName;
-use super::kill_signal::KillSignal;
-use super::kill_signal::Signal;
-use super::types::CANCELLATION_EXIT_CODE;
 
 /// Executes a `SequentialList` of commands in a deno_task_shell environment.
 ///
@@ -56,7 +53,7 @@ use super::types::CANCELLATION_EXIT_CODE;
 /// * `env_vars` - A map of environment variables which are set in the shell.
 /// * `cwd` - The current working directory.
 /// * `custom_commands` - A map of custom shell commands and there ShellCommand implementation.
-/// * `token` - Use to cancel the shell and all spawned executables.
+/// * `kill_signal` - Use to send signals to spawned executables.
 ///
 /// # Returns
 /// The exit code of the command execution.
@@ -65,9 +62,9 @@ pub async fn execute(
   env_vars: HashMap<String, String>,
   cwd: &Path,
   custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
-  token: CancellationToken,
+  kill_signal: KillSignal,
 ) -> i32 {
-  let state = ShellState::new(env_vars, cwd, custom_commands, token);
+  let state = ShellState::new(env_vars, cwd, custom_commands, kill_signal);
   execute_with_pipes(
     list,
     state,
@@ -145,11 +142,11 @@ fn execute_sequential_list(
         let stdout = stdout.clone();
         let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn_local(async move {
-          let main_token = state.token().clone();
+          let main_signal = state.kill_signal().clone();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
           let (exit_code, handles) = result.into_exit_code_and_handles();
-          wait_handles(exit_code, handles, main_token).await
+          wait_handles(exit_code, handles, main_signal).await
         }));
       } else {
         let result = execute_sequence(
@@ -184,7 +181,7 @@ fn execute_sequential_list(
       final_exit_code = wait_handles(
         final_exit_code,
         std::mem::take(&mut async_handles),
-        state.token().clone(),
+        state.kill_signal().clone(),
       )
       .await;
     }
@@ -204,19 +201,20 @@ async fn wait_handles(
   kill_signal: KillSignal,
 ) -> i32 {
   if exit_code != 0 {
-    // todo(THIS PR): THIS SEEMS HIGHLY SUSPICIOUS. SHOULDN'T IT BE CREATING A LINKED TOKEN AND ONLY SEND THIS TO KILL THE ASYNC COMMANDS?
-    kill_signal.send(Signal::SIGKILL);
+    kill_signal.send_and_try_set_aborted_code(SignalKind::SIGKILL, exit_code);
   }
+  // prefer surfacing the aborted exit code because it's the main reason for the failure
+  exit_code = kill_signal.aborted_code().unwrap_or(exit_code);
   while !handles.is_empty() {
-    let result = futures::future::select_all(handles).await;
+    let (result, _, remaining) = futures::future::select_all(handles).await;
 
-    // prefer the first non-zero then non-cancellation exit code
-    let new_exit_code = result.0.unwrap();
-    if matches!(exit_code, 0 | CANCELLATION_EXIT_CODE) && new_exit_code != 0 {
+    // prefer the first non-zero exit code
+    let new_exit_code = result.unwrap();
+    if exit_code == 0 && new_exit_code != 0 {
       exit_code = new_exit_code;
     }
 
-    handles = result.2;
+    handles = remaining;
   }
   exit_code
 }
@@ -648,8 +646,8 @@ fn execute_command_args(
   } else {
     args.remove(0)
   };
-  if state.token().is_cancelled() {
-    Box::pin(future::ready(ExecuteResult::for_cancellation()))
+  if let Some(exit_code) = state.kill_signal().aborted_code() {
+    Box::pin(future::ready(ExecuteResult::from_exit_code(exit_code)))
   } else if let Some(stripped_name) = command_name.strip_prefix('!') {
     let _ = stderr.write_line(
         &format!(concat!(
@@ -880,7 +878,7 @@ fn evaluate_word_parts(
             evaluate_command_substitution(
               list,
               // contain cancellation to the command substitution
-              &state.with_child_token(),
+              &state.with_child_signal(),
               stdin.clone(),
               stderr.clone(),
             )

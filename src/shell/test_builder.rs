@@ -13,9 +13,9 @@ use crate::execute_with_pipes;
 use crate::parser::parse;
 use crate::shell::fs_util;
 use crate::shell::types::pipe;
+use crate::shell::types::KillSignal;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
-use crate::shell::CancellationToken;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
 
@@ -67,12 +67,12 @@ pub struct TestBuilder {
   env_vars: HashMap<String, String>,
   custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
   command: String,
+  kill_signal: KillSignal,
   stdin: Vec<u8>,
   expected_exit_code: i32,
   expected_stderr: String,
   expected_stdout: String,
   assertions: Vec<TestAssertion>,
-  token: CancellationToken,
 }
 
 impl TestBuilder {
@@ -96,12 +96,12 @@ impl TestBuilder {
       env_vars,
       custom_commands: Default::default(),
       command: Default::default(),
+      kill_signal: Default::default(),
       stdin: Default::default(),
       expected_exit_code: 0,
       expected_stderr: Default::default(),
       expected_stdout: Default::default(),
       assertions: Default::default(),
-      token: Default::default(),
     }
   }
 
@@ -142,8 +142,8 @@ impl TestBuilder {
     self
   }
 
-  pub fn token(&mut self, token: CancellationToken) -> &mut Self {
-    self.token = token;
+  pub fn kill_signal(&mut self, signal: KillSignal) -> &mut Self {
+    self.kill_signal = signal;
     self
   }
 
@@ -226,7 +226,7 @@ impl TestBuilder {
       self.env_vars.clone(),
       &cwd,
       self.custom_commands.drain().collect(),
-      self.token.clone(),
+      self.kill_signal.clone(),
     );
     let exit_code = local_set
       .run_until(execute_with_pipes(list, state, stdin, stdout, stderr))

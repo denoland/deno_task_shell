@@ -6,21 +6,20 @@ pub use commands::ShellCommand;
 pub use commands::ShellCommandContext;
 pub use execute::execute;
 pub use execute::execute_with_pipes;
-pub use kill_signal::KillSignal;
-pub use tokio_util::sync::CancellationToken;
 pub use types::pipe;
 pub use types::EnvChange;
 pub use types::ExecuteResult;
 pub use types::FutureExecuteResult;
+pub use types::KillSignal;
 pub use types::ShellPipeReader;
 pub use types::ShellPipeWriter;
 pub use types::ShellState;
+pub use types::SignalKind;
 
 mod command;
 mod commands;
 mod execute;
 mod fs_util;
-mod kill_signal;
 mod types;
 pub mod which;
 

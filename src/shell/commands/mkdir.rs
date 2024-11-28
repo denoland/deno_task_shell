@@ -25,7 +25,7 @@ impl ShellCommand for MkdirCommand {
     async move {
       execute_with_cancellation!(
         mkdir_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()

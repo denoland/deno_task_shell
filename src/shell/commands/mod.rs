@@ -124,13 +124,13 @@ pub trait ShellCommand {
 }
 
 macro_rules! execute_with_cancellation {
-  ($result_expr:expr, $token:expr) => {
+  ($result_expr:expr, $kill_signal:expr) => {
     tokio::select! {
       result = $result_expr => {
         result
       },
-      _ = $token.cancelled() => {
-        ExecuteResult::for_cancellation()
+      signal = $kill_signal.wait_aborted() => {
+        ExecuteResult::from_exit_code(signal.aborted_code())
       }
     }
   };

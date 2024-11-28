@@ -6,6 +6,7 @@ use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
+use crate::SignalKind;
 use futures::FutureExt;
 
 /// Command that resolves the command name and
@@ -55,24 +56,64 @@ impl ShellCommand for ExecutableCommand {
       // avoid deadlock since this is holding onto the pipes
       drop(sub_command);
 
-      tokio::select! {
-        result = child.wait() => match result {
-          Ok(status) => ExecuteResult::Continue(
-            status.code().unwrap_or(1),
-            Vec::new(),
-            Vec::new(),
-          ),
-          Err(err) => {
-            let _ = stderr.write_line(&format!("{}", err));
-            ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      loop {
+        tokio::select! {
+          result = child.wait() => match result {
+            Ok(status) => return ExecuteResult::Continue(
+              status.code().unwrap_or(1),
+              Vec::new(),
+              Vec::new(),
+            ),
+            Err(err) => {
+              let _ = stderr.write_line(&format!("{}", err));
+              return ExecuteResult::Continue(1, Vec::new(), Vec::new())
+            }
+          },
+          signal = context.state.kill_signal().wait_any() => {
+            if let Some(id) = child.id() {
+              kill(id as i32, signal);
+            }
           }
-        },
-        _ = context.state.token().cancelled() => {
-          let _ = child.kill().await;
-          ExecuteResult::for_cancellation()
         }
       }
     }
     .boxed_local()
+  }
+}
+
+#[cfg(unix)]
+pub fn kill(pid: i32, signal: SignalKind) -> Option<()> {
+  use nix::sys::signal::kill as unix_kill;
+  use nix::sys::signal::Signal;
+  use nix::unistd::Pid;
+  let signo: i32 = signal.into();
+  let sig = Signal::try_from(signo).map_err(ProcessError::Nix).ok()?;
+  unix_kill(Pid::from_raw(pid), Some(sig)).ok()?;
+  Some(())
+}
+
+#[cfg(not(unix))]
+pub fn kill(pid: i32, signal: SignalKind) -> Option<()> {
+  use windows_sys::Win32::Foundation::CloseHandle;
+  use windows_sys::Win32::Foundation::FALSE;
+  use windows_sys::Win32::System::Threading::OpenProcess;
+  use windows_sys::Win32::System::Threading::TerminateProcess;
+  use windows_sys::Win32::System::Threading::PROCESS_TERMINATE;
+
+  if !matches!(signal, SignalKind::SIGKILL | SignalKind::SIGTERM) || pid <= 0 {
+    return None;
+  }
+  let handle =
+    // SAFETY: winapi call
+    unsafe { OpenProcess(PROCESS_TERMINATE, FALSE, pid as u32) };
+
+  if handle.is_null() {
+    return None;
+  }
+  // SAFETY: winapi calls
+  unsafe {
+    let _is_terminated = TerminateProcess(handle, 1);
+    CloseHandle(handle);
+    None
   }
 }

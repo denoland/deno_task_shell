@@ -26,7 +26,7 @@ impl ShellCommand for RmCommand {
     async move {
       execute_with_cancellation!(
         rm_command(context.state.cwd(), context.args, context.stderr),
-        context.state.token()
+        context.state.kill_signal()
       )
     }
     .boxed_local()

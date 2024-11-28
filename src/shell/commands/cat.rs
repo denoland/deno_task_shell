@@ -46,8 +46,8 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
       // in memory
       match File::open(context.state.cwd().join(&path)) {
         Ok(mut file) => loop {
-          if context.state.token().is_cancelled() {
-            return Ok(ExecuteResult::for_cancellation());
+          if let Some(exit_code) = context.state.kill_signal().aborted_code() {
+            return Ok(ExecuteResult::from_exit_code(exit_code));
           }
 
           let size = file.read(&mut buf)?;

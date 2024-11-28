@@ -7,7 +7,6 @@ use anyhow::bail;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
 
-use crate::shell::CancellationToken;
 use crate::shell::KillSignal;
 use crate::ExecuteResult;
 use crate::ShellCommand;
@@ -46,16 +45,16 @@ fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
   let mut written_lines = 0;
   let mut buffer = vec![0; buffer_size];
   while written_lines < max_lines {
-    if kill_signal.is_aborted() {
-      return Ok(ExecuteResult::for_cancellation());
+    if let Some(exit_code) = kill_signal.aborted_code() {
+      return Ok(ExecuteResult::from_exit_code(exit_code));
     }
     let read_bytes = read(&mut buffer)?;
     if read_bytes == 0 {
       break;
     }
 
-    if kill_signal.is_aborted() {
-      return Ok(ExecuteResult::for_cancellation());
+    if let Some(exit_code) = kill_signal.aborted_code() {
+      return Ok(ExecuteResult::from_exit_code(exit_code));
     }
 
     let mut written_bytes: usize = 0;
@@ -86,7 +85,7 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
     copy_lines(
       &mut context.stdout,
       flags.lines,
-      context.state.token(),
+      context.state.kill_signal(),
       |buf| context.stdin.read(buf),
       512,
     )
@@ -96,7 +95,7 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
       Ok(mut file) => copy_lines(
         &mut context.stdout,
         flags.lines,
-        context.state.token(),
+        context.state.kill_signal(),
         |buf| file.read(buf).map_err(Into::into),
         512,
       ),
