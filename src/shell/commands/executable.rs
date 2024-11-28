@@ -74,8 +74,13 @@ impl ShellCommand for ExecutableCommand {
               kill(_id as i32, signal);
 
               if cfg!(not(unix)) && signal.causes_abort() {
-                let _ = child.kill().await;
-                return ExecuteResult::Continue(signal.aborted_code(), Vec::new(), Vec::new());
+                let _ = child.start_kill();
+                let status = child.wait().await.ok();
+                return ExecuteResult::Continue(
+                  status.and_then(|s| s.code()).unwrap_or(signal.aborted_code()),
+                  Vec::new(),
+                  Vec::new(),
+                );
               }
             }
           }
