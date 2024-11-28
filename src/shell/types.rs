@@ -1,6 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::Read;
@@ -20,6 +21,27 @@ use crate::shell::fs_util;
 use super::commands::builtin_commands;
 use super::commands::ShellCommand;
 
+/// Exit code set when an async task fails or the main execution
+/// line fail.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TreeExitCodeCell(Rc<Cell<i32>>);
+
+impl TreeExitCodeCell {
+  pub fn try_set(&self, exit_code: i32) {
+    if self.0.get() == 0 {
+      // only set it for the first non-zero failure
+      self.0.set(exit_code);
+    }
+  }
+
+  pub fn get(&self) -> Option<i32> {
+    match self.0.get() {
+      0 => None,
+      code => Some(code),
+    }
+  }
+}
+
 #[derive(Clone)]
 pub struct ShellState {
   /// Environment variables that should be passed down to sub commands
@@ -30,8 +52,8 @@ pub struct ShellState {
   shell_vars: HashMap<String, String>,
   cwd: PathBuf,
   commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
-  /// Kill signal to send signals to commands.
   kill_signal: KillSignal,
+  tree_exit_code_cell: TreeExitCodeCell,
 }
 
 impl ShellState {
@@ -50,6 +72,7 @@ impl ShellState {
       cwd: PathBuf::new(),
       commands: Rc::new(commands),
       kill_signal,
+      tree_exit_code_cell: Default::default(),
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -138,6 +161,10 @@ impl ShellState {
     &self.kill_signal
   }
 
+  pub(crate) fn tree_exit_code_cell(&self) -> &TreeExitCodeCell {
+    &self.tree_exit_code_cell
+  }
+
   /// Resolves a custom command that was injected.
   pub fn resolve_custom_command(
     &self,
@@ -160,6 +187,7 @@ impl ShellState {
   pub fn with_child_signal(&self) -> ShellState {
     let mut state = self.clone();
     state.kill_signal = self.kill_signal.child_signal();
+    state.tree_exit_code_cell = TreeExitCodeCell::default();
     state
   }
 }
@@ -401,17 +429,23 @@ pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
 
 #[derive(Debug)]
 struct KillSignalInner {
+  // WARNING: This should struct should not be made Sync.
+  // Some of the code in this project depends on this not
+  // being cancelled at any time by another thread. For example,
+  // the abort code is checked before executing a sub process and
+  // then awaited after. If an abort happened between that then
+  // it could be missed.
   aborted_code: RefCell<Option<i32>>,
   sender: broadcast::Sender<SignalKind>,
   children: RefCell<Vec<Weak<KillSignalInner>>>,
 }
 
 impl KillSignalInner {
-  pub fn send(&self, signal_kind: SignalKind, aborted_code: Option<i32>) {
-    if let Some(aborted_code) = aborted_code {
+  pub fn send(&self, signal_kind: SignalKind) {
+    if signal_kind.causes_abort() {
       let mut stored_aborted_code = self.aborted_code.borrow_mut();
       if stored_aborted_code.is_none() {
-        *stored_aborted_code = Some(aborted_code);
+        *stored_aborted_code = Some(signal_kind.aborted_code());
       }
     }
     _ = self.sender.send(signal_kind);
@@ -419,7 +453,7 @@ impl KillSignalInner {
     // notify children
     self.children.borrow_mut().retain(|weak_child| {
       if let Some(child) = weak_child.upgrade() {
-        child.send(signal_kind, aborted_code);
+        child.send(signal_kind);
         true
       } else {
         false // clean-up dropped children
@@ -428,6 +462,7 @@ impl KillSignalInner {
   }
 }
 
+/// Used to send signals to commands.
 #[derive(Debug, Clone)]
 pub struct KillSignal(Rc<KillSignalInner>);
 
@@ -448,6 +483,8 @@ impl KillSignal {
     *self.0.aborted_code.borrow()
   }
 
+  /// Creates a signal that will only send signals to itself
+  /// and all descendants--not the parent signal.
   pub fn child_signal(&self) -> Self {
     let (sender, _) = broadcast::channel(100);
     let child = Rc::new(KillSignalInner {
@@ -462,23 +499,23 @@ impl KillSignal {
     Self(child)
   }
 
-  pub fn send(&self, signal: SignalKind) {
-    self.0.send(
-      signal,
-      if signal.causes_abort() {
-        Some(signal.aborted_code())
-      } else {
-        None
-      },
-    )
+  /// Creates a `DropKillSignalGuard` that will send a `SignalKind::SIGTERM` on drop.
+  pub fn drop_guard(&self) -> KillSignalDropGuard {
+    self.drop_guard_with_kind(SignalKind::SIGTERM)
   }
 
-  pub(crate) fn send_and_try_set_aborted_code(
-    &self,
-    signal: SignalKind,
-    aborted_code: i32,
-  ) {
-    self.0.send(signal, Some(aborted_code))
+  /// Creates a `DropKillSignalGuard` that will send the specified signal on drop.
+  pub fn drop_guard_with_kind(&self, kind: SignalKind) -> KillSignalDropGuard {
+    KillSignalDropGuard {
+      disarmed: Cell::new(false),
+      kill_signal_kind: kind,
+      signal: self.clone(),
+    }
+  }
+
+  /// Send a signal to commands being run.
+  pub fn send(&self, signal: SignalKind) {
+    self.0.send(signal)
   }
 
   /// Waits for only signals deemed to abort a command.
@@ -498,6 +535,29 @@ impl KillSignal {
     let mut receiver = self.0.sender.subscribe();
     // unwrap is ok because we're holding a sender in `self`
     receiver.recv().await.unwrap()
+  }
+}
+
+/// Guard that on drop will send a signal on the associated `KillSignal`.
+#[derive(Debug)]
+pub struct KillSignalDropGuard {
+  disarmed: Cell<bool>,
+  kill_signal_kind: SignalKind,
+  signal: KillSignal,
+}
+
+impl Drop for KillSignalDropGuard {
+  fn drop(&mut self) {
+    if !self.disarmed.get() {
+      self.signal.send(self.kill_signal_kind);
+    }
+  }
+}
+
+impl KillSignalDropGuard {
+  /// Prevent the drop guard from sending a signal on drop.
+  pub fn disarm(&self) {
+    self.disarmed.set(true);
   }
 }
 
@@ -684,5 +744,27 @@ mod test {
     // Verify no panic occurred and the parent still functions
     let signal = parent_signal.wait_any().await;
     assert_eq!(signal, SignalKind::SIGTERM);
+  }
+
+  #[tokio::test]
+  async fn test_drop_guard() {
+    let parent_signal = KillSignal::default();
+
+    // Disarmed drop guard
+    {
+      let drop_guard = parent_signal.drop_guard();
+      drop_guard.disarm();
+    }
+    assert_eq!(parent_signal.aborted_code(), None);
+
+    // Actually drop
+    {
+      let drop_guard = parent_signal.drop_guard();
+      drop(drop_guard);
+    }
+    assert_eq!(
+      parent_signal.aborted_code(),
+      Some(SignalKind::SIGTERM.aborted_code())
+    );
   }
 }

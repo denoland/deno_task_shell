@@ -41,6 +41,7 @@ use crate::shell::types::SignalKind;
 
 use super::command::execute_unresolved_command_name;
 use super::command::UnresolvedCommandName;
+use super::types::TreeExitCodeCell;
 
 /// Executes a `SequentialList` of commands in a deno_task_shell environment.
 ///
@@ -143,10 +144,12 @@ fn execute_sequential_list(
         let stderr = stderr.clone();
         async_handles.push(tokio::task::spawn_local(async move {
           let main_signal = state.kill_signal().clone();
+          let tree_exit_code_cell = state.tree_exit_code_cell().clone();
           let result =
             execute_sequence(item.sequence, state, stdin, stdout, stderr).await;
           let (exit_code, handles) = result.into_exit_code_and_handles();
-          wait_handles(exit_code, handles, main_signal).await
+          wait_handles(exit_code, handles, &main_signal, &tree_exit_code_cell)
+            .await
         }));
       } else {
         let result = execute_sequence(
@@ -181,7 +184,8 @@ fn execute_sequential_list(
       final_exit_code = wait_handles(
         final_exit_code,
         std::mem::take(&mut async_handles),
-        state.kill_signal().clone(),
+        state.kill_signal(),
+        state.tree_exit_code_cell(),
       )
       .await;
     }
@@ -198,13 +202,16 @@ fn execute_sequential_list(
 async fn wait_handles(
   mut exit_code: i32,
   mut handles: Vec<JoinHandle<i32>>,
-  kill_signal: KillSignal,
+  kill_signal: &KillSignal,
+  tree_exit_code_cell: &TreeExitCodeCell,
 ) -> i32 {
   if exit_code != 0 {
-    kill_signal.send_and_try_set_aborted_code(SignalKind::SIGKILL, exit_code);
+    // this section failed, so set it as the exit code
+    tree_exit_code_cell.try_set(exit_code);
+    kill_signal.send(SignalKind::SIGTERM);
   }
-  // prefer surfacing the aborted exit code because it's the main reason for the failure
-  exit_code = kill_signal.aborted_code().unwrap_or(exit_code);
+  // prefer surfacing the tree exit code because it's the main reason for the failure
+  exit_code = tree_exit_code_cell.get().unwrap_or(exit_code);
   while !handles.is_empty() {
     let (result, _, remaining) = futures::future::select_all(handles).await;
 

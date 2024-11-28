@@ -29,6 +29,11 @@ impl ShellCommand for ExecutableCommand {
     let display_name = self.display_name.clone();
     let command_name = self.command_path.clone();
     async move {
+      // don't spawn if already aborted
+      if let Some(exit_code) = context.state.kill_signal().aborted_code() {
+        return ExecuteResult::from_exit_code(exit_code);
+      }
+
       let mut stderr = context.stderr;
       let mut sub_command = tokio::process::Command::new(&command_name);
       let child = sub_command
@@ -48,7 +53,7 @@ impl ShellCommand for ExecutableCommand {
             "Error launching '{}': {}",
             display_name, err
           ));
-          return ExecuteResult::Continue(1, Vec::new(), Vec::new());
+          return ExecuteResult::from_exit_code(1);
         }
       };
 
@@ -65,7 +70,7 @@ impl ShellCommand for ExecutableCommand {
             ),
             Err(err) => {
               let _ = stderr.write_line(&format!("{}", err));
-              return ExecuteResult::Continue(1, Vec::new(), Vec::new())
+              return ExecuteResult::from_exit_code(1);
             }
           },
           signal = context.state.kill_signal().wait_any() => {
@@ -76,10 +81,8 @@ impl ShellCommand for ExecutableCommand {
               if cfg!(not(unix)) && signal.causes_abort() {
                 let _ = child.start_kill();
                 let status = child.wait().await.ok();
-                return ExecuteResult::Continue(
+                return ExecuteResult::from_exit_code(
                   status.and_then(|s| s.code()).unwrap_or(signal.aborted_code()),
-                  Vec::new(),
-                  Vec::new(),
                 );
               }
             }
