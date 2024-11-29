@@ -1,9 +1,9 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ArgKind<'a> {
   ShortFlag(char),
   LongFlag(&'a str),
@@ -32,6 +32,8 @@ pub fn parse_arg_kinds(flags: &[String]) -> Vec<ArgKind> {
   for arg in flags {
     if had_dash_dash {
       result.push(ArgKind::Arg(arg));
+    } else if arg == "-" {
+      result.push(ArgKind::Arg("-"));
     } else if arg == "--" {
       had_dash_dash = true;
     } else if let Some(flag) = arg.strip_prefix("--") {

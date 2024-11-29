@@ -1,4 +1,4 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -7,24 +7,45 @@ use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use futures::future::BoxFuture;
+use futures::future::LocalBoxFuture;
 use futures::FutureExt;
 
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::execute_with_cancellation;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub async fn cp_command(
+pub struct CpCommand;
+
+impl ShellCommand for CpCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        cp_command(context.state.cwd(), context.args, context.stderr),
+        context.state.kill_signal()
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn cp_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_cp(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("cp: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      let _ = stderr.write_line(&format!("cp: {err}"));
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
@@ -140,16 +161,33 @@ fn parse_cp_args(cwd: &Path, args: Vec<String>) -> Result<CpFlags> {
   })
 }
 
-pub async fn mv_command(
+pub struct MvCommand;
+
+impl ShellCommand for MvCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        mv_command(context.state.cwd(), context.args, context.stderr),
+        context.state.kill_signal()
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn mv_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mv(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("mv: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      let _ = stderr.write_line(&format!("mv: {err}"));
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
@@ -205,7 +243,7 @@ fn get_copy_and_move_operations(
 ) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>> {
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
-  let destination = cwd.join(&specified_destination);
+  let destination = cwd.join(specified_destination);
   let from_args = paths;
   let mut operations = Vec::new();
   if from_args.len() > 1 {

@@ -1,31 +1,36 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::Context;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
 use std::path::Path;
 
-use crate::fs_util;
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::fs_util;
+use crate::shell::types::ExecuteResult;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub fn pwd_command(
-  cwd: &Path,
-  args: Vec<String>,
-  mut stdout: ShellPipeWriter,
-  mut stderr: ShellPipeWriter,
-) -> ExecuteResult {
-  match execute_pwd(cwd, args) {
-    Ok(output) => {
-      let _ = stdout.write_line(&output);
-      ExecuteResult::from_exit_code(0)
-    }
-    Err(err) => {
-      let _ = stderr.write_line(&format!("pwd: {}", err));
-      ExecuteResult::from_exit_code(1)
-    }
+pub struct PwdCommand;
+
+impl ShellCommand for PwdCommand {
+  fn execute(
+    &self,
+    mut context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    let result = match execute_pwd(context.state.cwd(), context.args) {
+      Ok(output) => {
+        let _ = context.stdout.write_line(&output);
+        ExecuteResult::from_exit_code(0)
+      }
+      Err(err) => {
+        let _ = context.stderr.write_line(&format!("pwd: {err}"));
+        ExecuteResult::from_exit_code(1)
+      }
+    };
+    Box::pin(futures::future::ready(result))
   }
 }
 

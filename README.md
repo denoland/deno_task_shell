@@ -16,5 +16,6 @@ let exit_code = deno_task_shell::execute(
   list,
   env_vars,
   &cwd,
+  Default::default(), // custom commands
 ).await;
 ```

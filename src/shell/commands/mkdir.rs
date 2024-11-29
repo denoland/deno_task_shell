@@ -1,25 +1,47 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use std::path::Path;
 
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::execute_with_cancellation;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub async fn mkdir_command(
+pub struct MkdirCommand;
+
+impl ShellCommand for MkdirCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        mkdir_command(context.state.cwd(), context.args, context.stderr),
+        context.state.kill_signal()
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn mkdir_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mkdir(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("mkdir: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      let _ = stderr.write_line(&format!("mkdir: {err}"));
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
@@ -27,7 +49,7 @@ pub async fn mkdir_command(
 async fn execute_mkdir(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
-    let path = cwd.join(&specified_path);
+    let path = cwd.join(specified_path);
     if path.is_file() || !flags.parents && path.is_dir() {
       bail!("cannot create directory '{}': File exists", specified_path);
     }

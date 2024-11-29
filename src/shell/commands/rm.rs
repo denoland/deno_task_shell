@@ -1,26 +1,48 @@
-// Copyright 2018-2022 the Deno authors. All rights reserved. MIT license.
+// Copyright 2018-2024 the Deno authors. MIT license.
 
 use anyhow::bail;
 use anyhow::Result;
+use futures::future::LocalBoxFuture;
+use futures::FutureExt;
 use std::io::ErrorKind;
 use std::path::Path;
 
-use crate::shell_types::ExecuteResult;
-use crate::shell_types::ShellPipeWriter;
+use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellPipeWriter;
 
 use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::execute_with_cancellation;
+use super::ShellCommand;
+use super::ShellCommandContext;
 
-pub async fn rm_command(
+pub struct RmCommand;
+
+impl ShellCommand for RmCommand {
+  fn execute(
+    &self,
+    context: ShellCommandContext,
+  ) -> LocalBoxFuture<'static, ExecuteResult> {
+    async move {
+      execute_with_cancellation!(
+        rm_command(context.state.cwd(), context.args, context.stderr),
+        context.state.kill_signal()
+      )
+    }
+    .boxed_local()
+  }
+}
+
+async fn rm_command(
   cwd: &Path,
   args: Vec<String>,
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_remove(cwd, args).await {
-    Ok(()) => ExecuteResult::Continue(0, Vec::new(), Vec::new()),
+    Ok(()) => ExecuteResult::from_exit_code(0),
     Err(err) => {
-      stderr.write_line(&format!("rm: {}", err)).unwrap();
-      ExecuteResult::Continue(1, Vec::new(), Vec::new())
+      let _ = stderr.write_line(&format!("rm: {err}"));
+      ExecuteResult::from_exit_code(1)
     }
   }
 }
@@ -28,40 +50,35 @@ pub async fn rm_command(
 async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
-    let path = cwd.join(&specified_path);
-    if flags.recursive {
+    let path = cwd.join(specified_path);
+    let result = if flags.recursive {
       if path.is_dir() {
-        if let Err(err) = tokio::fs::remove_dir_all(&path).await {
-          if err.kind() != ErrorKind::NotFound || !flags.force {
-            bail!("cannot remove '{}': {}", specified_path, err);
-          }
-        }
+        tokio::fs::remove_dir_all(&path).await
       } else {
-        remove_file_or_dir(&path, specified_path, &flags).await?;
+        remove_file_or_dir(&path, &flags).await
       }
     } else {
-      remove_file_or_dir(&path, specified_path, &flags).await?;
+      remove_file_or_dir(&path, &flags).await
+    };
+    if let Err(err) = result {
+      if err.kind() != ErrorKind::NotFound || !flags.force {
+        bail!("cannot remove '{}': {}", specified_path, err);
+      }
     }
   }
+
   Ok(())
 }
 
 async fn remove_file_or_dir(
   path: &Path,
-  specified_path: &str,
   flags: &RmFlags,
-) -> Result<()> {
-  let result = if flags.dir && path.is_dir() {
+) -> std::io::Result<()> {
+  if flags.dir && path.is_dir() {
     tokio::fs::remove_dir(path).await
   } else {
     tokio::fs::remove_file(path).await
-  };
-  if let Err(err) = result {
-    if err.kind() != ErrorKind::NotFound || !flags.force {
-      bail!("cannot remove '{}': {}", specified_path, err);
-    }
   }
-  Ok(())
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -267,7 +284,7 @@ mod test {
     fs::write(&existent_file, "").unwrap();
     fs::create_dir(&existent_dir).unwrap();
     fs::create_dir(&existent_dir_files).unwrap();
-    fs::write(&existent_dir_files.join("file.txt"), "").unwrap();
+    fs::write(existent_dir_files.join("file.txt"), "").unwrap();
 
     assert!(execute_remove(
       dir.path(),
