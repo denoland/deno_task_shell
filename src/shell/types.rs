@@ -16,6 +16,7 @@ use futures::future::LocalBoxFuture;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+use crate::shell::child_process_tracker::ChildProcessTracker;
 use crate::shell::fs_util;
 
 use super::commands::builtin_commands;
@@ -53,6 +54,7 @@ pub struct ShellState {
   cwd: PathBuf,
   commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
   kill_signal: KillSignal,
+  process_tracker: ChildProcessTracker,
   tree_exit_code_cell: TreeExitCodeCell,
 }
 
@@ -72,6 +74,7 @@ impl ShellState {
       cwd: PathBuf::new(),
       commands: Rc::new(commands),
       kill_signal,
+      process_tracker: ChildProcessTracker::new(),
       tree_exit_code_cell: Default::default(),
     };
     // ensure the data is normalized
@@ -159,6 +162,10 @@ impl ShellState {
 
   pub fn kill_signal(&self) -> &KillSignal {
     &self.kill_signal
+  }
+
+  pub fn track_child_process(&self, child: &tokio::process::Child) {
+    self.process_tracker.track(child);
   }
 
   pub(crate) fn tree_exit_code_cell(&self) -> &TreeExitCodeCell {

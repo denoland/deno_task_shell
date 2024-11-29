@@ -4,10 +4,6 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
 
-mod child_process_tracker;
-mod combinators;
-mod commands;
-mod fs_util;
 pub mod parser;
 
 #[cfg(feature = "shell")]
