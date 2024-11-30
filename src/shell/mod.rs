@@ -17,6 +17,7 @@ pub use types::ShellPipeWriter;
 pub use types::ShellState;
 pub use types::SignalKind;
 
+mod child_process_tracker;
 mod command;
 mod commands;
 mod execute;

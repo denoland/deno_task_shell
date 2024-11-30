@@ -11,7 +11,7 @@ description = "Cross platform scripting for deno task"
 
 [features]
 default = ["shell"]
-shell = ["futures", "glob", "nix", "os_pipe", "path-dedot", "tokio"]
+shell = ["futures", "glob", "nix", "os_pipe", "path-dedot", "tokio", "windows-sys"]
 serialization = ["serde"]
 
 [dependencies]
@@ -27,6 +27,9 @@ tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "proce
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.27.1", features = ["signal"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"], optional = true }
 
 [dev-dependencies]
 deno_unsync = "0.4.1"
