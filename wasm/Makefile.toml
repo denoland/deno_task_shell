@@ -1,0 +1,5 @@
+[tasks.wasm-build]
+description = "Build WASM target for deno_task_shell"
+command = "wasm-pack"
+install_crate = { crate_name = "wasm-pack", binary = "wasm-pack", test_arg = "-V" }
+args = ["build", "--target", "deno", "--scope", "@deno/deno_task_shell"]

@@ -19,3 +19,7 @@ let exit_code = deno_task_shell::execute(
   Default::default(), // custom commands
 ).await;
 ```
+
+## WASM
+
+To generate the WASM module, run `cargo make wasm-build`.

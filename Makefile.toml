@@ -1,0 +1,5 @@
+[env]
+CARGO_MAKE_EXTEND_WORKSPACE_MAKEFILE = true
+
+[tasks.wasm-build]
+# see wasm/Makefile.toml for task definition
