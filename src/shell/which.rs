@@ -6,6 +6,11 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+pub const EXECUTABLE_NAME: &str = match option_env!("DENO_EXECUTABLE_NAME") {
+  Some(name) => name,
+  None => "deno",
+};
+
 /// Error when a command path could not be resolved.
 #[derive(Error, Debug, PartialEq)]
 pub enum CommandPathResolutionError {
@@ -41,7 +46,7 @@ pub fn resolve_command_path<'a>(
   // that don't have deno on the path and to ensure it use the current
   // version of deno being executed rather than the one on the path,
   // which has caused some confusion.
-  if command_name == "deno" {
+  if command_name == EXECUTABLE_NAME {
     if let Ok(exe_path) = current_exe() {
       // this condition exists to make the tests pass because it's not
       // using the deno as the current executable
