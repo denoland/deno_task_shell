@@ -1060,24 +1060,22 @@ async fn execute_with_stdout(
 #[cfg(unix)]
 fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
   use std::os::unix::ffi::OsStrExt;
+  use std::os::unix::ffi::OsStringExt;
+
   text
     .as_bytes()
     .split(|b| *b == b' ') // split on literal space byte
-    .map(
-      |s| {
-        s.iter()
-          .copied()
-          .skip_while(|b| *b == b' ') // trim start
-          .rev()
-          .skip_while(|b| *b == b' ')
-          .collect::<Vec<u8>>() // trim end
-          .into_iter()
-          .rev()
-          .collect::<Vec<u8>>()
-      }, // re-reverse
-    )
+    .map(|s| {
+      // trim start and end manually (no double-ended iterators)
+      let start = s.iter().position(|b| *b != b' ').unwrap_or(0);
+      let end = s
+        .iter()
+        .rposition(|b| *b != b' ')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+      OsString::from_vec(s[start..end].to_vec())
+    })
     .filter(|s| !s.is_empty())
-    .map(OsString::from_vec)
     .collect()
 }
 
