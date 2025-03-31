@@ -152,7 +152,7 @@ mod local_test {
   fn should_resolve_current_exe_path_for_deno() {
     let cwd = std::env::current_dir().unwrap();
     let path = resolve_command_path(
-      &OsStr::new("deno"),
+      OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),
@@ -161,7 +161,7 @@ mod local_test {
     assert_eq!(path, PathBuf::from("/bin/deno"));
 
     let path = resolve_command_path(
-      &OsStr::new("deno"),
+      OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno.exe")),
@@ -170,7 +170,7 @@ mod local_test {
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
 
     let path = resolve_command_path(
-      &OsStr::new("deno"),
+      OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno_other")),
@@ -184,7 +184,7 @@ mod local_test {
     let cwd = std::env::current_dir().unwrap();
     // Command not found
     let result = resolve_command_path(
-      &OsStr::new("foobar"),
+      OsStr::new("foobar"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),
@@ -195,7 +195,7 @@ mod local_test {
     );
     // Command empty
     let result = resolve_command_path(
-      &OsStr::new(""),
+      OsStr::new(""),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),

@@ -80,12 +80,12 @@ mod test {
         ArgKind::ShortFlag('a'),
         ArgKind::ShortFlag('b'),
         ArgKind::LongFlag("force"),
-        ArgKind::Arg(&OsStr::new("testing")),
-        ArgKind::Arg(&OsStr::new("other")),
-        ArgKind::Arg(&OsStr::new("-1")),
-        ArgKind::Arg(&OsStr::new("-6.4")),
-        ArgKind::Arg(&OsStr::new("--test")),
-        ArgKind::Arg(&OsStr::new("-t")),
+        ArgKind::Arg(OsStr::new("testing")),
+        ArgKind::Arg(OsStr::new("other")),
+        ArgKind::Arg(OsStr::new("-1")),
+        ArgKind::Arg(OsStr::new("-6.4")),
+        ArgKind::Arg(OsStr::new("--test")),
+        ArgKind::Arg(OsStr::new("-t")),
       ]
     )
   }
