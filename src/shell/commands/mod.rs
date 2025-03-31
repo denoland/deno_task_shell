@@ -17,6 +17,7 @@ mod unset;
 mod xargs;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::rc::Rc;
 
 use futures::future::LocalBoxFuture;
@@ -99,7 +100,7 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
 }
 
 pub struct ExecuteCommandArgsContext {
-  pub args: Vec<String>,
+  pub args: Vec<OsString>,
   pub state: ShellState,
   pub stdin: ShellPipeReader,
   pub stdout: ShellPipeWriter,
@@ -107,7 +108,7 @@ pub struct ExecuteCommandArgsContext {
 }
 
 pub struct ShellCommandContext {
-  pub args: Vec<String>,
+  pub args: Vec<OsString>,
   pub state: ShellState,
   pub stdin: ShellPipeReader,
   pub stdout: ShellPipeWriter,

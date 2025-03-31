@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -19,8 +21,8 @@ use tokio::task::JoinHandle;
 use crate::shell::child_process_tracker::ChildProcessTracker;
 use crate::shell::fs_util;
 
-use super::commands::builtin_commands;
 use super::commands::ShellCommand;
+use super::commands::builtin_commands;
 
 /// Exit code set when an async task fails or the main execution
 /// line fail.
@@ -47,10 +49,10 @@ impl TreeExitCodeCell {
 pub struct ShellState {
   /// Environment variables that should be passed down to sub commands
   /// and used when evaluating environment variables.
-  env_vars: HashMap<String, String>,
+  env_vars: HashMap<OsString, OsString>,
   /// Variables that should be evaluated within the shell and
   /// not passed down to any sub commands.
-  shell_vars: HashMap<String, String>,
+  shell_vars: HashMap<OsString, OsString>,
   cwd: PathBuf,
   commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
   kill_signal: KillSignal,
@@ -60,7 +62,7 @@ pub struct ShellState {
 
 impl ShellState {
   pub fn new(
-    env_vars: HashMap<String, String>,
+    env_vars: HashMap<OsString, OsString>,
     cwd: &Path,
     custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
     kill_signal: KillSignal,
@@ -89,20 +91,21 @@ impl ShellState {
     &self.cwd
   }
 
-  pub fn env_vars(&self) -> &HashMap<String, String> {
+  pub fn env_vars(&self) -> &HashMap<OsString, OsString> {
     &self.env_vars
   }
 
-  pub fn get_var(&self, name: &str) -> Option<&String> {
+  pub fn get_var(&self, name: &OsStr) -> Option<&OsString> {
     let name = if cfg!(windows) {
-      Cow::Owned(name.to_uppercase())
+      Cow::Owned(name.to_ascii_uppercase())
     } else {
       Cow::Borrowed(name)
     };
+    let name: &OsStr = &name;
     self
       .env_vars
-      .get(name.as_ref())
-      .or_else(|| self.shell_vars.get(name.as_ref()))
+      .get(name)
+      .or_else(|| self.shell_vars.get(name))
   }
 
   pub fn set_cwd(&mut self, cwd: &Path) {
@@ -110,7 +113,7 @@ impl ShellState {
     // $PWD holds the current working directory, so we keep cwd and $PWD in sync
     self
       .env_vars
-      .insert("PWD".to_string(), self.cwd.display().to_string());
+      .insert("PWD".into(), self.cwd.clone().into_os_string());
   }
 
   pub fn apply_changes(&mut self, changes: &[EnvChange]) {
@@ -126,7 +129,9 @@ impl ShellState {
         if self.env_vars.contains_key(name) {
           self.apply_env_var(name, value);
         } else {
-          self.shell_vars.insert(name.to_string(), value.to_string());
+          self
+            .shell_vars
+            .insert(name.to_os_string(), value.to_os_string());
         }
       }
       EnvChange::UnsetVar(name) => {
@@ -139,12 +144,12 @@ impl ShellState {
     }
   }
 
-  pub fn apply_env_var(&mut self, name: &str, value: &str) {
+  pub fn apply_env_var(&mut self, name: &OsStr, value: &OsStr) {
     let name = if cfg!(windows) {
       // environment variables are case insensitive on windows
-      name.to_uppercase()
+      name.to_ascii_uppercase()
     } else {
-      name.to_string()
+      name.to_os_string()
     };
     if name == "PWD" {
       let cwd = PathBuf::from(value);
@@ -156,7 +161,7 @@ impl ShellState {
       }
     } else {
       self.shell_vars.remove(&name);
-      self.env_vars.insert(name, value.to_string());
+      self.env_vars.insert(name, value.to_os_string());
     }
   }
 
@@ -175,10 +180,13 @@ impl ShellState {
   /// Resolves a custom command that was injected.
   pub fn resolve_custom_command(
     &self,
-    name: &str,
+    name: &OsStr,
   ) -> Option<Rc<dyn ShellCommand>> {
-    // uses an Rc to allow resolving a command without borrowing from self
-    self.commands.get(name).cloned()
+    // only bother supporting utf8 custom command names for now
+    name
+      .to_str()
+      // uses an Rc to allow resolving a command without borrowing from self
+      .and_then(|name| self.commands.get(name).cloned())
   }
 
   /// Resolves the path to a command from the current working directory.
@@ -186,7 +194,7 @@ impl ShellState {
   /// Does not take injected custom commands into account.
   pub fn resolve_command_path(
     &self,
-    command_name: &str,
+    command_name: &OsStr,
   ) -> Result<PathBuf, crate::which::CommandPathResolutionError> {
     super::command::resolve_command_path(command_name, self.cwd(), self)
   }
@@ -202,11 +210,11 @@ impl ShellState {
 #[derive(Debug, PartialEq, Eq)]
 pub enum EnvChange {
   // `export ENV_VAR=VALUE`
-  SetEnvVar(String, String),
+  SetEnvVar(OsString, OsString),
   // `ENV_VAR=VALUE`
-  SetShellVar(String, String),
+  SetShellVar(OsString, OsString),
   // `unset ENV_VAR`
-  UnsetVar(String),
+  UnsetVar(OsString),
   Cd(PathBuf),
 }
 
@@ -399,19 +407,38 @@ impl ShellPipeWriter {
   }
 
   pub fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+    self.write_all_iter(std::iter::once(bytes))
+  }
+
+  pub fn write_all_iter<'a>(
+    &mut self,
+    iter: impl Iterator<Item = &'a [u8]> + 'a,
+  ) -> Result<()> {
     match self {
-      Self::OsPipe(pipe) => pipe.write_all(bytes)?,
-      Self::StdFile(file) => file.write_all(bytes)?,
+      Self::OsPipe(pipe) => {
+        for bytes in iter {
+          pipe.write_all(bytes)?;
+        }
+      }
+      Self::StdFile(file) => {
+        for bytes in iter {
+          file.write_all(bytes)?
+        }
+      }
       // For both stdout & stderr, we want to flush after each
       // write in order to bypass Rust's internal buffer.
       Self::Stdout => {
         let mut stdout = std::io::stdout().lock();
-        stdout.write_all(bytes)?;
+        for bytes in iter {
+          stdout.write_all(bytes)?;
+        }
         stdout.flush()?;
       }
       Self::Stderr => {
         let mut stderr = std::io::stderr().lock();
-        stderr.write_all(bytes)?;
+        for bytes in iter {
+          stderr.write_all(bytes)?;
+        }
         stderr.flush()?;
       }
       Self::Null => {}

@@ -1,20 +1,21 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::ffi::OsString;
 use std::time::Duration;
 
-use anyhow::bail;
 use anyhow::Result;
-use futures::future::LocalBoxFuture;
+use anyhow::bail;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeWriter;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
-use super::execute_with_cancellation;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
+use super::execute_with_cancellation;
 
 pub struct SleepCommand;
 
@@ -25,7 +26,7 @@ impl ShellCommand for SleepCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        sleep_command(context.args, context.stderr),
+        sleep_command(&context.args, context.stderr),
         context.state.kill_signal()
       )
     }
@@ -34,7 +35,7 @@ impl ShellCommand for SleepCommand {
 }
 
 async fn sleep_command(
-  args: Vec<String>,
+  args: &[OsString],
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_sleep(args).await {
@@ -46,7 +47,7 @@ async fn sleep_command(
   }
 }
 
-async fn execute_sleep(args: Vec<String>) -> Result<()> {
+async fn execute_sleep(args: &[OsString]) -> Result<()> {
   let ms = parse_args(args)?;
   tokio::time::sleep(Duration::from_millis(ms)).await;
   Ok(())
@@ -69,22 +70,32 @@ fn parse_arg(arg: &str) -> Result<f64> {
   Ok(arg.parse()?)
 }
 
-fn parse_args(args: Vec<String>) -> Result<u64> {
+fn parse_args(args: &[OsString]) -> Result<u64> {
   // the time to sleep is the sum of all the arguments
   let mut total_time_ms = 0;
   let mut had_value = false;
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
-      ArgKind::Arg(arg) => match parse_arg(arg) {
-        Ok(value_s) => {
-          let ms = (value_s * 1000f64) as u64;
-          total_time_ms += ms;
-          had_value = true;
+      ArgKind::Arg(arg) => {
+        match arg
+          .to_str()
+          .ok_or_else(|| anyhow::anyhow!("invalid utf-8"))
+          .and_then(parse_arg)
+        {
+          Ok(value_s) => {
+            let ms = (value_s * 1000f64) as u64;
+            total_time_ms += ms;
+            had_value = true;
+          }
+          Err(err) => {
+            bail!(
+              "error parsing argument '{}' to number: {}",
+              arg.to_string_lossy(),
+              err
+            );
+          }
         }
-        Err(err) => {
-          bail!("error parsing argument '{}' to number: {}", arg, err);
-        }
-      },
+      }
       ArgKind::LongFlag(_) | ArgKind::ShortFlag(_) => arg.bail_unsupported()?,
     }
   }
@@ -112,18 +123,14 @@ mod test {
 
   #[test]
   fn should_parse_args() {
-    let value = parse_args(vec![
-      "0.5".to_string(),
-      "1m".to_string(),
-      "1.25".to_string(),
-    ])
-    .unwrap();
+    let value =
+      parse_args(&["0.5".into(), "1m".into(), "1.25".into()]).unwrap();
     assert_eq!(value, 500 + 1000 * 60 + 1250);
 
-    let result = parse_args(vec![]).err().unwrap();
+    let result = parse_args(&[]).err().unwrap();
     assert_eq!(result.to_string(), "missing operand");
 
-    let result = parse_args(vec!["test".to_string()]).err().unwrap();
+    let result = parse_args(&["test".into()]).err().unwrap();
     assert_eq!(
       result.to_string(),
       "error parsing argument 'test' to number: invalid float literal"
@@ -133,7 +140,7 @@ mod test {
   #[tokio::test]
   async fn should_execute() {
     let time = Instant::now();
-    execute_sleep(vec!["0.1".to_string()]).await.unwrap();
+    execute_sleep(&["0.1".into()]).await.unwrap();
     assert!(time.elapsed().as_millis() >= 100);
   }
 }

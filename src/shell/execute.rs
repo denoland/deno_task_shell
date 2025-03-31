@@ -1,12 +1,15 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::rc::Rc;
+use std::string::FromUtf8Error;
 
+use futures::FutureExt;
 use futures::future;
 use futures::future::LocalBoxFuture;
-use futures::FutureExt;
 use thiserror::Error;
 use tokio::task::JoinHandle;
 
@@ -29,7 +32,6 @@ use crate::parser::Word;
 use crate::parser::WordPart;
 use crate::shell::commands::ShellCommand;
 use crate::shell::commands::ShellCommandContext;
-use crate::shell::types::pipe;
 use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::FutureExecuteResult;
@@ -38,9 +40,10 @@ use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
 use crate::shell::types::SignalKind;
+use crate::shell::types::pipe;
 
-use super::command::execute_unresolved_command_name;
 use super::command::UnresolvedCommandName;
+use super::command::execute_unresolved_command_name;
 use super::types::TreeExitCodeCell;
 
 /// Executes a `SequentialList` of commands in a deno_task_shell environment.
@@ -60,7 +63,7 @@ use super::types::TreeExitCodeCell;
 /// The exit code of the command execution.
 pub async fn execute(
   list: SequentialList,
-  env_vars: HashMap<String, String>,
+  env_vars: HashMap<OsString, OsString>,
   cwd: &Path,
   custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
   kill_signal: KillSignal,
@@ -169,7 +172,10 @@ fn execute_sequential_list(
           }
           ExecuteResult::Continue(exit_code, changes, handles) => {
             state.apply_changes(&changes);
-            state.apply_env_var("?", &exit_code.to_string());
+            state.apply_env_var(
+              OsStr::new("?"),
+              OsStr::new(&exit_code.to_string()),
+            );
             final_changes.extend(changes);
             async_handles.extend(handles);
             // use the final sequential item's exit code
@@ -239,7 +245,7 @@ fn execute_sequence(
       Sequence::ShellVar(var) => ExecuteResult::Continue(
         0,
         vec![EnvChange::SetShellVar(
-          var.name,
+          var.name.into(),
           match evaluate_word(var.value, &state, stdin, stderr.clone()).await {
             Ok(value) => value,
             Err(err) => {
@@ -262,7 +268,10 @@ fn execute_sequence(
         let (exit_code, mut async_handles) = match first_result {
           ExecuteResult::Exit(_, _) => return first_result,
           ExecuteResult::Continue(exit_code, sub_changes, async_handles) => {
-            state.apply_env_var("?", &exit_code.to_string());
+            state.apply_env_var(
+              OsStr::new("?"),
+              OsStr::new(&exit_code.to_string()),
+            );
             state.apply_changes(&sub_changes);
             changes.extend(sub_changes);
             (exit_code, async_handles)
@@ -438,7 +447,7 @@ async fn resolve_redirect_word_pipe(
         "Did you mean to quote it (ex. \"{1}\")?"
       ),
       words.len(),
-      words.join(" ")
+      os_string_join(&words, " ").to_string_lossy()
     ));
     return Err(ExecuteResult::from_exit_code(1));
   }
@@ -636,26 +645,28 @@ async fn execute_simple_command(
         return err.into_exit_code(&mut stderr);
       }
     };
-    state.apply_env_var(&env_var.name, &value);
+    state.apply_env_var(OsStr::new(&env_var.name), OsStr::new(&value));
   }
   execute_command_args(args, state, stdin, stdout, stderr).await
 }
 
 fn execute_command_args(
-  mut args: Vec<String>,
+  mut args: Vec<OsString>,
   state: ShellState,
   stdin: ShellPipeReader,
   stdout: ShellPipeWriter,
   mut stderr: ShellPipeWriter,
 ) -> FutureExecuteResult {
   let command_name = if args.is_empty() {
-    String::new()
+    OsString::new()
   } else {
     args.remove(0)
   };
   if let Some(exit_code) = state.kill_signal().aborted_code() {
     Box::pin(future::ready(ExecuteResult::from_exit_code(exit_code)))
-  } else if let Some(stripped_name) = command_name.strip_prefix('!') {
+  } else if let Some(stripped_name) =
+    command_name.to_string_lossy().strip_prefix('!')
+  {
     let _ = stderr.write_line(
         &format!(concat!(
           "History expansion is not supported:\n",
@@ -663,7 +674,7 @@ fn execute_command_args(
           "  ~\n\n",
           "Perhaps you meant to add a space after the exclamation point to negate the command?\n",
           "  ! {}",
-        ), command_name, stripped_name)
+        ), command_name.to_string_lossy(), stripped_name)
       );
     Box::pin(future::ready(ExecuteResult::from_exit_code(1)))
   } else {
@@ -701,7 +712,7 @@ pub async fn evaluate_args(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> Result<Vec<String>, EvaluateWordTextError> {
+) -> Result<Vec<OsString>, EvaluateWordTextError> {
   let mut result = Vec::new();
   for arg in args {
     let parts = evaluate_word_parts(
@@ -721,12 +732,10 @@ async fn evaluate_word(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> Result<String, EvaluateWordTextError> {
-  Ok(
-    evaluate_word_parts(word.into_parts(), state, stdin, stderr)
-      .await?
-      .join(" "),
-  )
+) -> Result<OsString, EvaluateWordTextError> {
+  let word_parts =
+    evaluate_word_parts(word.into_parts(), state, stdin, stderr).await?;
+  Ok(os_string_join(&word_parts, " "))
 }
 
 #[derive(Debug, Error)]
@@ -736,8 +745,15 @@ pub enum EvaluateWordTextError {
     pattern: String,
     err: glob::PatternError,
   },
+  #[error("glob: no matches found '{}'. Pattern part was not valid utf-8", part.to_string_lossy())]
+  NotUtf8Pattern { part: OsString },
   #[error("glob: no matches found '{}'", pattern)]
   NoFilesMatched { pattern: String },
+  #[error("Invalid utf-8: {}", err)]
+  InvalidUtf8 {
+    #[from]
+    err: FromUtf8Error,
+  },
 }
 
 impl EvaluateWordTextError {
@@ -752,15 +768,15 @@ fn evaluate_word_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> LocalBoxFuture<Result<Vec<String>, EvaluateWordTextError>> {
+) -> LocalBoxFuture<Result<Vec<OsString>, EvaluateWordTextError>> {
   #[derive(Debug)]
   enum TextPart {
-    Quoted(String),
-    Text(String),
+    Quoted(OsString),
+    Text(OsString),
   }
 
   impl TextPart {
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &OsStr {
       match self {
         TextPart::Quoted(text) => text,
         TextPart::Text(text) => text,
@@ -768,11 +784,11 @@ fn evaluate_word_parts(
     }
   }
 
-  fn text_parts_to_string(parts: Vec<TextPart>) -> String {
+  fn text_parts_to_string(parts: Vec<TextPart>) -> OsString {
     let mut result =
-      String::with_capacity(parts.iter().map(|p| p.as_str().len()).sum());
+      OsString::with_capacity(parts.iter().map(|p| p.as_str().len()).sum());
     for part in parts {
-      result.push_str(part.as_str());
+      result.push(part.as_str());
     }
     result
   }
@@ -781,13 +797,13 @@ fn evaluate_word_parts(
     state: &ShellState,
     text_parts: Vec<TextPart>,
     is_quoted: bool,
-  ) -> Result<Vec<String>, EvaluateWordTextError> {
+  ) -> Result<Vec<OsString>, EvaluateWordTextError> {
     if !is_quoted
       && text_parts
         .iter()
         .filter_map(|p| match p {
           TextPart::Quoted(_) => None,
-          TextPart::Text(text) => Some(text.as_str()),
+          TextPart::Text(text) => text.to_str(),
         })
         .any(|text| text.chars().any(|c| matches!(c, '?' | '*' | '[')))
     {
@@ -795,20 +811,28 @@ fn evaluate_word_parts(
       for text_part in text_parts {
         match text_part {
           TextPart::Quoted(text) => {
-            for c in text.chars() {
-              match c {
-                '?' | '*' | '[' | ']' => {
-                  // escape because it was quoted
-                  current_text.push('[');
-                  current_text.push(c);
-                  current_text.push(']');
+            if let Some(text) = text.to_str() {
+              for c in text.chars() {
+                match c {
+                  '?' | '*' | '[' | ']' => {
+                    // escape because it was quoted
+                    current_text.push('[');
+                    current_text.push(c);
+                    current_text.push(']');
+                  }
+                  _ => current_text.push(c),
                 }
-                _ => current_text.push(c),
               }
+            } else {
+              return Err(EvaluateWordTextError::NotUtf8Pattern { part: text });
             }
           }
           TextPart::Text(text) => {
-            current_text.push_str(&text);
+            if let Some(text) = text.to_str() {
+              current_text.push_str(text);
+            } else {
+              return Err(EvaluateWordTextError::NotUtf8Pattern { part: text });
+            }
           }
         }
       }
@@ -840,14 +864,14 @@ fn evaluate_word_parts(
             let paths = if is_absolute {
               paths
                 .into_iter()
-                .map(|p| p.display().to_string())
+                .map(|p| p.into_os_string())
                 .collect::<Vec<_>>()
             } else {
               paths
                 .into_iter()
                 .map(|p| {
                   let path = p.strip_prefix(cwd).unwrap();
-                  path.display().to_string()
+                  path.to_path_buf().into_os_string()
                 })
                 .collect::<Vec<_>>()
             };
@@ -867,7 +891,7 @@ fn evaluate_word_parts(
     state: &ShellState,
     stdin: ShellPipeReader,
     stderr: ShellPipeWriter,
-  ) -> LocalBoxFuture<Result<Vec<String>, EvaluateWordTextError>> {
+  ) -> LocalBoxFuture<Result<Vec<OsString>, EvaluateWordTextError>> {
     // recursive async, so requires boxing
     async move {
       let mut result = Vec::new();
@@ -875,12 +899,10 @@ fn evaluate_word_parts(
       for part in parts {
         let evaluation_result_text = match part {
           WordPart::Text(text) => {
-            current_text.push(TextPart::Text(text));
+            current_text.push(TextPart::Text(text.into()));
             None
           }
-          WordPart::Variable(name) => {
-            state.get_var(&name).map(|v| v.to_string())
-          }
+          WordPart::Variable(name) => state.get_var(OsStr::new(&name)).cloned(),
           WordPart::Command(list) => Some(
             evaluate_command_substitution(
               list,
@@ -889,18 +911,18 @@ fn evaluate_word_parts(
               stdin.clone(),
               stderr.clone(),
             )
-            .await,
+            .await?,
           ),
           WordPart::Quoted(parts) => {
-            let text = evaluate_word_parts_inner(
+            let parts = evaluate_word_parts_inner(
               parts,
               true,
               state,
               stdin.clone(),
               stderr.clone(),
             )
-            .await?
-            .join(" ");
+            .await?;
+            let text = os_string_join(&parts, " ");
 
             current_text.push(TextPart::Quoted(text));
             continue;
@@ -911,11 +933,9 @@ fn evaluate_word_parts(
         // For now we do a very basic string split on whitespace, but in the future
         // we should continue to improve this functionality.
         if let Some(text) = evaluation_result_text {
-          let mut parts = text
-            .split(' ')
-            .map(|p| p.trim())
-            .filter(|p| !p.is_empty())
-            .map(|p| TextPart::Text(p.to_string()))
+          let mut parts = split_osstring_on_space(&text)
+            .into_iter()
+            .map(TextPart::Text)
             .collect::<Vec<_>>();
 
           if !parts.is_empty() {
@@ -963,8 +983,8 @@ async fn evaluate_command_substitution(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> String {
-  let text = execute_with_stdout_as_text(|shell_stdout_writer| {
+) -> Result<OsString, FromUtf8Error> {
+  let data = execute_with_stdout(|shell_stdout_writer| {
     execute_sequential_list(
       list,
       state.clone(),
@@ -976,22 +996,56 @@ async fn evaluate_command_substitution(
   })
   .await;
 
-  // Remove the trailing newline and then replace inner newlines with a space
-  // This seems to be what sh does, but I'm not entirely sure:
-  //
-  // > echo $(echo 1 && echo -e "\n2\n")
-  // 1 2
-  text
-    .strip_suffix("\r\n")
-    .or_else(|| text.strip_suffix('\n'))
-    .unwrap_or(&text)
-    .replace("\r\n", " ")
-    .replace('\n', " ")
+  let data = normalize_newlines_to_spaces(&data);
+  os_string_from_bytes(data)
 }
 
-async fn execute_with_stdout_as_text(
+// Remove the trailing newline and then replace inner newlines with a space
+// This seems to be what sh does, but I'm not entirely sure:
+//
+// > echo $(echo 1 && echo -e "\n2\n\n\n")
+// 1 2
+fn normalize_newlines_to_spaces(input: &[u8]) -> Vec<u8> {
+  let mut output = Vec::with_capacity(input.len());
+  let mut iter = input.iter().copied().peekable();
+  let mut in_word = false;
+
+  // skip leading whitespace
+  while let Some(b) = iter.peek() {
+    if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
+      iter.next();
+    } else {
+      break;
+    }
+  }
+
+  while let Some(b) = iter.next() {
+    if matches!(b, b' ' | b'\n' | b'\r' | b'\t') {
+      // skip all subsequent whitespace
+      while let Some(n) = iter.peek() {
+        if matches!(n, b' ' | b'\n' | b'\r' | b'\t') {
+          iter.next();
+        } else {
+          break;
+        }
+      }
+
+      // only emit a space if we've already emitted some content
+      if in_word {
+        output.push(b' ');
+      }
+    } else {
+      output.push(b);
+      in_word = true;
+    }
+  }
+
+  output
+}
+
+async fn execute_with_stdout(
   execute: impl FnOnce(ShellPipeWriter) -> FutureExecuteResult,
-) -> String {
+) -> Vec<u8> {
   let (shell_stdout_reader, shell_stdout_writer) = pipe();
   let spawned_output = execute(shell_stdout_writer);
   let output_handle = tokio::task::spawn_blocking(move || {
@@ -1000,6 +1054,78 @@ async fn execute_with_stdout_as_text(
     final_data
   });
   let _ = spawned_output.await;
-  let data = output_handle.await.unwrap();
-  String::from_utf8_lossy(&data).to_string()
+  output_handle.await.unwrap()
+}
+
+#[cfg(unix)]
+fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
+  use std::os::unix::ffi::OsStrExt;
+  text
+    .as_bytes()
+    .split(|b| *b == b' ') // split on literal space byte
+    .map(
+      |s| {
+        s.iter()
+          .copied()
+          .skip_while(|b| *b == b' ') // trim start
+          .rev()
+          .skip_while(|b| *b == b' ')
+          .collect::<Vec<u8>>() // trim end
+          .into_iter()
+          .rev()
+          .collect::<Vec<u8>>()
+      }, // re-reverse
+    )
+    .filter(|s| !s.is_empty())
+    .map(OsString::from_vec)
+    .collect()
+}
+
+#[cfg(windows)]
+fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
+  use std::os::windows::ffi::OsStrExt;
+  use std::os::windows::ffi::OsStringExt;
+  let wide: Vec<u16> = text.encode_wide().collect();
+
+  wide
+    .split(|&w| w == 0x20) // UTF-16 ' '
+    .map(|chunk| {
+      let start = chunk.iter().position(|&c| c != 0x20).unwrap_or(0);
+      let end = chunk
+        .iter()
+        .rposition(|&c| c != 0x20)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+      OsString::from_wide(&chunk[start..end])
+    })
+    .filter(|s| !s.is_empty())
+    .collect()
+}
+
+#[cfg(unix)]
+fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, FromUtf8Error> {
+  use std::os::unix::ffi::OsStringExt;
+  Ok(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(windows)]
+fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, FromUtf8Error> {
+  String::from_utf8(bytes).map(OsString::from)
+}
+
+fn os_string_join(parts: &[OsString], join_text: &str) -> OsString {
+  if parts.is_empty() {
+    return OsString::new();
+  }
+  let capacity = parts.iter().map(|p| p.len()).sum::<usize>()
+    + (parts.len() - 1) * join_text.len();
+  let mut result = OsString::with_capacity(capacity);
+  for (i, part) in parts.iter().enumerate() {
+    if i > 0 {
+      result.push(join_text);
+    }
+    result.push(part);
+  }
+  debug_assert_eq!(result.len(), capacity);
+  result
 }

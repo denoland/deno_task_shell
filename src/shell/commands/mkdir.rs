@@ -1,19 +1,21 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
 use anyhow::Result;
-use futures::future::LocalBoxFuture;
+use anyhow::bail;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeWriter;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
-use super::execute_with_cancellation;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
+use super::execute_with_cancellation;
 
 pub struct MkdirCommand;
 
@@ -24,7 +26,7 @@ impl ShellCommand for MkdirCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        mkdir_command(context.state.cwd(), context.args, context.stderr),
+        mkdir_command(context.state.cwd(), &context.args, context.stderr),
         context.state.kill_signal()
       )
     }
@@ -34,7 +36,7 @@ impl ShellCommand for MkdirCommand {
 
 async fn mkdir_command(
   cwd: &Path,
-  args: Vec<String>,
+  args: &[OsString],
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mkdir(cwd, args).await {
@@ -46,40 +48,51 @@ async fn mkdir_command(
   }
 }
 
-async fn execute_mkdir(cwd: &Path, args: Vec<String>) -> Result<()> {
+async fn execute_mkdir(cwd: &Path, args: &[OsString]) -> Result<()> {
   let flags = parse_args(args)?;
-  for specified_path in &flags.paths {
+  for specified_path in flags.paths {
     let path = cwd.join(specified_path);
     if path.is_file() || !flags.parents && path.is_dir() {
-      bail!("cannot create directory '{}': File exists", specified_path);
+      bail!(
+        "cannot create directory '{}': File exists",
+        specified_path.to_string_lossy()
+      );
     }
     if flags.parents {
       if let Err(err) = tokio::fs::create_dir_all(&path).await {
-        bail!("cannot create directory '{}': {}", specified_path, err);
+        bail!(
+          "cannot create directory '{}': {}",
+          specified_path.to_string_lossy(),
+          err
+        );
       }
     } else if let Err(err) = tokio::fs::create_dir(&path).await {
-      bail!("cannot create directory '{}': {}", specified_path, err);
+      bail!(
+        "cannot create directory '{}': {}",
+        specified_path.to_string_lossy(),
+        err
+      );
     }
   }
   Ok(())
 }
 
 #[derive(Default, Debug, PartialEq)]
-struct MkdirFlags {
+struct MkdirFlags<'a> {
   parents: bool,
-  paths: Vec<String>,
+  paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: Vec<String>) -> Result<MkdirFlags> {
+fn parse_args(args: &[OsString]) -> Result<MkdirFlags> {
   let mut result = MkdirFlags::default();
 
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
       ArgKind::LongFlag("parents") | ArgKind::ShortFlag('p') => {
         result.parents = true;
       }
       ArgKind::Arg(path) => {
-        result.paths.push(path.to_string());
+        result.paths.push(path);
       }
       ArgKind::LongFlag(_) | ArgKind::ShortFlag(_) => arg.bail_unsupported()?,
     }
@@ -102,53 +115,35 @@ mod test {
   #[test]
   fn parses_args() {
     assert_eq!(
-      parse_args(vec![
-        "--parents".to_string(),
-        "a".to_string(),
-        "b".to_string(),
-      ])
-      .unwrap(),
+      parse_args(&["--parents".into(), "a".into(), "b".into(),]).unwrap(),
       MkdirFlags {
         parents: true,
-        paths: vec!["a".to_string(), "b".to_string()],
+        paths: vec![OsStr::new("a"), OsStr::new("b")],
       }
     );
     assert_eq!(
-      parse_args(vec!["-p".to_string(), "a".to_string(), "b".to_string(),])
-        .unwrap(),
+      parse_args(&["-p".into(), "a".into(), "b".into(),]).unwrap(),
       MkdirFlags {
         parents: true,
-        paths: vec!["a".to_string(), "b".to_string()],
+        paths: vec![OsStr::new("a"), OsStr::new("b")],
       }
     );
     assert_eq!(
-      parse_args(vec!["--parents".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["--parents".into()]).err().unwrap().to_string(),
       "missing operand",
     );
     assert_eq!(
-      parse_args(vec![
-        "--parents".to_string(),
-        "-p".to_string(),
-        "-u".to_string(),
-        "a".to_string(),
-      ])
-      .err()
-      .unwrap()
-      .to_string(),
+      parse_args(&["--parents".into(), "-p".into(), "-u".into(), "a".into(),])
+        .err()
+        .unwrap()
+        .to_string(),
       "unsupported flag: -u",
     );
     assert_eq!(
-      parse_args(vec![
-        "--parents".to_string(),
-        "--random-flag".to_string(),
-        "a".to_string(),
-      ])
-      .err()
-      .unwrap()
-      .to_string(),
+      parse_args(&["--parents".into(), "--random-flag".into(), "a".into(),])
+        .err()
+        .unwrap()
+        .to_string(),
       "unsupported flag: --random-flag",
     );
   }
@@ -162,7 +157,7 @@ mod test {
     fs::create_dir(sub_dir_path).unwrap();
 
     assert_eq!(
-      execute_mkdir(dir.path(), vec!["file.txt".to_string()],)
+      execute_mkdir(dir.path(), &["file.txt".into()],)
         .await
         .err()
         .unwrap()
@@ -170,16 +165,17 @@ mod test {
       "cannot create directory 'file.txt': File exists"
     );
 
-    assert_eq!(execute_mkdir(
-      dir.path(),
-      vec!["-p".to_string(), "file.txt".to_string()],
-    )
-    .await
-    .err()
-    .unwrap().to_string(), "cannot create directory 'file.txt': File exists");
+    assert_eq!(
+      execute_mkdir(dir.path(), &["-p".into(), "file.txt".into()],)
+        .await
+        .err()
+        .unwrap()
+        .to_string(),
+      "cannot create directory 'file.txt': File exists"
+    );
 
     assert_eq!(
-      execute_mkdir(dir.path(), vec!["folder".to_string()],)
+      execute_mkdir(dir.path(), &["folder".into()],)
         .await
         .err()
         .unwrap()
@@ -188,18 +184,16 @@ mod test {
     );
 
     // should work because of -p
-    execute_mkdir(dir.path(), vec!["-p".to_string(), "folder".to_string()])
+    execute_mkdir(dir.path(), &["-p".into(), "folder".into()])
       .await
       .unwrap();
 
-    execute_mkdir(dir.path(), vec!["other".to_string()])
-      .await
-      .unwrap();
+    execute_mkdir(dir.path(), &["other".into()]).await.unwrap();
     assert!(dir.path().join("other").exists());
 
     // sub folder
     assert_eq!(
-      execute_mkdir(dir.path(), vec!["sub/folder".to_string()],)
+      execute_mkdir(dir.path(), &["sub/folder".into()],)
         .await
         .err()
         .unwrap()
@@ -210,7 +204,7 @@ mod test {
       )
     );
 
-    execute_mkdir(dir.path(), vec!["-p".to_string(), "sub/folder".to_string()])
+    execute_mkdir(dir.path(), &["-p".into(), "sub/folder".into()])
       .await
       .unwrap();
     assert!(dir.path().join("sub").join("folder").exists());

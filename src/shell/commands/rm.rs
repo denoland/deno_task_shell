@@ -1,20 +1,22 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
 use anyhow::Result;
-use futures::future::LocalBoxFuture;
+use anyhow::bail;
 use futures::FutureExt;
+use futures::future::LocalBoxFuture;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeWriter;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
-use super::execute_with_cancellation;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
+use super::execute_with_cancellation;
 
 pub struct RmCommand;
 
@@ -25,7 +27,7 @@ impl ShellCommand for RmCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        rm_command(context.state.cwd(), context.args, context.stderr),
+        rm_command(context.state.cwd(), &context.args, context.stderr),
         context.state.kill_signal()
       )
     }
@@ -35,7 +37,7 @@ impl ShellCommand for RmCommand {
 
 async fn rm_command(
   cwd: &Path,
-  args: Vec<String>,
+  args: &[OsString],
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_remove(cwd, args).await {
@@ -47,7 +49,7 @@ async fn rm_command(
   }
 }
 
-async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
+async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<()> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
     let path = cwd.join(specified_path);
@@ -62,7 +64,11 @@ async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
     };
     if let Err(err) = result {
       if err.kind() != ErrorKind::NotFound || !flags.force {
-        bail!("cannot remove '{}': {}", specified_path, err);
+        bail!(
+          "cannot remove '{}': {}",
+          specified_path.to_string_lossy(),
+          err
+        );
       }
     }
   }
@@ -72,7 +78,7 @@ async fn execute_remove(cwd: &Path, args: Vec<String>) -> Result<()> {
 
 async fn remove_file_or_dir(
   path: &Path,
-  flags: &RmFlags,
+  flags: &RmFlags<'_>,
 ) -> std::io::Result<()> {
   if flags.dir && path.is_dir() {
     tokio::fs::remove_dir(path).await
@@ -82,17 +88,17 @@ async fn remove_file_or_dir(
 }
 
 #[derive(Default, Debug, PartialEq)]
-struct RmFlags {
+struct RmFlags<'a> {
   force: bool,
   recursive: bool,
   dir: bool,
-  paths: Vec<String>,
+  paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: Vec<String>) -> Result<RmFlags> {
+fn parse_args(args: &[OsString]) -> Result<RmFlags> {
   let mut result = RmFlags::default();
 
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
       ArgKind::LongFlag("recursive")
       | ArgKind::ShortFlag('r')
@@ -106,7 +112,7 @@ fn parse_args(args: Vec<String>) -> Result<RmFlags> {
         result.force = true;
       }
       ArgKind::Arg(path) => {
-        result.paths.push(path.to_string());
+        result.paths.push(path);
       }
       ArgKind::LongFlag(_) | ArgKind::ShortFlag(_) => arg.bail_unsupported()?,
     }
@@ -129,66 +135,57 @@ mod test {
   #[test]
   fn parses_args() {
     assert_eq!(
-      parse_args(vec![
-        "--recursive".to_string(),
-        "--dir".to_string(),
-        "a".to_string(),
-        "b".to_string(),
+      parse_args(&[
+        "--recursive".into(),
+        "--dir".into(),
+        "a".into(),
+        "b".into(),
       ])
       .unwrap(),
       RmFlags {
         recursive: true,
         dir: true,
-        paths: vec!["a".to_string(), "b".to_string()],
+        paths: vec![OsStr::new("a"), OsStr::new("b")],
         ..Default::default()
       }
     );
     assert_eq!(
-      parse_args(vec!["-rf".to_string(), "a".to_string(), "b".to_string(),])
-        .unwrap(),
+      parse_args(&["-rf".into(), "a".into(), "b".into(),]).unwrap(),
       RmFlags {
         recursive: true,
         force: true,
         dir: false,
-        paths: vec!["a".to_string(), "b".to_string()],
+        paths: vec![OsStr::new("a"), OsStr::new("b")],
       }
     );
     assert_eq!(
-      parse_args(vec!["-d".to_string(), "a".to_string()]).unwrap(),
+      parse_args(&["-d".into(), "a".into()]).unwrap(),
       RmFlags {
         recursive: false,
         force: false,
         dir: true,
-        paths: vec!["a".to_string()],
+        paths: vec![OsStr::new("a")],
       }
     );
     assert_eq!(
-      parse_args(vec!["--recursive".to_string(), "-f".to_string(),])
+      parse_args(&["--recursive".into(), "-f".into(),])
         .err()
         .unwrap()
         .to_string(),
       "missing operand",
     );
     assert_eq!(
-      parse_args(vec![
-        "--recursive".to_string(),
-        "-u".to_string(),
-        "a".to_string(),
-      ])
-      .err()
-      .unwrap()
-      .to_string(),
+      parse_args(&["--recursive".into(), "-u".into(), "a".into(),])
+        .err()
+        .unwrap()
+        .to_string(),
       "unsupported flag: -u",
     );
     assert_eq!(
-      parse_args(vec![
-        "--recursive".to_string(),
-        "--random-flag".to_string(),
-        "a".to_string(),
-      ])
-      .err()
-      .unwrap()
-      .to_string(),
+      parse_args(&["--recursive".into(), "--random-flag".into(), "a".into(),])
+        .err()
+        .unwrap()
+        .to_string(),
       "unsupported flag: --random-flag",
     );
   }
@@ -199,15 +196,11 @@ mod test {
     let existent_file = dir.path().join("existent.txt");
     fs::write(&existent_file, "").unwrap();
 
-    execute_remove(
-      dir.path(),
-      vec!["-f".to_string(), "non_existent.txt".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_remove(dir.path(), &["-f".into(), "non_existent.txt".into()])
+      .await
+      .unwrap();
 
-    let result =
-      execute_remove(dir.path(), vec!["non_existent.txt".to_string()]).await;
+    let result = execute_remove(dir.path(), &["non_existent.txt".into()]).await;
     assert_eq!(
       result.err().unwrap().to_string(),
       format!(
@@ -217,7 +210,7 @@ mod test {
     );
 
     assert!(existent_file.exists());
-    execute_remove(dir.path(), vec!["existent.txt".to_string()])
+    execute_remove(dir.path(), &["existent.txt".into()])
       .await
       .unwrap();
     assert!(!existent_file.exists());
@@ -229,11 +222,9 @@ mod test {
     let existent_file = dir.path().join("existent.txt");
     fs::write(&existent_file, "").unwrap();
 
-    let result = execute_remove(
-      dir.path(),
-      vec!["-r".to_string(), "non_existent.txt".to_string()],
-    )
-    .await;
+    let result =
+      execute_remove(dir.path(), &["-r".into(), "non_existent.txt".into()])
+        .await;
     assert_eq!(
       result.err().unwrap().to_string(),
       format!(
@@ -244,12 +235,9 @@ mod test {
 
     // test on a file
     assert!(existent_file.exists());
-    execute_remove(
-      dir.path(),
-      vec!["-r".to_string(), "existent.txt".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_remove(dir.path(), &["-r".into(), "existent.txt".into()])
+      .await
+      .unwrap();
     assert!(!existent_file.exists());
 
     // test on a directory
@@ -258,19 +246,18 @@ mod test {
     let sub_file = sub_dir.join("file.txt");
     fs::write(&sub_file, "test").unwrap();
     assert!(sub_file.exists());
-    execute_remove(dir.path(), vec!["-r".to_string(), "folder".to_string()])
+    execute_remove(dir.path(), &["-r".into(), "folder".into()])
       .await
       .unwrap();
     assert!(!sub_file.exists());
 
     let result =
-      execute_remove(dir.path(), vec!["-r".to_string(), "folder".to_string()])
-        .await;
+      execute_remove(dir.path(), &["-r".into(), "folder".into()]).await;
     assert_eq!(
       result.err().unwrap().to_string(),
       format!("cannot remove 'folder': {}", no_such_file_error_text())
     );
-    execute_remove(dir.path(), vec!["-rf".to_string(), "folder".to_string()])
+    execute_remove(dir.path(), &["-rf".into(), "folder".into()])
       .await
       .unwrap();
   }
@@ -286,26 +273,21 @@ mod test {
     fs::create_dir(&existent_dir_files).unwrap();
     fs::write(existent_dir_files.join("file.txt"), "").unwrap();
 
-    assert!(execute_remove(
-      dir.path(),
-      vec!["-d".to_string(), "existent.txt".to_string()],
-    )
-    .await
-    .is_ok());
+    assert!(
+      execute_remove(dir.path(), &["-d".into(), "existent.txt".into()],)
+        .await
+        .is_ok()
+    );
 
-    assert!(execute_remove(
-      dir.path(),
-      vec!["-d".to_string(), "sub_dir".to_string()],
-    )
-    .await
-    .is_ok());
+    assert!(
+      execute_remove(dir.path(), &["-d".into(), "sub_dir".into()],)
+        .await
+        .is_ok()
+    );
     assert!(!existent_dir.exists());
 
-    let result = execute_remove(
-      dir.path(),
-      vec!["-d".to_string(), "sub_dir_files".to_string()],
-    )
-    .await;
+    let result =
+      execute_remove(dir.path(), &["-d".into(), "sub_dir_files".into()]).await;
     assert_eq!(
       result.err().unwrap().to_string(),
       format!(

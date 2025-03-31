@@ -1,20 +1,22 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
 
-use anyhow::bail;
 use anyhow::Result;
+use anyhow::bail;
 use futures::future::LocalBoxFuture;
 
-use crate::shell::KillSignal;
 use crate::ExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
 use crate::ShellPipeWriter;
+use crate::shell::KillSignal;
 
-use super::args::parse_arg_kinds;
 use super::args::ArgKind;
+use super::args::parse_arg_kinds;
 
 pub struct HeadCommand;
 
@@ -80,7 +82,7 @@ fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
 }
 
 fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
-  let flags = parse_args(context.args)?;
+  let flags = parse_args(&context.args)?;
   if flags.path == "-" {
     copy_lines(
       &mut context.stdout,
@@ -91,7 +93,7 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
     )
   } else {
     let path = flags.path;
-    match File::open(context.state.cwd().join(&path)) {
+    match File::open(context.state.cwd().join(path)) {
       Ok(mut file) => copy_lines(
         &mut context.stdout,
         flags.lines,
@@ -100,7 +102,11 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
         512,
       ),
       Err(err) => {
-        context.stderr.write_line(&format!("head: {path}: {err}"))?;
+        context.stderr.write_line(&format!(
+          "head: {}: {}",
+          path.to_string_lossy(),
+          err
+        ))?;
         Ok(ExecuteResult::from_exit_code(1))
       }
     }
@@ -108,20 +114,20 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
 }
 
 #[derive(Debug, PartialEq)]
-struct HeadFlags {
-  path: String,
+struct HeadFlags<'a> {
+  path: &'a OsStr,
   lines: u64,
 }
 
-fn parse_args(args: Vec<String>) -> Result<HeadFlags> {
-  let mut path: Option<String> = None;
+fn parse_args<'a>(args: &'a [OsString]) -> Result<HeadFlags<'a>> {
+  let mut path: Option<&'a OsStr> = None;
   let mut lines: Option<u64> = None;
-  let mut iterator = parse_arg_kinds(&args).into_iter();
+  let mut iterator = parse_arg_kinds(args).into_iter();
   while let Some(arg) = iterator.next() {
     match arg {
       ArgKind::Arg(file_name) => {
         if path.is_none() {
-          path = Some(file_name.to_string());
+          path = Some(file_name);
           continue;
         }
 
@@ -131,7 +137,12 @@ fn parse_args(args: Vec<String>) -> Result<HeadFlags> {
       }
       ArgKind::ShortFlag('n') => match iterator.next() {
         Some(ArgKind::Arg(arg)) => {
-          lines = Some(arg.parse::<u64>()?);
+          let num = arg.to_str().and_then(|a| a.parse::<u64>().ok());
+          if let Some(num) = num {
+            lines = Some(num);
+          } else {
+            bail!("expected a numeric value following -n")
+          }
         }
         _ => bail!("expected a value following -n"),
       },
@@ -149,7 +160,7 @@ fn parse_args(args: Vec<String>) -> Result<HeadFlags> {
   }
 
   Ok(HeadFlags {
-    path: path.unwrap_or("-".to_string()),
+    path: path.unwrap_or(OsStr::new("-")),
     lines: lines.unwrap_or(10),
   })
 }
@@ -217,96 +228,79 @@ mod test {
   #[test]
   fn parses_args() {
     assert_eq!(
-      parse_args(vec![]).unwrap(),
+      parse_args(&[]).unwrap(),
       HeadFlags {
-        path: "-".to_string(),
+        path: OsStr::new("-"),
         lines: 10
       }
     );
     assert_eq!(
-      parse_args(vec!["-n".to_string(), "5".to_string()]).unwrap(),
+      parse_args(&["-n".into(), "5".into()]).unwrap(),
       HeadFlags {
-        path: "-".to_string(),
+        path: OsStr::new("-"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["--lines=5".to_string()]).unwrap(),
+      parse_args(&["--lines=5".into()]).unwrap(),
       HeadFlags {
-        path: "-".to_string(),
+        path: OsStr::new("-"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string()]).unwrap(),
+      parse_args(&["path".into()]).unwrap(),
       HeadFlags {
-        path: "path".to_string(),
+        path: OsStr::new("path"),
         lines: 10
       }
     );
     assert_eq!(
-      parse_args(vec!["-n".to_string(), "5".to_string(), "path".to_string()])
-        .unwrap(),
+      parse_args(&["-n".into(), "5".into(), "path".into()]).unwrap(),
       HeadFlags {
-        path: "path".to_string(),
+        path: OsStr::new("path"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["--lines=5".to_string(), "path".to_string()]).unwrap(),
+      parse_args(&["--lines=5".into(), "path".into()]).unwrap(),
       HeadFlags {
-        path: "path".to_string(),
+        path: OsStr::new("path"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string(), "-n".to_string(), "5".to_string()])
-        .unwrap(),
+      parse_args(&["path".into(), "-n".into(), "5".into()]).unwrap(),
       HeadFlags {
-        path: "path".to_string(),
+        path: OsStr::new("path"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string(), "--lines=5".to_string()]).unwrap(),
+      parse_args(&["path".into(), "--lines=5".into()]).unwrap(),
       HeadFlags {
-        path: "path".to_string(),
+        path: OsStr::new("path"),
         lines: 5
       }
     );
     assert_eq!(
-      parse_args(vec!["-n".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["-n".into()]).err().unwrap().to_string(),
       "expected a value following -n"
     );
     assert_eq!(
-      parse_args(vec!["--lines".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["--lines".into()]).err().unwrap().to_string(),
       "expected a value for --lines"
     );
     assert_eq!(
-      parse_args(vec!["--lines=".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["--lines=".into()]).err().unwrap().to_string(),
       "expected a value for --lines"
     );
     assert_eq!(
-      parse_args(vec!["--flag".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["--flag".into()]).err().unwrap().to_string(),
       "unsupported flag: --flag"
     );
     assert_eq!(
-      parse_args(vec!["-t".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["-t".into()]).err().unwrap().to_string(),
       "unsupported flag: -t"
     );
   }

@@ -1,7 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
 use anyhow::Result;
+use anyhow::bail;
 use monch::*;
 
 // Shell grammar rules this is loosely based on:
@@ -400,7 +400,10 @@ fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
     return ParseError::backtrace();
   }
   if env_vars.len() > 1 {
-    ParseError::fail(env_vars_input, "Cannot set multiple environment variables when there is no following command.")
+    ParseError::fail(
+      env_vars_input,
+      "Cannot set multiple environment variables when there is no following command.",
+    )
   } else {
     ParseResult::Ok((input, Sequence::ShellVar(env_vars.remove(0))))
   }
@@ -1200,7 +1203,9 @@ mod test {
     run_test(
       parse_sequential_list,
       "ENV=1 ENV2=3 && test",
-      Err("Cannot set multiple environment variables when there is no following command."),
+      Err(
+        "Cannot set multiple environment variables when there is no following command.",
+      ),
     );
 
     run_test(

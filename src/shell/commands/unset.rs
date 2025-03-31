@@ -1,11 +1,13 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
+use std::ffi::OsString;
+
 use anyhow::Result;
+use anyhow::bail;
 use futures::future::LocalBoxFuture;
 
-use crate::shell::types::ExecuteResult;
 use crate::EnvChange;
+use crate::shell::types::ExecuteResult;
 
 use super::ShellCommand;
 use super::ShellCommandContext;
@@ -32,7 +34,7 @@ impl ShellCommand for UnsetCommand {
   }
 }
 
-fn parse_names(mut args: Vec<String>) -> Result<Vec<String>> {
+fn parse_names(mut args: Vec<OsString>) -> Result<Vec<OsString>> {
   match args.first() {
     None => {
       // Running the actual `unset` with no argument completes with success.
@@ -56,33 +58,24 @@ mod test {
   #[test]
   fn parse_args() {
     assert_eq!(
-      parse_names(vec!["VAR1".to_string()]).unwrap(),
-      vec!["VAR1".to_string()]
+      parse_names(vec!["VAR1".into()]).unwrap(),
+      vec![OsString::from("VAR1")]
     );
     assert_eq!(
-      parse_names(vec!["VAR1".to_string(), "VAR2".to_string()]).unwrap(),
-      vec!["VAR1".to_string(), "VAR2".to_string()]
+      parse_names(vec!["VAR1".into(), "VAR2".into()]).unwrap(),
+      vec![OsString::from("VAR1"), "VAR2".into()]
     );
     assert!(parse_names(vec![]).unwrap().is_empty());
     assert_eq!(
-      parse_names(vec![
-        "-f".to_string(),
-        "VAR1".to_string(),
-        "VAR2".to_string()
-      ])
-      .err()
-      .unwrap()
-      .to_string(),
+      parse_names(vec!["-f".into(), "VAR1".into(), "VAR2".into()])
+        .err()
+        .unwrap()
+        .to_string(),
       "unsupported flag: -f".to_string()
     );
     assert_eq!(
-      parse_names(vec![
-        "-v".to_string(),
-        "VAR1".to_string(),
-        "VAR2".to_string()
-      ])
-      .unwrap(),
-      vec!["VAR2".to_string(), "VAR1".to_string()]
+      parse_names(vec!["-v".into(), "VAR1".into(), "VAR2".into()]).unwrap(),
+      vec![OsString::from("VAR2"), "VAR1".into()]
     );
   }
 }

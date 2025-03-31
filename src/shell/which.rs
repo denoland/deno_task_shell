@@ -1,6 +1,8 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -14,10 +16,12 @@ pub const EXECUTABLE_NAME: &str = match option_env!("DENO_EXECUTABLE_NAME") {
 /// Error when a command path could not be resolved.
 #[derive(Error, Debug, PartialEq)]
 pub enum CommandPathResolutionError {
-  #[error("{}: command not found", .0)]
-  CommandNotFound(String),
+  #[error("{}: command not found", .0.to_string_lossy())]
+  CommandNotFound(OsString),
   #[error("command name was empty")]
   CommandEmpty,
+  #[error("{}: command name was not valid utf8 which is not currently supported", .0.to_string_lossy())]
+  InvalidUtf8(OsString),
 }
 
 impl CommandPathResolutionError {
@@ -25,21 +29,30 @@ impl CommandPathResolutionError {
     match self {
       // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
       CommandPathResolutionError::CommandNotFound(_) => 127,
-      CommandPathResolutionError::CommandEmpty => 1,
+      CommandPathResolutionError::CommandEmpty
+      | CommandPathResolutionError::InvalidUtf8(_) => 1,
     }
   }
 }
 
 /// Resolves a command name to an absolute path.
 pub fn resolve_command_path<'a>(
-  command_name: &str,
+  command_name: &OsStr,
   base_dir: &Path,
-  get_var: impl Fn(&str) -> Option<Cow<'a, str>>,
+  get_var: impl Fn(&str) -> Option<Cow<'a, OsStr>>,
   current_exe: impl FnOnce() -> std::io::Result<PathBuf>,
 ) -> Result<PathBuf, CommandPathResolutionError> {
   if command_name.is_empty() {
     return Err(CommandPathResolutionError::CommandEmpty);
   }
+
+  // todo(dsherret): support non-utf8 command names when switching
+  // to the which crate
+  let Some(command_name) = command_name.to_str() else {
+    return Err(CommandPathResolutionError::InvalidUtf8(
+      command_name.to_os_string(),
+    ));
+  };
 
   // Special handling to use the current executable for deno.
   // This is to ensure deno tasks that use deno work in environments
@@ -75,14 +88,19 @@ pub fn resolve_command_path<'a>(
   // now search based on the current environment state
   let mut search_dirs = vec![base_dir.to_path_buf()];
   if let Some(path) = get_var("PATH") {
-    for folder in path.split(if cfg!(windows) { ';' } else { ':' }) {
-      search_dirs.push(PathBuf::from(folder));
+    if let Some(path) = path.to_str() {
+      for folder in path.split(if cfg!(windows) { ';' } else { ':' }) {
+        search_dirs.push(PathBuf::from(folder));
+      }
     }
   }
   let path_exts = if cfg!(windows) {
     let uc_command_name = command_name.to_uppercase();
-    let path_ext =
-      get_var("PATHEXT").unwrap_or(Cow::Borrowed(".EXE;.CMD;.BAT;.COM"));
+    let path_ext = get_var("PATHEXT");
+    let path_ext = path_ext
+      .as_ref()
+      .and_then(|p| p.to_str())
+      .unwrap_or(".EXE;.CMD;.BAT;.COM");
     let command_exts = path_ext
       .split(';')
       .map(|s| s.trim().to_uppercase())
@@ -122,7 +140,7 @@ pub fn resolve_command_path<'a>(
     }
   }
   Err(CommandPathResolutionError::CommandNotFound(
-    command_name.to_string(),
+    command_name.into(),
   ))
 }
 
@@ -134,7 +152,7 @@ mod local_test {
   fn should_resolve_current_exe_path_for_deno() {
     let cwd = std::env::current_dir().unwrap();
     let path = resolve_command_path(
-      "deno",
+      &OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),
@@ -143,7 +161,7 @@ mod local_test {
     assert_eq!(path, PathBuf::from("/bin/deno"));
 
     let path = resolve_command_path(
-      "deno",
+      &OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno.exe")),
@@ -152,7 +170,7 @@ mod local_test {
     assert_eq!(path, PathBuf::from("/bin/deno.exe"));
 
     let path = resolve_command_path(
-      "deno",
+      &OsStr::new("deno"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno_other")),
@@ -166,20 +184,18 @@ mod local_test {
     let cwd = std::env::current_dir().unwrap();
     // Command not found
     let result = resolve_command_path(
-      "foobar",
+      &OsStr::new("foobar"),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),
     );
     assert_eq!(
       result,
-      Err(CommandPathResolutionError::CommandNotFound(
-        "foobar".to_string()
-      ))
+      Err(CommandPathResolutionError::CommandNotFound("foobar".into()))
     );
     // Command empty
     let result = resolve_command_path(
-      "",
+      &OsStr::new(""),
       &cwd,
       |_| None,
       || Ok(PathBuf::from("/bin/deno")),

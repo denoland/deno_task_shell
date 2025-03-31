@@ -14,7 +14,22 @@ impl ShellCommand for EchoCommand {
     &self,
     mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
-    let _ = context.stdout.write_line(&context.args.join(" "));
+    let iter = context
+      .args
+      .iter()
+      .enumerate()
+      .flat_map(|(i, arg)| -> Box<dyn Iterator<Item = &[u8]>> {
+        if i == 0 {
+          Box::new(std::iter::once(arg.as_encoded_bytes()))
+        } else {
+          Box::new(
+            std::iter::once(" ".as_bytes())
+              .chain(std::iter::once(arg.as_encoded_bytes())),
+          )
+        }
+      })
+      .chain(Box::new(std::iter::once("\n".as_bytes())));
+    _ = context.stdout.write_all_iter(iter);
     Box::pin(futures::future::ready(ExecuteResult::from_exit_code(0)))
   }
 }

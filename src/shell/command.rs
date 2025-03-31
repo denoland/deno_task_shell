@@ -1,18 +1,20 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::shell::types::ShellState;
 use crate::ExecutableCommand;
 use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
+use crate::shell::types::ShellState;
 use anyhow::Result;
 use futures::FutureExt;
 use thiserror::Error;
@@ -21,7 +23,7 @@ use super::which::CommandPathResolutionError;
 
 #[derive(Debug, Clone)]
 pub struct UnresolvedCommandName {
-  pub name: String,
+  pub name: OsString,
   pub base_dir: PathBuf,
 }
 
@@ -42,9 +44,11 @@ pub fn execute_unresolved_command_name(
           );
         }
         Err(ResolveCommandError::FailedShebang(err)) => {
-          let _ = context
-            .stderr
-            .write_line(&format!("{}: {}", command_name.name, err));
+          let _ = context.stderr.write_line(&format!(
+            "{}: {}",
+            command_name.name.to_string_lossy(),
+            err
+          ));
           return ExecuteResult::Continue(
             err.exit_code(),
             Vec::new(),
@@ -54,9 +58,12 @@ pub fn execute_unresolved_command_name(
       };
     match command.command_name {
       CommandName::Resolved(path) => {
-        ExecutableCommand::new(command_name.name, path)
-          .execute(context)
-          .await
+        ExecutableCommand::new(
+          command_name.name.to_string_lossy().into_owned(),
+          path,
+        )
+        .execute(context)
+        .await
       }
       CommandName::Unresolved(command_name) => {
         context.args = command.args.into_owned();
@@ -74,7 +81,7 @@ enum CommandName {
 
 struct ResolvedCommand<'a> {
   command_name: CommandName,
-  args: Cow<'a, Vec<String>>,
+  args: Cow<'a, Vec<OsString>>,
 }
 
 #[derive(Error, Debug)]
@@ -105,7 +112,7 @@ impl FailedShebangError {
 async fn resolve_command<'a>(
   command_name: &UnresolvedCommandName,
   context: &ShellCommandContext,
-  original_args: &'a Vec<String>,
+  original_args: &'a Vec<OsString>,
 ) -> Result<ResolvedCommand<'a>, ResolveCommandError> {
   let command_path = match resolve_command_path(
     &command_name.name,
@@ -119,7 +126,7 @@ async fn resolve_command<'a>(
   // only bother checking for a shebang when the path has a slash
   // in it because for global commands someone on Windows likely
   // won't have a script with a shebang in it on Windows
-  if command_name.name.contains('/') {
+  if command_name.name.to_string_lossy().contains('/') {
     if let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
       ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
     })? {
@@ -127,12 +134,12 @@ async fn resolve_command<'a>(
         let mut args = parse_shebang_args(&shebang.command, context)
           .await
           .map_err(FailedShebangError::Any)?;
-        args.push(command_path.to_string_lossy().to_string());
+        args.push(command_path.clone().into_os_string());
         (args.remove(0), args)
       } else {
         (
-          shebang.command,
-          vec![command_path.to_string_lossy().to_string()],
+          shebang.command.into(),
+          vec![command_path.clone().into_os_string()],
         )
       };
       args.extend(original_args.iter().cloned());
@@ -146,18 +153,21 @@ async fn resolve_command<'a>(
     }
   }
 
-  return Ok(ResolvedCommand {
+  Ok(ResolvedCommand {
     command_name: CommandName::Resolved(command_path),
     args: Cow::Borrowed(original_args),
-  });
+  })
 }
 
 async fn parse_shebang_args(
   text: &str,
   context: &ShellCommandContext,
-) -> Result<Vec<String>> {
-  fn err_unsupported(text: &str) -> Result<Vec<String>> {
-    anyhow::bail!("unsupported shebang. Please report this as a bug (https://github.com/denoland/deno).\n\nShebang: {}", text)
+) -> Result<Vec<OsString>> {
+  fn err_unsupported(text: &str) -> Result<Vec<OsString>> {
+    anyhow::bail!(
+      "unsupported shebang. Please report this as a bug (https://github.com/denoland/deno).\n\nShebang: {}",
+      text
+    )
   }
 
   let mut args = crate::parser::parse(text)?;
@@ -178,7 +188,7 @@ async fn parse_shebang_args(
   let cmd = match pipeline.inner {
     crate::parser::PipelineInner::Command(cmd) => cmd,
     crate::parser::PipelineInner::PipeSequence(_) => {
-      return err_unsupported(text)
+      return err_unsupported(text);
     }
   };
   if cmd.redirect.is_some() {
@@ -204,14 +214,18 @@ async fn parse_shebang_args(
 }
 
 pub fn resolve_command_path(
-  command_name: &str,
+  command_name: &OsStr,
   base_dir: &Path,
   state: &ShellState,
 ) -> Result<PathBuf, CommandPathResolutionError> {
   super::which::resolve_command_path(
     command_name,
     base_dir,
-    |name| state.get_var(name).map(|s| Cow::Borrowed(s.as_str())),
+    |name| {
+      state
+        .get_var(OsStr::new(name))
+        .map(|s| Cow::Borrowed(s.as_os_str()))
+    },
     std::env::current_exe,
   )
 }
