@@ -996,16 +996,16 @@ async fn evaluate_command_substitution(
   })
   .await;
 
-  let data = normalize_newlines_to_spaces(&data);
+  let data = trim_and_normalize_whitespaces_to_spaces(&data);
   os_string_from_bytes(data)
 }
 
-// Remove the trailing newline and then replace inner newlines with a space
+// Remove the trailing newline and then replace inner whitespace with a space
 // This seems to be what sh does, but I'm not entirely sure:
 //
-// > echo $(echo 1 && echo -e "\n2\n\n\n")
+// > echo $(echo 1 && echo -e "\n\t2\n\t\n\n")
 // 1 2
-fn normalize_newlines_to_spaces(input: &[u8]) -> Vec<u8> {
+fn trim_and_normalize_whitespaces_to_spaces(input: &[u8]) -> Vec<u8> {
   let mut output = Vec::with_capacity(input.len());
   let mut iter = input.iter().copied().peekable();
   let mut in_word = false;
@@ -1031,7 +1031,7 @@ fn normalize_newlines_to_spaces(input: &[u8]) -> Vec<u8> {
       }
 
       // only emit a space if we've already emitted some content
-      if in_word {
+      if in_word && iter.peek().is_some() {
         output.push(b' ');
       }
     } else {
@@ -1128,4 +1128,24 @@ fn os_string_join(parts: &[OsString], join_text: &str) -> OsString {
   }
   debug_assert_eq!(result.len(), capacity);
   result
+}
+
+#[cfg(test)]
+mod test {
+  use super::*;
+
+  #[test]
+  fn test_trim_and_normalize_whitespaces_to_spaces() {
+    fn get_output(input: &str) -> String {
+      String::from_utf8(trim_and_normalize_whitespaces_to_spaces(
+        input.as_bytes(),
+      ))
+      .unwrap()
+    }
+
+    assert_eq!(
+      get_output("   \t  \r   \n testing this \t \r\n \n \n    out\n \t \r\n"),
+      "testing this out"
+    )
+  }
 }
