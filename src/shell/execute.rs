@@ -1059,6 +1059,7 @@ async fn execute_with_stdout(
 fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
   use std::os::unix::ffi::OsStrExt;
 
+  // todo(dsherret): how to not use from_utf8_lossy here?
   let text = String::from_utf8_lossy(text.as_bytes());
   text
     .split(' ')
