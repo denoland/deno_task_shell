@@ -929,11 +929,9 @@ fn evaluate_word_parts(
           }
         };
 
-        // This text needs to be turned into a vector of strings.
-        // For now we do a very basic string split on whitespace, but in the future
-        // we should continue to improve this functionality.
         if let Some(text) = evaluation_result_text {
-          let mut parts = split_osstring_on_space(&text)
+          // turn the text into a vector of strings
+          let mut parts = split_osstring_on_space(&text)?
             .into_iter()
             .map(TextPart::Text)
             .collect::<Vec<_>>();
@@ -1058,46 +1056,34 @@ async fn execute_with_stdout(
 }
 
 #[cfg(unix)]
-fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
+fn split_osstring_on_space(
+  text: &OsStr,
+) -> Result<Vec<OsString>, FromUtf8Error> {
   use std::os::unix::ffi::OsStrExt;
-  use std::os::unix::ffi::OsStringExt;
 
+  let text = String::from_utf8(text.as_bytes());
   text
-    .as_bytes()
-    .split(|b| *b == b' ') // split on literal space byte
-    .map(|s| {
-      // trim start and end manually (no double-ended iterators)
-      let start = s.iter().position(|b| *b != b' ').unwrap_or(0);
-      let end = s
-        .iter()
-        .rposition(|b| *b != b' ')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-      OsString::from_vec(s[start..end].to_vec())
-    })
+    .split(' ')
     .filter(|s| !s.is_empty())
-    .collect()
+    .map(OsString::from)
+    .collect::<Vec<_>>()
 }
 
 #[cfg(windows)]
-fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
+fn split_osstring_on_space(
+  text: &OsStr,
+) -> Result<Vec<OsString>, FromUtf8Error> {
   use std::os::windows::ffi::OsStrExt;
   use std::os::windows::ffi::OsStringExt;
   let wide: Vec<u16> = text.encode_wide().collect();
 
-  wide
-    .split(|&w| w == 0x20) // UTF-16 ' '
-    .map(|chunk| {
-      let start = chunk.iter().position(|&c| c != 0x20).unwrap_or(0);
-      let end = chunk
-        .iter()
-        .rposition(|&c| c != 0x20)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-      OsString::from_wide(&chunk[start..end])
-    })
-    .filter(|s| !s.is_empty())
-    .collect()
+  Ok(
+    wide
+      .split(|&w| w == 0x20) // split on spaces
+      .filter(|chunk| !chunk.is_empty()) // remove empty pieces from multiple spaces
+      .map(OsString::from_wide)
+      .collect(),
+  )
 }
 
 #[cfg(unix)]
