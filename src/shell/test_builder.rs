@@ -229,7 +229,7 @@ impl TestBuilder {
         .iter()
         .map(|(k, v)| (OsString::from(k), OsString::from(v)))
         .collect(),
-      &cwd,
+      cwd.clone(),
       self.custom_commands.drain().collect(),
       self.kill_signal.clone(),
     );

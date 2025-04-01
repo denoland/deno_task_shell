@@ -8,7 +8,6 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::Read;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::rc::Weak;
@@ -63,7 +62,7 @@ pub struct ShellState {
 impl ShellState {
   pub fn new(
     env_vars: HashMap<OsString, OsString>,
-    cwd: &Path,
+    cwd: PathBuf,
     custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
     kill_signal: KillSignal,
   ) -> Self {
@@ -108,12 +107,10 @@ impl ShellState {
       .or_else(|| self.shell_vars.get(name))
   }
 
-  pub fn set_cwd(&mut self, cwd: &Path) {
-    self.cwd = cwd.to_path_buf();
+  pub fn set_cwd(&mut self, cwd: PathBuf) {
+    self.cwd = cwd.clone();
     // $PWD holds the current working directory, so we keep cwd and $PWD in sync
-    self
-      .env_vars
-      .insert("PWD".into(), self.cwd.clone().into_os_string());
+    self.env_vars.insert("PWD".into(), cwd.into_os_string());
   }
 
   pub fn apply_changes(&mut self, changes: &[EnvChange]) {
@@ -139,7 +136,7 @@ impl ShellState {
         self.env_vars.remove(name);
       }
       EnvChange::Cd(new_dir) => {
-        self.set_cwd(new_dir);
+        self.set_cwd(new_dir.clone());
       }
     }
   }
@@ -156,7 +153,7 @@ impl ShellState {
       if cwd.is_absolute() {
         if let Ok(cwd) = fs_util::canonicalize_path(&cwd) {
           // this will update the environment variable too
-          self.set_cwd(&cwd);
+          self.set_cwd(cwd);
         }
       }
     } else {

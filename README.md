@@ -7,15 +7,13 @@
 let list = deno_task_shell::parser::parse(&text)?;
 
 // execute
-let env_vars = HashMap::from(&[
-  ("SOME_VAR".to_string(), "value".to_string()),
-]);
+let env_vars = std::env::vars_os().collect::<HashMap<_, _>>();
 let cwd = std::env::current_dir()?;
 
 let exit_code = deno_task_shell::execute(
   list,
   env_vars,
-  &cwd,
+  cwd,
   Default::default(), // custom commands
 ).await;
 ```

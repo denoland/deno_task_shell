@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::string::FromUtf8Error;
 
@@ -64,7 +65,7 @@ use super::types::TreeExitCodeCell;
 pub async fn execute(
   list: SequentialList,
   env_vars: HashMap<OsString, OsString>,
-  cwd: &Path,
+  cwd: PathBuf,
   custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
   kill_signal: KillSignal,
 ) -> i32 {
