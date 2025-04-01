@@ -1187,7 +1187,7 @@ async fn custom_command() {
         async move {
           let mut sum = 0;
           for val in context.args {
-            sum += val.parse::<usize>().unwrap();
+            sum += val.to_string_lossy().parse::<usize>().unwrap();
           }
           let _ = context.stderr.write_line(&sum.to_string());
           ExecuteResult::from_exit_code(0)

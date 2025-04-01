@@ -3,15 +3,16 @@
 use anyhow::Context;
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
+use std::ffi::OsString;
 use std::path::Path;
 
 use crate::shell::fs_util;
 use crate::shell::types::ExecuteResult;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
 
 pub struct PwdCommand;
 
@@ -20,7 +21,7 @@ impl ShellCommand for PwdCommand {
     &self,
     mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
-    let result = match execute_pwd(context.state.cwd(), context.args) {
+    let result = match execute_pwd(context.state.cwd(), &context.args) {
       Ok(output) => {
         let _ = context.stdout.write_line(&output);
         ExecuteResult::from_exit_code(0)
@@ -34,7 +35,7 @@ impl ShellCommand for PwdCommand {
   }
 }
 
-fn execute_pwd(cwd: &Path, args: Vec<String>) -> Result<String> {
+fn execute_pwd(cwd: &Path, args: &[OsString]) -> Result<String> {
   let flags = parse_args(args)?;
   let cwd = if flags.logical {
     fs_util::canonicalize_path(cwd)
@@ -50,9 +51,9 @@ struct PwdFlags {
   logical: bool,
 }
 
-fn parse_args(args: Vec<String>) -> Result<PwdFlags> {
+fn parse_args(args: &[OsString]) -> Result<PwdFlags> {
   let mut logical = false;
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
       ArgKind::ShortFlag('L') => {
         logical = true;
@@ -77,28 +78,22 @@ mod test {
 
   #[test]
   fn parses_args() {
-    assert_eq!(parse_args(vec![]).unwrap(), PwdFlags { logical: false });
+    assert_eq!(parse_args(&[]).unwrap(), PwdFlags { logical: false });
     assert_eq!(
-      parse_args(vec!["-P".to_string()]).unwrap(),
+      parse_args(&["-P".into()]).unwrap(),
       PwdFlags { logical: false }
     );
     assert_eq!(
-      parse_args(vec!["-L".to_string()]).unwrap(),
+      parse_args(&["-L".into()]).unwrap(),
       PwdFlags { logical: true }
     );
-    assert!(parse_args(vec!["test".to_string()]).is_ok());
+    assert!(parse_args(&["test".into()]).is_ok());
     assert_eq!(
-      parse_args(vec!["--flag".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["--flag".into()]).err().unwrap().to_string(),
       "unsupported flag: --flag"
     );
     assert_eq!(
-      parse_args(vec!["-t".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(&["-t".into()]).err().unwrap().to_string(),
       "unsupported flag: -t"
     );
   }

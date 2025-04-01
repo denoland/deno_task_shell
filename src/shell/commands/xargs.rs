@@ -1,18 +1,20 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::bail;
-use anyhow::Result;
-use futures::future::LocalBoxFuture;
-use futures::FutureExt;
+use std::ffi::OsString;
 
+use anyhow::Result;
+use anyhow::bail;
+use futures::FutureExt;
+use futures::future::LocalBoxFuture;
+
+use crate::ExecuteCommandArgsContext;
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeReader;
-use crate::ExecuteCommandArgsContext;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
 
 pub struct XargsCommand;
 
@@ -22,7 +24,7 @@ impl ShellCommand for XargsCommand {
     mut context: ShellCommandContext,
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
-      match xargs_collect_args(context.args, context.stdin.clone()) {
+      match xargs_collect_args(&context.args, context.stdin.clone()) {
         Ok(args) => {
           // don't select on cancellation here as that will occur at a lower level
           (context.execute_command_args)(ExecuteCommandArgsContext {
@@ -45,9 +47,9 @@ impl ShellCommand for XargsCommand {
 }
 
 fn xargs_collect_args(
-  cli_args: Vec<String>,
+  cli_args: &[OsString],
   stdin: ShellPipeReader,
-) -> Result<Vec<String>> {
+) -> Result<Vec<OsString>> {
   let flags = parse_args(cli_args)?;
   let mut buf = Vec::new();
   stdin.pipe_to(&mut buf)?;
@@ -56,7 +58,7 @@ fn xargs_collect_args(
 
   if args.is_empty() {
     // defaults to echo
-    args.push("echo".to_string());
+    args.push("echo".into());
   }
 
   if let Some(delim) = &flags.delimiter {
@@ -71,9 +73,9 @@ fn xargs_collect_args(
       &text
     };
 
-    args.extend(text.split(*delim).map(|t| t.to_string()));
+    args.extend(text.split(*delim).map(|t| t.into()));
   } else if flags.is_null_delimited {
-    args.extend(text.split('\0').map(|t| t.to_string()));
+    args.extend(text.split('\0').map(|t| t.into()));
   } else {
     args.extend(delimit_blanks(&text)?);
   }
@@ -81,7 +83,7 @@ fn xargs_collect_args(
   Ok(args)
 }
 
-fn delimit_blanks(text: &str) -> Result<Vec<String>> {
+fn delimit_blanks(text: &str) -> Result<Vec<OsString>> {
   let mut chars = text.chars().peekable();
   let mut result = Vec::new();
   while chars.peek().is_some() {
@@ -117,7 +119,7 @@ fn delimit_blanks(text: &str) -> Result<Vec<String>> {
     }
 
     if !current.is_empty() {
-      result.push(current);
+      result.push(current.into());
     }
   }
   Ok(result)
@@ -125,12 +127,12 @@ fn delimit_blanks(text: &str) -> Result<Vec<String>> {
 
 #[derive(Debug, PartialEq)]
 struct XargsFlags {
-  initial_args: Vec<String>,
+  initial_args: Vec<OsString>,
   delimiter: Option<char>,
   is_null_delimited: bool,
 }
 
-fn parse_args(args: Vec<String>) -> Result<XargsFlags> {
+fn parse_args(args: &[OsString]) -> Result<XargsFlags> {
   fn parse_delimiter(arg: &str) -> Result<char> {
     let mut chars = arg.chars();
     if let Some(first_char) = chars.next() {
@@ -160,7 +162,7 @@ fn parse_args(args: Vec<String>) -> Result<XargsFlags> {
 
   let mut initial_args = Vec::new();
   let mut delimiter = None;
-  let mut iterator = parse_arg_kinds(&args).into_iter();
+  let mut iterator = parse_arg_kinds(args).into_iter();
   let mut is_null_delimited = false;
   while let Some(arg) = iterator.next() {
     match arg {
@@ -168,15 +170,19 @@ fn parse_args(args: Vec<String>) -> Result<XargsFlags> {
         if arg == "-0" {
           is_null_delimited = true;
         } else {
-          initial_args.push(arg.to_string());
+          initial_args.push(arg.to_os_string());
           // parse the remainder as arguments
           for arg in iterator.by_ref() {
             match arg {
               ArgKind::Arg(arg) => {
-                initial_args.push(arg.to_string());
+                initial_args.push(arg.to_os_string());
               }
-              ArgKind::ShortFlag(f) => initial_args.push(format!("-{f}")),
-              ArgKind::LongFlag(f) => initial_args.push(format!("--{f}")),
+              ArgKind::ShortFlag(f) => {
+                initial_args.push(format!("-{f}").into())
+              }
+              ArgKind::LongFlag(f) => {
+                initial_args.push(format!("--{f}").into())
+              }
             }
           }
         }
@@ -186,7 +192,11 @@ fn parse_args(args: Vec<String>) -> Result<XargsFlags> {
       }
       ArgKind::ShortFlag('d') => match iterator.next() {
         Some(ArgKind::Arg(arg)) => {
-          delimiter = Some(parse_delimiter(arg)?);
+          if let Some(arg) = arg.to_str() {
+            delimiter = Some(parse_delimiter(arg)?);
+          } else {
+            bail!("expected delimiter argument following -d to be UTF-8")
+          }
         }
         _ => bail!("expected delimiter argument following -d"),
       },
@@ -220,7 +230,7 @@ mod test {
   #[test]
   fn parses_args() {
     assert_eq!(
-      parse_args(vec![]).unwrap(),
+      parse_args(&[]).unwrap(),
       XargsFlags {
         initial_args: Vec::new(),
         delimiter: None,
@@ -228,67 +238,58 @@ mod test {
       }
     );
     assert_eq!(
-      parse_args(vec![
-        "-0".to_string(),
-        "echo".to_string(),
-        "2".to_string(),
-        "-d".to_string(),
-        "--test=3".to_string()
+      parse_args(&[
+        "-0".into(),
+        "echo".into(),
+        "2".into(),
+        "-d".into(),
+        "--test=3".into()
       ])
       .unwrap(),
       XargsFlags {
         initial_args: vec![
-          "echo".to_string(),
-          "2".to_string(),
-          "-d".to_string(),
-          "--test=3".to_string()
+          "echo".into(),
+          "2".into(),
+          "-d".into(),
+          "--test=3".into()
         ],
         delimiter: None,
         is_null_delimited: true,
       }
     );
     assert_eq!(
-      parse_args(vec![
-        "-d".to_string(),
-        "\\n".to_string(),
-        "echo".to_string()
-      ])
-      .unwrap(),
+      parse_args(&["-d".into(), "\\n".into(), "echo".into()]).unwrap(),
       XargsFlags {
-        initial_args: vec!["echo".to_string()],
+        initial_args: vec!["echo".into()],
         delimiter: Some('\n'),
         is_null_delimited: false,
       }
     );
     assert_eq!(
-      parse_args(vec![
-        "--delimiter=5".to_string(),
-        "echo".to_string(),
-        "-d".to_string()
-      ])
-      .unwrap(),
+      parse_args(&["--delimiter=5".into(), "echo".into(), "-d".into()])
+        .unwrap(),
       XargsFlags {
-        initial_args: vec!["echo".to_string(), "-d".to_string()],
+        initial_args: vec!["echo".into(), "-d".into()],
         delimiter: Some('5'),
         is_null_delimited: false,
       }
     );
     assert_eq!(
-      parse_args(vec!["-d".to_string(), "5".to_string(), "-t".to_string()])
+      parse_args(&["-d".into(), "5".into(), "-t".into()])
         .err()
         .unwrap()
         .to_string(),
       "unsupported flag: -t",
     );
     assert_eq!(
-      parse_args(vec!["-d".to_string(), "-t".to_string()])
+      parse_args(&["-d".into(), "-t".into()])
         .err()
         .unwrap()
         .to_string(),
       "expected delimiter argument following -d",
     );
     assert_eq!(
-      parse_args(vec!["--delimiter=5".to_string(), "--null".to_string()])
+      parse_args(&["--delimiter=5".into(), "--null".into()])
         .err()
         .unwrap()
         .to_string(),
@@ -307,7 +308,10 @@ mod test {
       vec!["testing", "this\tout  here  ", "now double"]
     );
     assert_eq!(
-      delimit_blanks("testing 'this\nout  here  '").err().unwrap().to_string(),
+      delimit_blanks("testing 'this\nout  here  '")
+        .err()
+        .unwrap()
+        .to_string(),
       "unmatched quote; by default quotes are special to xargs unless you use the -0 option",
     );
   }

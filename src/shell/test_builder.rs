@@ -4,20 +4,21 @@ use anyhow::Context;
 use futures::future::LocalBoxFuture;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 use tokio::task::JoinHandle;
 
+use crate::ShellCommand;
+use crate::ShellCommandContext;
 use crate::execute_with_pipes;
 use crate::parser::parse;
 use crate::shell::fs_util;
-use crate::shell::types::pipe;
 use crate::shell::types::KillSignal;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
-use crate::ShellCommand;
-use crate::ShellCommandContext;
+use crate::shell::types::pipe;
 
 use super::types::ExecuteResult;
 
@@ -223,8 +224,12 @@ impl TestBuilder {
 
     let local_set = tokio::task::LocalSet::new();
     let state = ShellState::new(
-      self.env_vars.clone(),
-      &cwd,
+      self
+        .env_vars
+        .iter()
+        .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+        .collect(),
+      cwd.clone(),
       self.custom_commands.drain().collect(),
       self.kill_signal.clone(),
     );

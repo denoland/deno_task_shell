@@ -17,14 +17,14 @@ impl ShellCommand for ExportCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     let mut changes = Vec::new();
     for arg in context.args {
-      // ignore if it doesn't contain an equals
-      if let Some(equals_index) = arg.find('=') {
-        let arg_name = &arg[..equals_index];
-        let arg_value = &arg[equals_index + 1..];
-        changes.push(EnvChange::SetEnvVar(
-          arg_name.to_string(),
-          arg_value.to_string(),
-        ));
+      // todo: support non-UTF8 data here
+      if let Some(arg) = arg.to_str() {
+        // ignore if it doesn't contain an equals
+        if let Some(equals_index) = arg.find('=') {
+          let arg_name = &arg[..equals_index];
+          let arg_value = &arg[equals_index + 1..];
+          changes.push(EnvChange::SetEnvVar(arg_name.into(), arg_value.into()));
+        }
       }
     }
     let result = ExecuteResult::Continue(0, changes, Vec::new());

@@ -1,23 +1,25 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::bail;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::LocalBoxFuture;
-use futures::FutureExt;
 
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::ShellPipeWriter;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
-use super::execute_with_cancellation;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
+use super::execute_with_cancellation;
 
 pub struct CpCommand;
 
@@ -28,7 +30,7 @@ impl ShellCommand for CpCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        cp_command(context.state.cwd(), context.args, context.stderr),
+        cp_command(context.state.cwd(), &context.args, context.stderr),
         context.state.kill_signal()
       )
     }
@@ -38,7 +40,7 @@ impl ShellCommand for CpCommand {
 
 async fn cp_command(
   cwd: &Path,
-  args: Vec<String>,
+  args: &[OsString],
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_cp(cwd, args).await {
@@ -50,14 +52,14 @@ async fn cp_command(
   }
 }
 
-async fn execute_cp(cwd: &Path, args: Vec<String>) -> Result<()> {
+async fn execute_cp(cwd: &Path, args: &[OsString]) -> Result<()> {
   let flags = parse_cp_args(cwd, args)?;
   for (from, to) in &flags.operations {
     if let Err(err) = do_copy_operation(&flags, from, to).await {
       bail!(
         "could not copy {} to {}: {}",
-        from.specified,
-        to.specified,
+        from.specified.to_string_lossy(),
+        to.specified.to_string_lossy(),
         err
       );
     }
@@ -133,10 +135,10 @@ struct CpFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_cp_args(cwd: &Path, args: Vec<String>) -> Result<CpFlags> {
+fn parse_cp_args(cwd: &Path, args: &[OsString]) -> Result<CpFlags> {
   let mut paths = Vec::new();
   let mut recursive = false;
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
       ArgKind::Arg(arg) => {
         paths.push(arg);
@@ -152,7 +154,10 @@ fn parse_cp_args(cwd: &Path, args: Vec<String>) -> Result<CpFlags> {
   if paths.is_empty() {
     bail!("missing file operand");
   } else if paths.len() == 1 {
-    bail!("missing destination file operand after '{}'", paths[0]);
+    bail!(
+      "missing destination file operand after '{}'",
+      paths[0].to_string_lossy()
+    );
   }
 
   Ok(CpFlags {
@@ -170,7 +175,7 @@ impl ShellCommand for MvCommand {
   ) -> LocalBoxFuture<'static, ExecuteResult> {
     async move {
       execute_with_cancellation!(
-        mv_command(context.state.cwd(), context.args, context.stderr),
+        mv_command(context.state.cwd(), &context.args, context.stderr),
         context.state.kill_signal()
       )
     }
@@ -180,7 +185,7 @@ impl ShellCommand for MvCommand {
 
 async fn mv_command(
   cwd: &Path,
-  args: Vec<String>,
+  args: &[OsString],
   mut stderr: ShellPipeWriter,
 ) -> ExecuteResult {
   match execute_mv(cwd, args).await {
@@ -192,14 +197,14 @@ async fn mv_command(
   }
 }
 
-async fn execute_mv(cwd: &Path, args: Vec<String>) -> Result<()> {
+async fn execute_mv(cwd: &Path, args: &[OsString]) -> Result<()> {
   let flags = parse_mv_args(cwd, args)?;
   for (from, to) in flags.operations {
     if let Err(err) = tokio::fs::rename(&from.path, &to.path).await {
       bail!(
         "could not move {} to {}: {}",
-        from.specified,
-        to.specified,
+        from.specified.to_string_lossy(),
+        to.specified.to_string_lossy(),
         err
       );
     }
@@ -211,9 +216,9 @@ struct MvFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_mv_args(cwd: &Path, args: Vec<String>) -> Result<MvFlags> {
+fn parse_mv_args(cwd: &Path, args: &[OsString]) -> Result<MvFlags> {
   let mut paths = Vec::new();
-  for arg in parse_arg_kinds(&args) {
+  for arg in parse_arg_kinds(args) {
     match arg {
       ArgKind::Arg(arg) => {
         paths.push(arg);
@@ -224,7 +229,10 @@ fn parse_mv_args(cwd: &Path, args: Vec<String>) -> Result<MvFlags> {
   if paths.is_empty() {
     bail!("missing file operand");
   } else if paths.len() == 1 {
-    bail!("missing destination file operand after '{}'", paths[0]);
+    bail!(
+      "missing destination file operand after '{}'",
+      paths[0].to_string_lossy()
+    );
   }
 
   Ok(MvFlags {
@@ -234,12 +242,12 @@ fn parse_mv_args(cwd: &Path, args: Vec<String>) -> Result<MvFlags> {
 
 struct PathWithSpecified {
   path: PathBuf,
-  specified: String,
+  specified: OsString,
 }
 
 fn get_copy_and_move_operations(
   cwd: &Path,
-  mut paths: Vec<&str>,
+  mut paths: Vec<&OsStr>,
 ) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>> {
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
@@ -248,18 +256,21 @@ fn get_copy_and_move_operations(
   let mut operations = Vec::new();
   if from_args.len() > 1 {
     if !destination.is_dir() {
-      bail!("target '{}' is not a directory", specified_destination);
+      bail!(
+        "target '{}' is not a directory",
+        specified_destination.to_string_lossy()
+      );
     }
     for from in from_args {
       let from_path = cwd.join(from);
       let to_path = destination.join(from_path.file_name().unwrap());
       operations.push((
         PathWithSpecified {
-          specified: from.to_string(),
+          specified: from.into(),
           path: from_path,
         },
         PathWithSpecified {
-          specified: specified_destination.to_string(),
+          specified: specified_destination.into(),
           path: to_path,
         },
       ));
@@ -273,11 +284,11 @@ fn get_copy_and_move_operations(
     };
     operations.push((
       PathWithSpecified {
-        specified: from_args[0].to_string(),
+        specified: from_args[0].into(),
         path: from_path,
       },
       PathWithSpecified {
-        specified: specified_destination.to_string(),
+        specified: specified_destination.into(),
         path: to_path,
       },
     ));
@@ -298,12 +309,9 @@ mod test {
     let file1 = dir.path().join("file1.txt");
     let file2 = dir.path().join("file2.txt");
     fs::write(&file1, "test").unwrap();
-    execute_cp(
-      dir.path(),
-      vec!["file1.txt".to_string(), "file2.txt".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_cp(dir.path(), &["file1.txt".into(), "file2.txt".into()])
+      .await
+      .unwrap();
     assert!(file1.exists());
     assert!(file2.exists());
 
@@ -311,11 +319,7 @@ mod test {
     fs::create_dir(&dest_dir).unwrap();
     execute_cp(
       dir.path(),
-      vec![
-        "file1.txt".to_string(),
-        "file2.txt".to_string(),
-        "dest".to_string(),
-      ],
+      &["file1.txt".into(), "file2.txt".into(), "dest".into()],
     )
     .await
     .unwrap();
@@ -326,7 +330,7 @@ mod test {
 
     let new_file = dir.path().join("new.txt");
     fs::write(&new_file, "test").unwrap();
-    execute_cp(dir.path(), vec!["new.txt".to_string(), "dest".to_string()])
+    execute_cp(dir.path(), &["new.txt".into(), "dest".into()])
       .await
       .unwrap();
     assert!(dest_dir.is_dir());
@@ -335,10 +339,10 @@ mod test {
 
     let result = execute_cp(
       dir.path(),
-      vec![
-        "file1.txt".to_string(),
-        "file2.txt".to_string(),
-        "non-existent".to_string(),
+      &[
+        "file1.txt".into(),
+        "file2.txt".into(),
+        "non-existent".into(),
       ],
     )
     .await
@@ -349,10 +353,10 @@ mod test {
       "target 'non-existent' is not a directory"
     );
 
-    let result = execute_cp(dir.path(), vec![]).await.err().unwrap();
+    let result = execute_cp(dir.path(), &[]).await.err().unwrap();
     assert_eq!(result.to_string(), "missing file operand");
 
-    let result = execute_cp(dir.path(), vec!["file1.txt".to_string()])
+    let result = execute_cp(dir.path(), &["file1.txt".into()])
       .await
       .err()
       .unwrap();
@@ -366,44 +370,33 @@ mod test {
     fs::write(dest_dir.join("sub_dir").join("sub.txt"), "test").unwrap();
     let dest_dir2 = dir.path().join("dest2");
 
-    let result =
-      execute_cp(dir.path(), vec!["dest".to_string(), "dest2".to_string()])
-        .await
-        .err()
-        .unwrap();
+    let result = execute_cp(dir.path(), &["dest".into(), "dest2".into()])
+      .await
+      .err()
+      .unwrap();
     assert_eq!(
       result.to_string(),
       "could not copy dest to dest2: source was a directory; maybe specify -r"
     );
     assert!(!dest_dir2.exists());
 
-    execute_cp(
-      dir.path(),
-      vec!["-r".to_string(), "dest".to_string(), "dest2".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_cp(dir.path(), &["-r".into(), "dest".into(), "dest2".into()])
+      .await
+      .unwrap();
     assert!(dest_dir2.exists());
     assert!(dest_dir2.join("file1.txt").exists());
     assert!(dest_dir2.join("file2.txt").exists());
     assert!(dest_dir2.join("sub_dir").join("sub.txt").exists());
 
     // copy again
-    execute_cp(
-      dir.path(),
-      vec!["-r".to_string(), "dest".to_string(), "dest2".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_cp(dir.path(), &["-r".into(), "dest".into(), "dest2".into()])
+      .await
+      .unwrap();
 
     // try copying to a file
     let result = execute_cp(
       dir.path(),
-      vec![
-        "-r".to_string(),
-        "dest".to_string(),
-        "dest2/file1.txt".to_string(),
-      ],
+      &["-r".into(), "dest".into(), "dest2/file1.txt".into()],
     )
     .await
     .err()
@@ -420,12 +413,9 @@ mod test {
     let file1 = dir.path().join("file1.txt");
     let file2 = dir.path().join("file2.txt");
     fs::write(&file1, "test").unwrap();
-    execute_mv(
-      dir.path(),
-      vec!["file1.txt".to_string(), "file2.txt".to_string()],
-    )
-    .await
-    .unwrap();
+    execute_mv(dir.path(), &["file1.txt".into(), "file2.txt".into()])
+      .await
+      .unwrap();
     assert!(!file1.exists());
     assert!(file2.exists());
 
@@ -434,11 +424,7 @@ mod test {
     fs::create_dir(&dest_dir).unwrap();
     execute_mv(
       dir.path(),
-      vec![
-        "file1.txt".to_string(),
-        "file2.txt".to_string(),
-        "dest".to_string(),
-      ],
+      &["file1.txt".into(), "file2.txt".into(), "dest".into()],
     )
     .await
     .unwrap();
@@ -449,7 +435,7 @@ mod test {
 
     let new_file = dir.path().join("new.txt");
     fs::write(&new_file, "test").unwrap();
-    execute_mv(dir.path(), vec!["new.txt".to_string(), "dest".to_string()])
+    execute_mv(dir.path(), &["new.txt".into(), "dest".into()])
       .await
       .unwrap();
     assert!(dest_dir.is_dir());
@@ -458,10 +444,10 @@ mod test {
 
     let result = execute_mv(
       dir.path(),
-      vec![
-        "file1.txt".to_string(),
-        "file2.txt".to_string(),
-        "non-existent".to_string(),
+      &[
+        "file1.txt".into(),
+        "file2.txt".into(),
+        "non-existent".into(),
       ],
     )
     .await
@@ -472,10 +458,10 @@ mod test {
       "target 'non-existent' is not a directory"
     );
 
-    let result = execute_mv(dir.path(), vec![]).await.err().unwrap();
+    let result = execute_mv(dir.path(), &[]).await.err().unwrap();
     assert_eq!(result.to_string(), "missing file operand");
 
-    let result = execute_mv(dir.path(), vec!["file1.txt".to_string()])
+    let result = execute_mv(dir.path(), &["file1.txt".into()])
       .await
       .err()
       .unwrap();

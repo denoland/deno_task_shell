@@ -2,15 +2,16 @@
 
 use anyhow::Result;
 use futures::future::LocalBoxFuture;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
 
 use crate::shell::types::ExecuteResult;
 
-use super::args::parse_arg_kinds;
-use super::args::ArgKind;
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::args::ArgKind;
+use super::args::parse_arg_kinds;
 
 pub struct CatCommand;
 
@@ -58,7 +59,11 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
           }
         },
         Err(err) => {
-          context.stderr.write_line(&format!("cat: {path}: {err}"))?;
+          context.stderr.write_line(&format!(
+            "cat: {}: {}",
+            path.to_string_lossy(),
+            err
+          ))?;
           exit_code = 1;
         }
       }
@@ -70,15 +75,15 @@ fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
 
 #[derive(Debug, PartialEq)]
 struct CatFlags {
-  paths: Vec<String>,
+  paths: Vec<OsString>,
 }
 
-fn parse_args(args: Vec<String>) -> Result<CatFlags> {
+fn parse_args(args: Vec<OsString>) -> Result<CatFlags> {
   let mut paths = Vec::new();
   for arg in parse_arg_kinds(&args) {
     match arg {
       ArgKind::Arg(file_name) => {
-        paths.push(file_name.to_string());
+        paths.push(file_name.to_os_string());
       }
       // for now, we don't support any arguments
       _ => arg.bail_unsupported()?,
@@ -86,7 +91,7 @@ fn parse_args(args: Vec<String>) -> Result<CatFlags> {
   }
 
   if paths.is_empty() {
-    paths.push("-".to_string());
+    paths.push("-".into());
   }
 
   Ok(CatFlags { paths })
@@ -102,39 +107,33 @@ mod test {
     assert_eq!(
       parse_args(vec![]).unwrap(),
       CatFlags {
-        paths: vec!["-".to_string()]
+        paths: vec!["-".into()]
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string()]).unwrap(),
+      parse_args(vec!["path".into()]).unwrap(),
       CatFlags {
-        paths: vec!["path".to_string()]
+        paths: vec!["path".into()]
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string(), "-".to_string()]).unwrap(),
+      parse_args(vec!["path".into(), "-".into()]).unwrap(),
       CatFlags {
-        paths: vec!["path".to_string(), "-".to_string()]
+        paths: vec!["path".into(), "-".into()]
       }
     );
     assert_eq!(
-      parse_args(vec!["path".to_string(), "other-path".to_string()]).unwrap(),
+      parse_args(vec!["path".into(), "other-path".into()]).unwrap(),
       CatFlags {
-        paths: vec!["path".to_string(), "other-path".to_string()]
+        paths: vec!["path".into(), "other-path".into()]
       }
     );
     assert_eq!(
-      parse_args(vec!["--flag".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(vec!["--flag".into()]).err().unwrap().to_string(),
       "unsupported flag: --flag"
     );
     assert_eq!(
-      parse_args(vec!["-t".to_string()])
-        .err()
-        .unwrap()
-        .to_string(),
+      parse_args(vec!["-t".into()]).err().unwrap().to_string(),
       "unsupported flag: -t"
     );
   }

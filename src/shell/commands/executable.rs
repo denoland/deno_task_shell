@@ -98,8 +98,8 @@ impl ShellCommand for ExecutableCommand {
 
 #[cfg(unix)]
 pub fn kill(pid: i32, signal: crate::SignalKind) -> Option<()> {
-  use nix::sys::signal::kill as unix_kill;
   use nix::sys::signal::Signal;
+  use nix::sys::signal::kill as unix_kill;
   use nix::unistd::Pid;
   let signo: i32 = signal.into();
   let sig = Signal::try_from(signo).ok()?;
