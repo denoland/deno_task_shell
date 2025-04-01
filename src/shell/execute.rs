@@ -931,7 +931,7 @@ fn evaluate_word_parts(
 
         if let Some(text) = evaluation_result_text {
           // turn the text into a vector of strings
-          let mut parts = split_osstring_on_space(&text)?
+          let mut parts = split_osstring_on_space(&text)
             .into_iter()
             .map(TextPart::Text)
             .collect::<Vec<_>>();
@@ -1056,12 +1056,10 @@ async fn execute_with_stdout(
 }
 
 #[cfg(unix)]
-fn split_osstring_on_space(
-  text: &OsStr,
-) -> Result<Vec<OsString>, FromUtf8Error> {
+fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
   use std::os::unix::ffi::OsStrExt;
 
-  let text = String::from_utf8(text.as_bytes());
+  let text = String::from_utf8_lossy(text.as_bytes());
   text
     .split(' ')
     .filter(|s| !s.is_empty())
@@ -1070,20 +1068,16 @@ fn split_osstring_on_space(
 }
 
 #[cfg(windows)]
-fn split_osstring_on_space(
-  text: &OsStr,
-) -> Result<Vec<OsString>, FromUtf8Error> {
+fn split_osstring_on_space(text: &OsStr) -> Vec<OsString> {
   use std::os::windows::ffi::OsStrExt;
   use std::os::windows::ffi::OsStringExt;
   let wide: Vec<u16> = text.encode_wide().collect();
 
-  Ok(
-    wide
-      .split(|&w| w == 0x20) // split on spaces
-      .filter(|chunk| !chunk.is_empty()) // remove empty pieces from multiple spaces
-      .map(OsString::from_wide)
-      .collect(),
-  )
+  wide
+    .split(|&w| w == 0x20) // split on spaces
+    .filter(|chunk| !chunk.is_empty()) // remove empty pieces from multiple spaces
+    .map(OsString::from_wide)
+    .collect()
 }
 
 #[cfg(unix)]
