@@ -18,7 +18,6 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::shell::child_process_tracker::ChildProcessTracker;
-use crate::shell::fs_util;
 
 use super::commands::ShellCommand;
 use super::commands::builtin_commands;
@@ -151,7 +150,10 @@ impl ShellState {
     if name == "PWD" {
       let cwd = PathBuf::from(value);
       if cwd.is_absolute() {
-        if let Ok(cwd) = fs_util::canonicalize_path(&cwd) {
+        if let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
+          &sys_traits::impls::RealSys,
+          &cwd,
+        ) {
           // this will update the environment variable too
           self.set_cwd(cwd);
         }
