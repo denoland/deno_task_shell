@@ -247,6 +247,7 @@ impl ExecuteResult {
 pub enum ShellPipeReader {
   OsPipe(os_pipe::PipeReader),
   StdFile(std::fs::File),
+  Cursor(std::io::Cursor<Vec<u8>>),
 }
 
 impl Clone for ShellPipeReader {
@@ -254,6 +255,7 @@ impl Clone for ShellPipeReader {
     match self {
       Self::OsPipe(pipe) => Self::OsPipe(pipe.try_clone().unwrap()),
       Self::StdFile(file) => Self::StdFile(file.try_clone().unwrap()),
+      Self::Cursor(cursor) => Self::Cursor(cursor.clone()),
     }
   }
 }
@@ -275,6 +277,11 @@ impl ShellPipeReader {
     match self {
       Self::OsPipe(pipe) => pipe.into(),
       Self::StdFile(file) => file.into(),
+      Self::Cursor(_) => {
+        // Cursor doesn't have a Stdio equivalent, so we just return a null
+        // Stdio. This is a bit of a hack, but it works for our use case.
+        std::process::Stdio::null()
+      }
     }
   }
 
@@ -299,6 +306,7 @@ impl ShellPipeReader {
       let size = match &mut self {
         ShellPipeReader::OsPipe(pipe) => pipe.read(&mut buffer)?,
         ShellPipeReader::StdFile(file) => file.read(&mut buffer)?,
+        ShellPipeReader::Cursor(cursor) => cursor.read(&mut buffer)?,
       };
       if size == 0 {
         break;
@@ -344,6 +352,7 @@ impl ShellPipeReader {
     match self {
       ShellPipeReader::OsPipe(pipe) => pipe.read(buf).map_err(|e| e.into()),
       ShellPipeReader::StdFile(file) => file.read(buf).map_err(|e| e.into()),
+      ShellPipeReader::Cursor(cursor) => cursor.read(buf).map_err(|e| e.into()),
     }
   }
 }

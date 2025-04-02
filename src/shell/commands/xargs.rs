@@ -61,21 +61,14 @@ fn xargs_collect_args(
     args.push("echo".into());
   }
 
-  if let Some(delim) = &flags.delimiter {
-    // strip a single trailing newline (xargs seems to do this)
-    let text = if *delim == '\n' {
-      if let Some(text) = text.strip_suffix(&delim.to_string()) {
-        text
-      } else {
-        &text
-      }
-    } else {
-      &text
-    };
-
-    args.extend(text.split(*delim).map(|t| t.into()));
-  } else if flags.is_null_delimited {
-    args.extend(text.split('\0').map(|t| t.into()));
+  if flags.delimiter.is_some() || flags.is_null_delimited {
+    let delimiter = flags.delimiter.unwrap_or('\0');
+    args.extend(
+      text
+        .split(delimiter)
+        .filter(|s| !s.is_empty())
+        .map(|t| t.into()),
+    );
   } else {
     args.extend(delimit_blanks(&text)?);
   }
@@ -314,5 +307,55 @@ mod test {
         .to_string(),
       "unmatched quote; by default quotes are special to xargs unless you use the -0 option",
     );
+  }
+
+  use super::ShellPipeReader;
+  use std::io::Cursor;
+
+  impl ShellPipeReader {
+    pub fn from_test_data(data: &str) -> Self {
+      Self::Cursor(Cursor::new(data.as_bytes().to_vec()))
+    }
+  }
+
+  fn to_vec_os_string(data: &[&str]) -> Vec<OsString> {
+    data.iter().map(|s| s.into()).collect()
+  }
+
+  #[test]
+  fn test_xargs_collect_args() {
+    // Test default behavior
+    let stdin = ShellPipeReader::from_test_data("arg1 arg2\narg3");
+    let result = xargs_collect_args(&[], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    let stdin = ShellPipeReader::from_test_data("arg1 arg2\narg3\n");
+    let result = xargs_collect_args(&[], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    // printf "arg1 arg2\narg3\n\n" | xargs                                                                                                                           130 ↵
+    // > arg1 arg2 arg3
+    let stdin = ShellPipeReader::from_test_data("arg1 arg2\narg3\n\n");
+    let result = xargs_collect_args(&[], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    // Test null-delimited with trailing null
+    let stdin = ShellPipeReader::from_test_data("arg1\0arg2\0arg3\0");
+    let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    // Test null-delimited with multiple null
+    let stdin = ShellPipeReader::from_test_data("arg1\0\0arg2\0arg3\0\0");
+    let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    // Test custom delimiter with trailing delimiter
+    let stdin = ShellPipeReader::from_test_data("arg1:arg2:arg3:");
+    let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+
+    let stdin = ShellPipeReader::from_test_data("arg1::arg2:arg3::");
+    let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
   }
 }
