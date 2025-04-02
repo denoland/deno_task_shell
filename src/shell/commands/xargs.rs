@@ -311,50 +311,43 @@ mod test {
     );
   }
 
-  fn to_vec_os_string(data: &[&str]) -> Vec<OsString> {
-    data.iter().map(|s| s.into()).collect()
-  }
-
   #[test]
   fn test_xargs_collect_args() {
-    // Test default behavior
-    let stdin = ShellPipeReader::from_str("arg1 arg2\narg3");
-    let result = xargs_collect_args(&[], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    fn collect(cli_args: &[&str], input: &str) -> Vec<String> {
+      let stdin = ShellPipeReader::from_str(input);
+      let cli_args = cli_args.iter().map(|s| s.into()).collect::<Vec<_>>();
+      let result = xargs_collect_args(&cli_args, stdin).unwrap();
+      result
+        .into_iter()
+        .map(|s| s.to_str().unwrap().to_string())
+        .collect()
+    }
 
-    let stdin = ShellPipeReader::from_str("arg1 arg2\narg3\n");
-    let result = xargs_collect_args(&[], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    // Test default behavior
+    let result = collect(&[], "arg1 arg2\narg3");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    let result = collect(&[], "arg1 arg2\narg3\n");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
 
     // printf "arg1 arg2\narg3\n\n" | xargs
     // > arg1 arg2 arg3
-    let stdin = ShellPipeReader::from_str("arg1 arg2\n\narg3\n\n\n");
-    let result = xargs_collect_args(&[], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    let result = collect(&[], "arg1 arg2\n\narg3\n\n\n");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
 
     // Test null-delimited with trailing null
-    let stdin = ShellPipeReader::from_str("arg1\0arg2\0arg3\0");
-    let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    let result = collect(&["-0"], "arg1\0arg2\0arg3\0");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
 
     // Test null-delimited with multiple nulls (all ignored)
-    let stdin = ShellPipeReader::from_str("arg1\0\0arg2\0arg3\0\0");
-    let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
-    assert_eq!(
-      result,
-      to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""])
-    );
+    let result = collect(&["-0"], "arg1\0\0arg2\0arg3\0\0");
+    assert_eq!(result, ["echo", "arg1", "", "arg2", "arg3", ""]);
 
     // Test custom delimiter with trailing delimiter
-    let stdin = ShellPipeReader::from_str("arg1:arg2:arg3:");
-    let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    let result = collect(&["-d", ":"], "arg1:arg2:arg3:");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
 
-    let stdin = ShellPipeReader::from_str("arg1::arg2:arg3::");
-    let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
-    assert_eq!(
-      result,
-      to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""])
-    );
+    let result = collect(&["-d", ":"], "arg1::arg2:arg3::");
+    assert_eq!(result, ["echo", "arg1", "", "arg2", "arg3", ""]);
   }
 }
