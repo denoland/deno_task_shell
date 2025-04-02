@@ -63,11 +63,7 @@ fn xargs_collect_args(
 
   if flags.delimiter.is_some() || flags.is_null_delimited {
     let delimiter = flags.delimiter.unwrap_or('\0');
-    args.extend(
-      text
-        .split(delimiter)
-        .map(|t| t.into()),
-    );
+    args.extend(text.split(delimiter).map(|t| t.into()));
 
     // remove last arg if it is empty
     if let Some(last) = args.last() {
@@ -353,7 +349,10 @@ mod test {
     // Test null-delimited with multiple nulls (all ignored)
     let stdin = ShellPipeReader::from_test_data("arg1\0\0arg2\0arg3\0\0");
     let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""]));
+    assert_eq!(
+      result,
+      to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""])
+    );
 
     // Test custom delimiter with trailing delimiter
     let stdin = ShellPipeReader::from_test_data("arg1:arg2:arg3:");
@@ -362,6 +361,9 @@ mod test {
 
     let stdin = ShellPipeReader::from_test_data("arg1::arg2:arg3::");
     let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""]));
+    assert_eq!(
+      result,
+      to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""])
+    );
   }
 }
