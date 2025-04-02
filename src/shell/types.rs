@@ -271,6 +271,15 @@ impl ShellPipeReader {
     Self::StdFile(std_file)
   }
 
+  #[cfg(test)]
+  #[allow(clippy::should_implement_trait)]
+  pub fn from_str(data: &str) -> Self {
+    use std::io::Write;
+    let (read, mut write) = os_pipe::pipe().unwrap();
+    write.write_all(data.as_bytes()).unwrap();
+    Self::OsPipe(read)
+  }
+
   pub fn into_stdio(self) -> std::process::Stdio {
     match self {
       Self::OsPipe(pipe) => pipe.into(),

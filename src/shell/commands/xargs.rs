@@ -61,21 +61,16 @@ fn xargs_collect_args(
     args.push("echo".into());
   }
 
-  if let Some(delim) = &flags.delimiter {
-    // strip a single trailing newline (xargs seems to do this)
-    let text = if *delim == '\n' {
-      if let Some(text) = text.strip_suffix(&delim.to_string()) {
-        text
-      } else {
-        &text
-      }
-    } else {
-      &text
-    };
+  if flags.delimiter.is_some() || flags.is_null_delimited {
+    let delimiter = flags.delimiter.unwrap_or('\0');
+    args.extend(text.split(delimiter).map(|t| t.into()));
 
-    args.extend(text.split(*delim).map(|t| t.into()));
-  } else if flags.is_null_delimited {
-    args.extend(text.split('\0').map(|t| t.into()));
+    // remove last arg if it is empty
+    if let Some(last) = args.last() {
+      if last.is_empty() {
+        args.pop();
+      }
+    }
   } else {
     args.extend(delimit_blanks(&text)?);
   }
@@ -314,5 +309,45 @@ mod test {
         .to_string(),
       "unmatched quote; by default quotes are special to xargs unless you use the -0 option",
     );
+  }
+
+  #[test]
+  fn test_xargs_collect_args() {
+    fn collect(cli_args: &[&str], input: &str) -> Vec<String> {
+      let stdin = ShellPipeReader::from_str(input);
+      let cli_args = cli_args.iter().map(|s| s.into()).collect::<Vec<_>>();
+      let result = xargs_collect_args(&cli_args, stdin).unwrap();
+      result
+        .into_iter()
+        .map(|s| s.to_str().unwrap().to_string())
+        .collect()
+    }
+
+    // Test default behavior
+    let result = collect(&[], "arg1 arg2\narg3");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    let result = collect(&[], "arg1 arg2\narg3\n");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    // printf "arg1 arg2\narg3\n\n" | xargs
+    // > arg1 arg2 arg3
+    let result = collect(&[], "arg1 arg2\n\narg3\n\n\n");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    // Test null-delimited with trailing null
+    let result = collect(&["-0"], "arg1\0arg2\0arg3\0");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    // Test null-delimited with multiple nulls (all ignored)
+    let result = collect(&["-0"], "arg1\0\0arg2\0arg3\0\0");
+    assert_eq!(result, ["echo", "arg1", "", "arg2", "arg3", ""]);
+
+    // Test custom delimiter with trailing delimiter
+    let result = collect(&["-d", ":"], "arg1:arg2:arg3:");
+    assert_eq!(result, ["echo", "arg1", "arg2", "arg3"]);
+
+    let result = collect(&["-d", ":"], "arg1::arg2:arg3::");
+    assert_eq!(result, ["echo", "arg1", "", "arg2", "arg3", ""]);
   }
 }
