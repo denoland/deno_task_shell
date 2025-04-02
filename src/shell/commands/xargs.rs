@@ -66,9 +66,15 @@ fn xargs_collect_args(
     args.extend(
       text
         .split(delimiter)
-        .filter(|s| !s.is_empty())
         .map(|t| t.into()),
     );
+
+    // remove last arg if it is empty
+    if let Some(last) = args.last() {
+      if last.is_empty() {
+        args.pop();
+      }
+    }
   } else {
     args.extend(delimit_blanks(&text)?);
   }
@@ -335,7 +341,7 @@ mod test {
 
     // printf "arg1 arg2\narg3\n\n" | xargs                                                                                                                           130 ↵
     // > arg1 arg2 arg3
-    let stdin = ShellPipeReader::from_test_data("arg1 arg2\narg3\n\n");
+    let stdin = ShellPipeReader::from_test_data("arg1 arg2\n\narg3\n\n\n");
     let result = xargs_collect_args(&[], stdin).unwrap();
     assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
 
@@ -344,10 +350,10 @@ mod test {
     let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
     assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
 
-    // Test null-delimited with multiple null
+    // Test null-delimited with multiple nulls (all ignored)
     let stdin = ShellPipeReader::from_test_data("arg1\0\0arg2\0arg3\0\0");
     let result = xargs_collect_args(&["-0".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""]));
 
     // Test custom delimiter with trailing delimiter
     let stdin = ShellPipeReader::from_test_data("arg1:arg2:arg3:");
@@ -356,6 +362,6 @@ mod test {
 
     let stdin = ShellPipeReader::from_test_data("arg1::arg2:arg3::");
     let result = xargs_collect_args(&["-d".into(), ":".into()], stdin).unwrap();
-    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "arg2", "arg3"]));
+    assert_eq!(result, to_vec_os_string(&["echo", "arg1", "", "arg2", "arg3", ""]));
   }
 }
