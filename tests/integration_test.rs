@@ -3,13 +3,14 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use deno_task_shell::ExecuteResult;
+use deno_task_shell::KillSignal;
+use deno_task_shell::SignalKind;
 use futures::FutureExt;
 
-use crate::KillSignal;
-use crate::SignalKind;
+use self::test_builder::TestBuilder;
 
-use super::test_builder::TestBuilder;
-use super::types::ExecuteResult;
+mod test_builder;
 
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 

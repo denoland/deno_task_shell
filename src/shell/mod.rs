@@ -24,8 +24,3 @@ mod execute;
 mod fs_util;
 mod types;
 pub mod which;
-
-#[cfg(test)]
-mod test;
-#[cfg(test)]
-mod test_builder;
