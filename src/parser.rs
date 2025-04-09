@@ -707,7 +707,7 @@ fn parse_surrounded_expression<'a, TResult>(
   input: &'a str,
   surrounded_char: char,
   fail_message: &str,
-  parse: impl Fn(&str) -> ParseResult<TResult>
+  parse: impl Fn(&str) -> ParseResult<TResult>,
 ) -> ParseResult<'a, TResult> {
   let start_input = input;
   let (input, _) = ch(surrounded_char)(input)?;
@@ -716,34 +716,39 @@ fn parse_surrounded_expression<'a, TResult>(
     match c {
       c if c == surrounded_char && !was_escape => {
         let inner_input = &input[..index];
-        let inner_input = if surrounded_char == '`' && inner_input.contains("\\`") {
-          Cow::Owned(inner_input.replace("\\`", "`"))
-        } else {
-          Cow::Borrowed(inner_input)
-        };
+        let inner_input =
+          if surrounded_char == '`' && inner_input.contains("\\`") {
+            Cow::Owned(inner_input.replace("\\`", "`"))
+          } else {
+            Cow::Borrowed(inner_input)
+          };
         let parts = match parse(&inner_input) {
-            Ok((result_input, parts)) => {
-              if !result_input.is_empty() {
-                todo!()
-              }
-              parts
-            },
-            Err(err) => {
-              return ParseError::fail(
-                input,
-                format!("Failed parsing within {}. {}", if c == '`' {
+          Ok((result_input, parts)) => {
+            if !result_input.is_empty() {
+              todo!()
+            }
+            parts
+          }
+          Err(err) => {
+            return ParseError::fail(
+              input,
+              format!(
+                "Failed parsing within {}. {}",
+                if c == '`' {
                   "backticks"
                 } else {
                   "double quotes"
                 },
                 match &err {
                   ParseError::Backtrace => "Could not determine expression.",
-                  ParseError::Failure(parse_error_failure) => parse_error_failure.message.as_str(),
+                  ParseError::Failure(parse_error_failure) =>
+                    parse_error_failure.message.as_str(),
                 }
-              ));
-            },
+              ),
+            );
+          }
         };
-        return Ok((&input[index + 1..], parts))
+        return Ok((&input[index + 1..], parts));
       }
       '\\' => {
         was_escape = true;
@@ -914,12 +919,17 @@ fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
     parse_sequential_list,
     with_failure_input(
       input,
-      assert_exists(ch(')'), "Expected closing parenthesis for command substitution."),
+      assert_exists(
+        ch(')'),
+        "Expected closing parenthesis for command substitution.",
+      ),
     ),
   )(input)
 }
 
-fn parse_backticks_command_substitution(input: &str) -> ParseResult<SequentialList> {
+fn parse_backticks_command_substitution(
+  input: &str,
+) -> ParseResult<SequentialList> {
   parse_surrounded_expression(
     input,
     '`',
@@ -1038,6 +1048,17 @@ mod test {
     assert_eq!(
       parse("cmd 'test").err().unwrap().to_string(),
       concat!("Expected closing single quote.\n", "  'test\n", "  ~"),
+    );
+    assert_eq!(
+      parse("cmd \"test$(echo testing\"")
+        .err()
+        .unwrap()
+        .to_string(),
+      concat!(
+        "Failed parsing within double quotes. Expected closing parenthesis for command substitution.\n",
+        "  test$(echo testing\"\n",
+        "  ~"
+      ),
     );
 
     assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
