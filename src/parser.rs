@@ -725,7 +725,18 @@ fn parse_surrounded_expression<'a, TResult>(
         let parts = match parse(&inner_input) {
           Ok((result_input, parts)) => {
             if !result_input.is_empty() {
-              todo!()
+              return ParseError::fail(
+                input,
+                format!(
+                  "Failed parsing within {}. Unexpected character: {}",
+                  if c == '`' {
+                    "backticks"
+                  } else {
+                    "double quotes"
+                  },
+                  result_input
+                ),
+              );
             }
             parts
           }
