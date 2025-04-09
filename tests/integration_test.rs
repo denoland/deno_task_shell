@@ -1430,6 +1430,30 @@ async fn paren_escapes() {
 }
 
 #[tokio::test]
+async fn tilde_expansion() {
+  let text = concat!(
+    r"export HOME=/home/dir && echo ~/test && echo ~ && ",
+    r"echo \~ && export HOME=/test && echo ~ && ",
+    r"HOME=/nope echo ~ && ",
+    r"HOME=/nope $(echo echo ~) && ",
+    r"echo ~/sub/~/sub"
+  );
+  let text = if cfg!(windows) {
+    // windows uses a different env var
+    text.replace("HOME", "USERPROFILE")
+  } else {
+    text.to_string()
+  };
+  TestBuilder::new()
+    .command(&text)
+    .assert_stdout(
+      "/home/dir/test\n/home/dir\n~\n/test\n/test\n/test\n/test/sub/~/sub\n",
+    )
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn cross_platform_shebang() {
   // with -S
   TestBuilder::new()

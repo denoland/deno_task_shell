@@ -738,9 +738,13 @@ dependencies = [
 
 [[package]]
 name = "sys_traits"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "638f0e61b5134e56b2abdf4c704fd44672603f15ca09013f314649056f3fee4d"
+checksum = "f3374191d43a934854e99a46cd47f8124369e690353e0f8db42769218d083690"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
 
 [[package]]
 name = "tempfile"

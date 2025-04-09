@@ -750,11 +750,13 @@ pub enum EvaluateWordTextError {
   NotUtf8Pattern { part: OsString },
   #[error("glob: no matches found '{}'", pattern)]
   NoFilesMatched { pattern: String },
-  #[error("Invalid utf-8: {}", err)]
+  #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
     #[from]
     err: FromUtf8Error,
   },
+  #[error("failed resolving home directory for tilde expansion")]
+  NoHomeDirectory,
 }
 
 impl EvaluateWordTextError {
@@ -904,6 +906,11 @@ fn evaluate_word_parts(
             None
           }
           WordPart::Variable(name) => state.get_var(OsStr::new(&name)).cloned(),
+          WordPart::Tilde => Some(
+            sys_traits::impls::real_home_dir_with_env(state)
+              .map(|s| s.into_os_string())
+              .ok_or(EvaluateWordTextError::NoHomeDirectory)?,
+          ),
           WordPart::Command(list) => Some(
             evaluate_command_substitution(
               list,

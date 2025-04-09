@@ -248,6 +248,8 @@ pub enum WordPart {
   Text(String),
   /// Variable substitution (ex. `$MY_VAR`)
   Variable(String),
+  /// Tilde expansion (ex. `~`)
+  Tilde,
   /// Command substitution (ex. `$(command)`)
   Command(SequentialList),
   /// Quoted string (ex. `"hello"` or `'test'`)
@@ -751,30 +753,44 @@ fn parse_word_parts(
     or7(
       parse_special_shell_var,
       parse_escaped_dollar_sign,
+      parse_escaped_char('~'),
       parse_escaped_char('`'),
       parse_escaped_char('"'),
       parse_escaped_char('('),
-      parse_escaped_char(')'),
-      if_true(parse_escaped_char('\''), move |_| {
-        mode == ParseWordPartsMode::DoubleQuotes
-      }),
+      or(
+        parse_escaped_char(')'),
+        if_true(parse_escaped_char('\''), move |_| {
+          mode == ParseWordPartsMode::DoubleQuotes
+        }),
+      ),
     )
+  }
+
+  fn append_char(result: &mut Vec<WordPart>, c: char) {
+    if let Some(WordPart::Text(text)) = result.last_mut() {
+      text.push(c);
+    } else {
+      result.push(WordPart::Text(c.to_string()));
+    }
   }
 
   move |input| {
     enum PendingPart<'a> {
       Char(char),
       Variable(&'a str),
+      Tilde,
       Command(SequentialList),
       Parts(Vec<WordPart>),
     }
 
+    let original_input = input;
     let (input, parts) = many0(or7(
-      or(
+      or3(
         map(tag("$?"), |_| PendingPart::Variable("?")),
         map(first_escaped_char(mode), PendingPart::Char),
+        map(parse_command_substitution, PendingPart::Command),
       ),
-      map(parse_command_substitution, PendingPart::Command),
+      map(ch('~'), |_| PendingPart::Tilde),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
         let (_, _) = ch('`')(input)?;
@@ -812,22 +828,32 @@ fn parse_word_parts(
     ))(input)?;
 
     let mut result = Vec::new();
-    for part in parts {
+    let mut parts = parts.into_iter().enumerate().peekable();
+    while let Some((i, part)) = parts.next() {
       match part {
         PendingPart::Char(c) => {
-          if let Some(WordPart::Text(text)) = result.last_mut() {
-            text.push(c);
+          append_char(&mut result, c);
+        }
+        PendingPart::Tilde => {
+          if i == 0 {
+            if matches!(parts.peek(), None | Some((_, PendingPart::Char('/'))))
+            {
+              result.push(WordPart::Tilde);
+            } else {
+              return ParseError::fail(
+                original_input,
+                "Unsupported tilde expansion.",
+              );
+            }
           } else {
-            result.push(WordPart::Text(c.to_string()));
+            append_char(&mut result, '~');
           }
         }
         PendingPart::Command(s) => result.push(WordPart::Command(s)),
         PendingPart::Variable(v) => {
-          result.push(WordPart::Variable(v.to_string()))
+          result.push(WordPart::Variable(v.to_string()));
         }
-        PendingPart::Parts(parts) => {
-          result.extend(parts);
-        }
+        PendingPart::Parts(parts) => result.extend(parts),
       }
     }
 
@@ -1424,6 +1450,25 @@ mod test {
       r#""test" asdf"#,
       Ok(vec![WordPart::Text("test".to_string())]),
       " asdf",
+    );
+  }
+
+  #[test]
+  fn tilde_expansion() {
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~test"#,
+      Err("Unsupported tilde expansion."),
+    );
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~+/test"#,
+      Err("Unsupported tilde expansion."),
+    );
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~/test"#,
+      Ok(vec![WordPart::Tilde, WordPart::Text("/test".to_string())]),
     );
   }
 
