@@ -753,13 +753,16 @@ fn parse_word_parts(
     or7(
       parse_special_shell_var,
       parse_escaped_dollar_sign,
+      parse_escaped_char('~'),
       parse_escaped_char('`'),
       parse_escaped_char('"'),
       parse_escaped_char('('),
-      parse_escaped_char(')'),
-      if_true(parse_escaped_char('\''), move |_| {
-        mode == ParseWordPartsMode::DoubleQuotes
-      }),
+      or(
+        parse_escaped_char(')'),
+        if_true(parse_escaped_char('\''), move |_| {
+          mode == ParseWordPartsMode::DoubleQuotes
+        }),
+      )
     )
   }
 
@@ -767,16 +770,18 @@ fn parse_word_parts(
     enum PendingPart<'a> {
       Char(char),
       Variable(&'a str),
+      Tilde,
       Command(SequentialList),
       Parts(Vec<WordPart>),
     }
 
     let (input, parts) = many0(or7(
-      or(
+      or3(
         map(tag("$?"), |_| PendingPart::Variable("?")),
         map(first_escaped_char(mode), PendingPart::Char),
+        map(parse_command_substitution, PendingPart::Command),
       ),
-      map(parse_command_substitution, PendingPart::Command),
+      map(ch('~'), |_| PendingPart::Tilde),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
       |input| {
         let (_, _) = ch('`')(input)?;
@@ -796,7 +801,7 @@ fn parse_word_parts(
         if_true(next_char, |&c| match mode {
           ParseWordPartsMode::DoubleQuotes => c != '"',
           ParseWordPartsMode::Unquoted => {
-            !c.is_whitespace() && !"(){}<>|&;\"'".contains(c)
+            !c.is_whitespace() && !"~(){}<>|&;\"'".contains(c)
           }
         }),
         PendingPart::Char,
@@ -823,6 +828,7 @@ fn parse_word_parts(
             result.push(WordPart::Text(c.to_string()));
           }
         }
+        PendingPart::Tilde => result.push(WordPart::Tilde),
         PendingPart::Command(s) => result.push(WordPart::Command(s)),
         PendingPart::Variable(v) => {
           result.push(WordPart::Variable(v.to_string()))
