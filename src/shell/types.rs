@@ -206,6 +206,12 @@ impl ShellState {
   }
 }
 
+impl sys_traits::BaseEnvVar for ShellState {
+    fn base_env_var_os(&self, key: &OsStr) -> Option<OsString> {
+      self.env_vars.get(key).cloned()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum EnvChange {
   // `export ENV_VAR=VALUE`

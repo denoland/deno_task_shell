@@ -248,6 +248,8 @@ pub enum WordPart {
   Text(String),
   /// Variable substitution (ex. `$MY_VAR`)
   Variable(String),
+  /// Tilde expansion (ex. `~`)
+  Tilde,
   /// Command substitution (ex. `$(command)`)
   Command(SequentialList),
   /// Quoted string (ex. `"hello"` or `'test'`)
@@ -794,7 +796,7 @@ fn parse_word_parts(
         if_true(next_char, |&c| match mode {
           ParseWordPartsMode::DoubleQuotes => c != '"',
           ParseWordPartsMode::Unquoted => {
-            !c.is_whitespace() && !"~(){}<>|&;\"'".contains(c)
+            !c.is_whitespace() && !"(){}<>|&;\"'".contains(c)
           }
         }),
         PendingPart::Char,

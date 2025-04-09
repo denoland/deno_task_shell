@@ -1,5 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -750,7 +752,9 @@ pub enum EvaluateWordTextError {
   NotUtf8Pattern { part: OsString },
   #[error("glob: no matches found '{}'", pattern)]
   NoFilesMatched { pattern: String },
-  #[error("Invalid utf-8: {}", err)]
+  #[error("tilde expansion requires valid utf-8 (text: '{}')", lossy_text)]
+  TildeExpansionInvalidUtf8 { lossy_text: String },
+  #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
     #[from]
     err: FromUtf8Error,
@@ -796,9 +800,13 @@ fn evaluate_word_parts(
 
   fn evaluate_word_text(
     state: &ShellState,
-    text_parts: Vec<TextPart>,
+    mut text_parts: Vec<TextPart>,
     is_quoted: bool,
   ) -> Result<Vec<OsString>, EvaluateWordTextError> {
+    if !is_quoted {
+      tilde_expand_text_parts(state, &mut text_parts)?;
+    }
+
     if !is_quoted
       && text_parts
         .iter()
@@ -885,6 +893,57 @@ fn evaluate_word_parts(
       Ok(vec![text_parts_to_string(text_parts)])
     }
   }
+
+  fn tilde_expand_text_parts(
+    state: &ShellState,
+    text_parts: &mut Vec<TextPart>,
+  ) -> Result<(), EvaluateWordTextError> {
+      let lazy_home_dir: OnceCell<PathBuf> = OnceCell::new();
+      // tilde expansion
+      for part in text_parts {
+        match part {
+            TextPart::Text(os_string) => {
+              let text = os_string.to_string_lossy();
+              let mut was_last_escape = false;
+              let mut new_text = OsString::new();
+              let mut last_index = 0;
+              for (index, c) in text.char_indices() {
+                match c {
+                  '\\' => {
+                    was_last_escape = true;
+                  }
+                  '~' if was_last_escape => {
+                    new_text.push(&text[last_index..index - 1]);
+                    new_text.push("~");
+                    last_index = index + 1;
+                  }
+                  '~' if !was_last_escape => {
+                    if let Cow::Owned(text) = text {
+                      return Err(EvaluateWordTextError::TildeExpansionInvalidUtf8 { lossy_text: text });
+                    }
+                    new_text.push(&text[last_index..index]);
+                    last_index = index + 1;
+                    // push the home dir
+                    let home_dir = lazy_home_dir.get_or_init(||sys_traits::impls::real_home_dir_with_env(state).unwrap_or_else(|| PathBuf::from("~")));
+                    new_text.push(home_dir);
+                  }
+                  _ => {
+                    was_last_escape = false;
+                  }
+                }
+              }
+              if last_index > 0 {
+                new_text.push(&text[last_index..]);
+                *os_string = new_text;
+              }
+            },
+            TextPart::Quoted(_) => {
+              // do not expand in quotes
+            },
+        }
+      }
+      Ok(())
+    }
 
   fn evaluate_word_parts_inner(
     parts: Vec<WordPart>,

@@ -1430,6 +1430,20 @@ async fn paren_escapes() {
 }
 
 #[tokio::test]
+async fn tilde_expansion() {
+  TestBuilder::new()
+    .command(concat!(
+      r"export HOME=/home/dir && echo ~/test && echo ~ && ",
+      r"echo \~ && export HOME=/test && echo ~ && ",
+      r"HOME=/nope echo ~ && ",
+      r"HOME=/nope $(echo echo ~)"
+    ))
+    .assert_stdout("/home/dir/test\n/home/dir\n~\n/test\n/test\n/test\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn cross_platform_shebang() {
   // with -S
   TestBuilder::new()
