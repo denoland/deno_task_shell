@@ -8,17 +8,17 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::Context;
-use futures::future::LocalBoxFuture;
-use pretty_assertions::assert_eq;
-use deno_task_shell::ShellCommand;
-use tokio::task::JoinHandle;
-use deno_task_shell::ShellCommandContext;
-use deno_task_shell::execute_with_pipes;
-use deno_task_shell::parser::parse;
 use deno_task_shell::KillSignal;
+use deno_task_shell::ShellCommand;
+use deno_task_shell::ShellCommandContext;
 use deno_task_shell::ShellPipeWriter;
 use deno_task_shell::ShellState;
+use deno_task_shell::execute_with_pipes;
+use deno_task_shell::parser::parse;
 use deno_task_shell::pipe;
+use futures::future::LocalBoxFuture;
+use pretty_assertions::assert_eq;
+use tokio::task::JoinHandle;
 
 use deno_task_shell::ExecuteResult;
 

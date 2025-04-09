@@ -3,10 +3,10 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use futures::FutureExt;
+use deno_task_shell::ExecuteResult;
 use deno_task_shell::KillSignal;
 use deno_task_shell::SignalKind;
-use deno_task_shell::ExecuteResult;
+use futures::FutureExt;
 
 use self::test_builder::TestBuilder;
 
