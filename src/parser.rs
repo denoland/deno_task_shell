@@ -762,7 +762,7 @@ fn parse_word_parts(
         if_true(parse_escaped_char('\''), move |_| {
           mode == ParseWordPartsMode::DoubleQuotes
         }),
-      )
+      ),
     )
   }
 

@@ -904,9 +904,8 @@ fn evaluate_word_parts(
             None
           }
           WordPart::Variable(name) => state.get_var(OsStr::new(&name)).cloned(),
-          WordPart::Tilde => {
-            sys_traits::impls::real_home_dir_with_env(state).map(|s| s.into_os_string())
-          }
+          WordPart::Tilde => sys_traits::impls::real_home_dir_with_env(state)
+            .map(|s| s.into_os_string()),
           WordPart::Command(list) => Some(
             evaluate_command_substitution(
               list,
