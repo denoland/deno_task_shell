@@ -766,6 +766,14 @@ fn parse_word_parts(
     )
   }
 
+  fn append_char(result: &mut Vec<WordPart>, c: char) {
+    if let Some(WordPart::Text(text)) = result.last_mut() {
+      text.push(c);
+    } else {
+      result.push(WordPart::Text(c.to_string()));
+    }
+  }
+
   move |input| {
     enum PendingPart<'a> {
       Char(char),
@@ -775,6 +783,7 @@ fn parse_word_parts(
       Parts(Vec<WordPart>),
     }
 
+    let original_input = input;
     let (input, parts) = many0(or7(
       or3(
         map(tag("$?"), |_| PendingPart::Variable("?")),
@@ -819,23 +828,32 @@ fn parse_word_parts(
     ))(input)?;
 
     let mut result = Vec::new();
-    for part in parts {
+    let mut parts = parts.into_iter().enumerate().peekable();
+    while let Some((i, part)) = parts.next() {
       match part {
         PendingPart::Char(c) => {
-          if let Some(WordPart::Text(text)) = result.last_mut() {
-            text.push(c);
+          append_char(&mut result, c);
+        }
+        PendingPart::Tilde => {
+          if i == 0 {
+            if matches!(parts.peek(), None | Some((_, PendingPart::Char('/'))))
+            {
+              result.push(WordPart::Tilde);
+            } else {
+              return ParseError::fail(
+                original_input,
+                "Unsupported tilde expansion.",
+              );
+            }
           } else {
-            result.push(WordPart::Text(c.to_string()));
+            append_char(&mut result, '~');
           }
         }
-        PendingPart::Tilde => result.push(WordPart::Tilde),
         PendingPart::Command(s) => result.push(WordPart::Command(s)),
         PendingPart::Variable(v) => {
-          result.push(WordPart::Variable(v.to_string()))
+          result.push(WordPart::Variable(v.to_string()));
         }
-        PendingPart::Parts(parts) => {
-          result.extend(parts);
-        }
+        PendingPart::Parts(parts) => result.extend(parts),
       }
     }
 
@@ -1432,6 +1450,25 @@ mod test {
       r#""test" asdf"#,
       Ok(vec![WordPart::Text("test".to_string())]),
       " asdf",
+    );
+  }
+
+  #[test]
+  fn tilde_expansion() {
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~test"#,
+      Err("Unsupported tilde expansion."),
+    );
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~+/test"#,
+      Err("Unsupported tilde expansion."),
+    );
+    run_test(
+      parse_word_parts(ParseWordPartsMode::Unquoted),
+      r#"~/test"#,
+      Ok(vec![WordPart::Tilde, WordPart::Text("/test".to_string())]),
     );
   }
 
