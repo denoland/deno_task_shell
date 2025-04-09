@@ -909,7 +909,7 @@ fn evaluate_word_parts(
           WordPart::Tilde => Some(
             sys_traits::impls::real_home_dir_with_env(state)
               .map(|s| s.into_os_string())
-              .ok_or_else(|| EvaluateWordTextError::NoHomeDirectory)?,
+              .ok_or(EvaluateWordTextError::NoHomeDirectory)?,
           ),
           WordPart::Command(list) => Some(
             evaluate_command_substitution(
