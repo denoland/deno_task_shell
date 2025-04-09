@@ -1,26 +1,26 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
-use anyhow::Context;
-use futures::future::LocalBoxFuture;
-use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
+
+use anyhow::Context;
+use futures::future::LocalBoxFuture;
+use pretty_assertions::assert_eq;
+use deno_task_shell::ShellCommand;
 use tokio::task::JoinHandle;
+use deno_task_shell::ShellCommandContext;
+use deno_task_shell::execute_with_pipes;
+use deno_task_shell::parser::parse;
+use deno_task_shell::KillSignal;
+use deno_task_shell::ShellPipeWriter;
+use deno_task_shell::ShellState;
+use deno_task_shell::pipe;
 
-use crate::ShellCommand;
-use crate::ShellCommandContext;
-use crate::execute_with_pipes;
-use crate::parser::parse;
-use crate::shell::fs_util;
-use crate::shell::types::KillSignal;
-use crate::shell::types::ShellPipeWriter;
-use crate::shell::types::ShellState;
-use crate::shell::types::pipe;
-
-use super::types::ExecuteResult;
+use deno_task_shell::ExecuteResult;
 
 type FnShellCommandExecute =
   Box<dyn Fn(ShellCommandContext) -> LocalBoxFuture<'static, ExecuteResult>>;
@@ -54,7 +54,7 @@ struct TempDir {
 impl TempDir {
   pub fn new() -> Self {
     let temp_dir = tempfile::tempdir().unwrap();
-    let cwd = fs_util::canonicalize_path(temp_dir.path()).unwrap();
+    let cwd = canonicalize_path(temp_dir.path()).unwrap();
     Self {
       _inner: temp_dir,
       cwd,
@@ -296,4 +296,8 @@ fn get_output_writer_and_handle() -> (ShellPipeWriter, JoinHandle<String>) {
   let (reader, writer) = pipe();
   let handle = reader.pipe_to_string_handle();
   (writer, handle)
+}
+
+fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
+  Ok(deno_path_util::strip_unc_prefix(path.canonicalize()?))
 }
