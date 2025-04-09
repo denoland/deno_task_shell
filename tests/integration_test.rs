@@ -208,6 +208,16 @@ async fn exit() {
 }
 
 #[tokio::test]
+async fn double_quotes() {
+  // escaped
+  TestBuilder::new()
+    .command("echo \"testing\\\" this out\"")
+    .assert_stdout("testing\" this out\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn async_commands() {
   TestBuilder::new()
     .command("sleep 0.1 && echo 2 & echo 1")
@@ -281,7 +291,7 @@ async fn async_commands() {
 }
 
 #[tokio::test]
-async fn command_substition() {
+async fn command_substitution() {
   TestBuilder::new()
     .command("echo $(echo 1)")
     .assert_stdout("1\n")
@@ -294,6 +304,19 @@ async fn command_substition() {
     .run()
     .await;
 
+  TestBuilder::new()
+    .command("echo \"hi $(echo 1)\"")
+    .assert_stdout("hi 1\n")
+    .run()
+    .await;
+
+  // nested
+  TestBuilder::new()
+    .command("echo $(echo $(echo 1))")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
   // async inside subshell should wait
   TestBuilder::new()
     .command("$(sleep 0.1 && echo 1 & echo echo) 2")
@@ -302,6 +325,53 @@ async fn command_substition() {
     .await;
   TestBuilder::new()
     .command("$(sleep 0.1 && echo 1 && exit 5 &) ; echo 2")
+    .assert_stdout("2\n")
+    .assert_stderr("1: command not found\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn backticks() {
+  TestBuilder::new()
+    .command("echo ``")
+    .assert_stdout("\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("echo `echo 1`")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("echo `echo 1 && echo 2`")
+    .assert_stdout("1 2\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("echo \"hi `echo 1`\"")
+    .assert_stdout("hi 1\n")
+    .run()
+    .await;
+
+  // nested
+  TestBuilder::new()
+    .command("echo `echo \\`echo 1\\``")
+    .assert_stdout("1\n")
+    .run()
+    .await;
+
+  // async inside subshell should wait
+  TestBuilder::new()
+    .command("`sleep 0.1 && echo 1 & echo echo` 2")
+    .assert_stdout("1 2\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("`sleep 0.1 && echo 1 && exit 5 &` ; echo 2")
     .assert_stdout("2\n")
     .assert_stderr("1: command not found\n")
     .run()
