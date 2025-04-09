@@ -77,6 +77,7 @@ pub struct TestBuilder {
 }
 
 impl TestBuilder {
+  #[allow(clippy::new_without_default)]
   pub fn new() -> Self {
     let env_vars = std::env::vars()
       .map(|(key, value)| {
