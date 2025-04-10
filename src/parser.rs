@@ -1,5 +1,7 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::borrow::Cow;
+
 use anyhow::Result;
 use anyhow::bail;
 use monch::*;
@@ -693,15 +695,82 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
 
 fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<WordPart>> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
-  // Double quotes may have escaped
-  delimited(
-    ch('"'),
+  parse_surrounded_expression(
+    input,
+    '"',
+    "Expected closing double quote.",
     parse_word_parts(ParseWordPartsMode::DoubleQuotes),
-    with_failure_input(
-      input,
-      assert_exists(ch('"'), "Expected closing double quote."),
-    ),
-  )(input)
+  )
+}
+
+fn parse_surrounded_expression<'a, TResult>(
+  input: &'a str,
+  surrounded_char: char,
+  fail_message: &str,
+  parse: impl Fn(&str) -> ParseResult<TResult>,
+) -> ParseResult<'a, TResult> {
+  let start_input = input;
+  let (input, _) = ch(surrounded_char)(input)?;
+  let mut was_escape = false;
+  for (index, c) in input.char_indices() {
+    match c {
+      c if c == surrounded_char && !was_escape => {
+        let inner_input = &input[..index];
+        let inner_input =
+          if surrounded_char == '`' && inner_input.contains("\\`") {
+            Cow::Owned(inner_input.replace("\\`", "`"))
+          } else {
+            Cow::Borrowed(inner_input)
+          };
+        let parts = match parse(&inner_input) {
+          Ok((result_input, parts)) => {
+            if !result_input.is_empty() {
+              return ParseError::fail(
+                input,
+                format!(
+                  "Failed parsing within {}. Unexpected character: {}",
+                  if c == '`' {
+                    "backticks"
+                  } else {
+                    "double quotes"
+                  },
+                  result_input
+                ),
+              );
+            }
+            parts
+          }
+          Err(err) => {
+            return ParseError::fail(
+              input,
+              format!(
+                "Failed parsing within {}. {}",
+                if c == '`' {
+                  "backticks"
+                } else {
+                  "double quotes"
+                },
+                match &err {
+                  ParseError::Backtrace => "Could not determine expression.",
+                  ParseError::Failure(parse_error_failure) =>
+                    parse_error_failure.message.as_str(),
+                }
+              ),
+            );
+          }
+        };
+        return Ok((&input[index + 1..], parts));
+      }
+      '\\' => {
+        was_escape = true;
+      }
+      _ => {
+        was_escape = false;
+      }
+    }
+  }
+
+  ParseError::fail(start_input, fail_message)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -790,15 +859,9 @@ fn parse_word_parts(
         map(first_escaped_char(mode), PendingPart::Char),
         map(parse_command_substitution, PendingPart::Command),
       ),
+      map(parse_backticks_command_substitution, PendingPart::Command),
       map(ch('~'), |_| PendingPart::Tilde),
       map(preceded(ch('$'), parse_env_var_name), PendingPart::Variable),
-      |input| {
-        let (_, _) = ch('`')(input)?;
-        ParseError::fail(
-          input,
-          "Back ticks in strings is currently not supported.",
-        )
-      },
       // words can have escaped spaces
       map(
         if_true(preceded(ch('\\'), ch(' ')), |_| {
@@ -862,7 +925,28 @@ fn parse_word_parts(
 }
 
 fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
-  delimited(tag("$("), parse_sequential_list, ch(')'))(input)
+  delimited(
+    tag("$("),
+    parse_sequential_list,
+    with_failure_input(
+      input,
+      assert_exists(
+        ch(')'),
+        "Expected closing parenthesis for command substitution.",
+      ),
+    ),
+  )(input)
+}
+
+fn parse_backticks_command_substitution(
+  input: &str,
+) -> ParseResult<SequentialList> {
+  parse_surrounded_expression(
+    input,
+    '`',
+    "Expected closing backtick.",
+    parse_sequential_list,
+  )
 }
 
 fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
@@ -976,19 +1060,21 @@ mod test {
       parse("cmd 'test").err().unwrap().to_string(),
       concat!("Expected closing single quote.\n", "  'test\n", "  ~"),
     );
+    assert_eq!(
+      parse("cmd \"test$(echo testing\"")
+        .err()
+        .unwrap()
+        .to_string(),
+      concat!(
+        "Failed parsing within double quotes. Expected closing parenthesis for command substitution.\n",
+        "  test$(echo testing\"\n",
+        "  ~"
+      ),
+    );
 
     assert!(parse("( test ||other&&test;test);(t&est );").is_ok());
     assert!(parse("command --arg='value'").is_ok());
     assert!(parse("command --arg=\"value\"").is_ok());
-
-    assert_eq!(
-      parse("echo `echo 1`").err().unwrap().to_string(),
-      concat!(
-        "Back ticks in strings is currently not supported.\n",
-        "  `echo 1`\n",
-        "  ~",
-      ),
-    );
     assert!(
       parse("deno run --allow-read=. --allow-write=./testing main.ts").is_ok(),
     );
@@ -1442,7 +1528,7 @@ mod test {
     run_test(
       parse_quoted_string,
       r#""asdf`""#,
-      Err("Back ticks in strings is currently not supported."),
+      Err("Failed parsing within double quotes. Expected closing backtick."),
     );
 
     run_test_with_end(
