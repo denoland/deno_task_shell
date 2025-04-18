@@ -46,7 +46,9 @@ jobs:
 
       - name: Build only parser in Wasm
         if: contains(matrix.os, 'ubuntu')
-        run: cargo build --no-default-features --target wasm32-unknown-unknown
+        run: |
+          rutup target add wasm32-unknown-unknown
+          cargo build --no-default-features --target wasm32-unknown-unknown
       - name: Build
         run: cargo build --all-targets --all-features --release
       - name: Test
