@@ -1,6 +1,6 @@
 [package]
 name = "deno_task_shell"
-version = "0.23.1"
+version = "0.24.0"
 authors = ["the Deno authors"]
 documentation = "https://docs.rs/deno_task_shell"
 edition = "2024"
@@ -24,7 +24,7 @@ serde = { version = "1", features = ["derive"], optional = true }
 monch = "0.5.0"
 thiserror = "2.0.9"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
-deno_path_util = "0.3.2"
+deno_path_util = "0.4.0"
 sys_traits = { version = "0.1.14", optional = true, features = ["real", "winapi", "libc"] }
 # temporarily using until https://github.com/harryfei/which-rs/pull/109 is released
 which = { package = "temp_deno_which", version = "0.1.0", default-features = false }
