@@ -1,5 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::path::Path;
@@ -85,6 +86,34 @@ impl which::sys::Sys for ShellState {
 
   fn env_var_os(&self, name: &OsStr) -> Option<OsString> {
     self.get_var(name).cloned()
+  }
+
+  fn env_windows_path_ext(&self) -> Cow<'static, [String]> {
+    Cow::Owned(
+      self
+        .env_var(OsStr::new("PATHEXT"))
+        .map(|pathext| {
+          pathext
+            .split(';')
+            .filter_map(|s| {
+              if s.as_bytes().first() == Some(&b'.') {
+                Some(s.to_owned())
+              } else {
+                // Invalid segment; just ignore it.
+                None
+              }
+            })
+            .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|_| {
+          vec![
+            ".EXE".to_string(),
+            ".CMD".to_string(),
+            ".BAT".to_string(),
+            ".COM".to_string(),
+          ]
+        }),
+    )
   }
 
   fn metadata(&self, path: &Path) -> std::io::Result<Self::Metadata> {
