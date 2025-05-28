@@ -75,7 +75,8 @@ impl which::sys::Sys for ShellState {
   }
 
   fn home_dir(&self) -> Option<PathBuf> {
-    sys_traits::impls::real_home_dir_with_env(self)
+    // disable tilde expansion because that's handled by the shell
+    None
   }
 
   fn env_split_paths(&self, paths: &OsStr) -> Vec<PathBuf> {
@@ -104,38 +105,13 @@ impl which::sys::Sys for ShellState {
     Ok(Box::new(iter))
   }
 
-  #[cfg(unix)]
   fn is_valid_executable(
     &self,
-    path: &std::path::Path,
+    _path: &std::path::Path,
   ) -> std::io::Result<bool> {
-    use rustix::fs as rfs;
-    rfs::access(path, rfs::Access::EXEC_OK)
-      .map(|_| true)
-      .map_err(|e| io::Error::from_raw_os_error(e.raw_os_error()))
-  }
-
-  #[cfg(windows)]
-  fn is_valid_executable(
-    &self,
-    path: &std::path::Path,
-  ) -> std::io::Result<bool> {
-    use std::os::windows::ffi::OsStrExt;
-
-    let name = path
-      .as_os_str()
-      .encode_wide()
-      .chain(Some(0))
-      .collect::<Vec<u16>>();
-    let mut bt: u32 = 0;
-    // SAFETY: winapi call
-    unsafe {
-      Ok(
-        windows_sys::Win32::Storage::FileSystem::GetBinaryTypeW(
-          name.as_ptr(),
-          &mut bt,
-        ) != 0,
-      )
-    }
+    // we've considered everything to be executable so that cross platform
+    // shebangs work and so that people don't need to bother marking an
+    // item as executable in git, which is annoying for Windows users
+    Ok(true)
   }
 }
