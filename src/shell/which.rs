@@ -9,6 +9,58 @@ use thiserror::Error;
 
 use super::ShellState;
 
+/// Error when a command path could not be resolved.
+#[derive(Error, Debug, PartialEq)]
+pub enum CommandPathResolutionError {
+  #[error("{}: command not found", .0.to_string_lossy())]
+  CommandNotFound(OsString),
+  #[error("{}: failed canonicalizing", .0.to_string_lossy())]
+  FailedCanonicalizing(OsString),
+  #[error("command name was empty")]
+  CommandEmpty,
+}
+
+impl CommandPathResolutionError {
+  pub fn exit_code(&self) -> i32 {
+    match self {
+      // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
+      CommandPathResolutionError::CommandNotFound(_) => 127,
+      CommandPathResolutionError::CommandEmpty
+      | CommandPathResolutionError::FailedCanonicalizing(_) => 1,
+    }
+  }
+}
+
+/// Resolves a command name to an absolute path.
+pub fn resolve_command_path(
+  command_name: &OsStr,
+  base_dir: &Path,
+  state: &ShellState,
+) -> Result<PathBuf, CommandPathResolutionError> {
+  if command_name.is_empty() {
+    return Err(CommandPathResolutionError::CommandEmpty);
+  }
+
+  // check for absolute
+  if PathBuf::from(command_name).is_absolute() {
+    return Ok(PathBuf::from(command_name));
+  }
+
+  let result = which::WhichConfig::new_with_sys(state.clone())
+    .binary_name(command_name.to_os_string())
+    .custom_cwd(base_dir.to_path_buf())
+    .first_result();
+  result.map_err(|err| match err {
+    which::Error::CannotFindBinaryPath
+    | which::Error::CannotGetCurrentDirAndPathListEmpty => {
+      CommandPathResolutionError::CommandNotFound(command_name.into())
+    }
+    which::Error::CannotCanonicalize => {
+      CommandPathResolutionError::FailedCanonicalizing(command_name.into())
+    }
+  })
+}
+
 impl which::sys::Sys for ShellState {
   type ReadDirEntry = std::fs::DirEntry;
 
@@ -31,7 +83,7 @@ impl which::sys::Sys for ShellState {
   }
 
   fn env_var_os(&self, name: &OsStr) -> Option<OsString> {
-    self.get_var(&OsString::from(name)).cloned()
+    self.get_var(name).cloned()
   }
 
   fn metadata(&self, path: &Path) -> std::io::Result<Self::Metadata> {
@@ -86,56 +138,4 @@ impl which::sys::Sys for ShellState {
       )
     }
   }
-}
-
-/// Error when a command path could not be resolved.
-#[derive(Error, Debug, PartialEq)]
-pub enum CommandPathResolutionError {
-  #[error("{}: command not found", .0.to_string_lossy())]
-  CommandNotFound(OsString),
-  #[error("{}: failed canonicalizing", .0.to_string_lossy())]
-  FailedCanonicalizing(OsString),
-  #[error("command name was empty")]
-  CommandEmpty,
-}
-
-impl CommandPathResolutionError {
-  pub fn exit_code(&self) -> i32 {
-    match self {
-      // Use the Exit status that is used in bash: https://www.gnu.org/software/bash/manual/bash.html#Exit-Status
-      CommandPathResolutionError::CommandNotFound(_) => 127,
-      CommandPathResolutionError::CommandEmpty
-      | CommandPathResolutionError::FailedCanonicalizing(_) => 1,
-    }
-  }
-}
-
-/// Resolves a command name to an absolute path.
-pub fn resolve_command_path(
-  command_name: &OsStr,
-  base_dir: &Path,
-  state: &ShellState,
-) -> Result<PathBuf, CommandPathResolutionError> {
-  if command_name.is_empty() {
-    return Err(CommandPathResolutionError::CommandEmpty);
-  }
-
-  // check for absolute
-  if PathBuf::from(command_name).is_absolute() {
-    return Ok(PathBuf::from(command_name));
-  }
-
-  let result = which::WhichConfig::new_with_sys(state.clone())
-    .binary_name(command_name.to_os_string())
-    .custom_cwd(base_dir.to_path_buf())
-    .first_result();
-  result.map_err(|err| match err {
-    which::Error::CannotFindBinaryPath
-    | which::Error::CannotGetCurrentDirAndPathListEmpty => {
-      CommandPathResolutionError::CommandNotFound(command_name.into())
-    }
-    which::Error::CannotCanonicalize => {
-      CommandPathResolutionError::FailedCanonicalizing(command_name.into())
-    }
-  })
 }

@@ -121,10 +121,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sys_traits",
+ "temp_deno_which",
  "tempfile",
  "thiserror",
  "tokio",
- "which",
  "windows-sys 0.59.0",
 ]
 
@@ -766,6 +766,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "temp_deno_which"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "366c5ccd670145885feb6efd6bbf2478ed236c4c3839046fcc8e2a1a84c51091"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -870,13 +879,6 @@ name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
-
-[[package]]
-name = "which"
-version = "7.0.3"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "windows-sys"

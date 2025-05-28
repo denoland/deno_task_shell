@@ -1,7 +1,6 @@
 // Copyright 2018-2024 the Deno authors. MIT license.
 
 use std::borrow::Cow;
-use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -14,7 +13,6 @@ use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use crate::shell::types::ShellState;
 use anyhow::Result;
 use futures::FutureExt;
 use thiserror::Error;

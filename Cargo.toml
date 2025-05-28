@@ -26,7 +26,8 @@ thiserror = "2.0.9"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
 deno_path_util = "0.3.2"
 sys_traits = { version = "0.1.14", optional = true, features = ["real", "winapi", "libc"] }
-which = { version = "7", default-features = false }
+# temporarily using until https://github.com/harryfei/which-rs/pull/109 is released
+which = { package = "temp_deno_which", version = "0.1.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["signal"], optional = true }
@@ -40,6 +41,3 @@ parking_lot = "0.12.1"
 pretty_assertions = "1"
 serde_json = "1.0.111"
 tempfile = "3.8.1"
-
-[patch.crates-io]
-which = { path = "../which-rs" }
