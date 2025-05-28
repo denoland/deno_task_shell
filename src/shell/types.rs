@@ -194,8 +194,8 @@ impl ShellState {
   pub fn resolve_command_path(
     &self,
     command_name: &OsStr,
-  ) -> Result<PathBuf, crate::which::CommandPathResolutionError> {
-    super::command::resolve_command_path(command_name, self.cwd(), self)
+  ) -> Result<PathBuf, super::which::CommandPathResolutionError> {
+    super::which::resolve_command_path(command_name, self.cwd(), self)
   }
 
   pub fn with_child_signal(&self) -> ShellState {

@@ -124,6 +124,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "which",
  "windows-sys 0.59.0",
 ]
 
@@ -154,6 +155,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "either"
+version = "1.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "errno"
@@ -738,12 +745,24 @@ dependencies = [
 
 [[package]]
 name = "sys_traits"
-version = "0.1.9"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3374191d43a934854e99a46cd47f8124369e690353e0f8db42769218d083690"
+checksum = "b0f8c2c55b6b4dd67f0f8df8de9bdf00b16c8ea4fbc4be0c2133d5d3924be5d4"
 dependencies = [
  "libc",
+ "sys_traits_macros",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "sys_traits_macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "181f22127402abcf8ee5c83ccd5b408933fec36a6095cf82cda545634692657e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -851,6 +870,13 @@ name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
+
+[[package]]
+name = "which"
+version = "7.0.3"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "windows-sys"
