@@ -8,6 +8,7 @@ use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::Read;
 use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::rc::Weak;
@@ -148,11 +149,11 @@ impl ShellState {
       name.to_os_string()
     };
     if name == "PWD" {
-      let cwd = PathBuf::from(value);
+      let cwd = Path::new(value);
       if cwd.is_absolute() {
         if let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
           &sys_traits::impls::RealSys,
-          &cwd,
+          cwd,
         ) {
           // this will update the environment variable too
           self.set_cwd(cwd);
