@@ -11,7 +11,7 @@ description = "Cross platform scripting for deno task"
 
 [features]
 default = ["shell"]
-shell = ["futures", "glob", "nix", "os_pipe", "path-dedot", "tokio", "windows-sys", "sys_traits"]
+shell = ["futures", "glob", "nix", "os_pipe", "path-dedot", "tokio", "windows-sys", "sys_traits", "which"]
 serialization = ["serde"]
 
 [dependencies]
@@ -26,7 +26,7 @@ thiserror = "2.0.9"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
 deno_path_util = "0.4.0"
 sys_traits = { version = "0.1.14", optional = true, features = ["real", "winapi", "libc"] }
-which = { version = "8.0.0", default-features = false }
+which = { version = "8.0.0", default-features = false, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["signal"], optional = true }
