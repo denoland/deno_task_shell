@@ -42,9 +42,12 @@ pub fn resolve_command_path(
     return Err(CommandPathResolutionError::CommandEmpty);
   }
 
-  // check for absolute
-  if Path::new(command_name).is_absolute() {
-    return Ok(PathBuf::from(command_name));
+  // check for absolute or relative path
+  let path = Path::new(command_name);
+  if path.is_absolute() {
+    return Ok(path.to_path_buf());
+  } else if path.components().count() > 1 {
+    return Ok(base_dir.join(command_name));
   }
 
   let result = which::WhichConfig::new_with_sys(state.clone())
