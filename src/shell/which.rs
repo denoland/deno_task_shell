@@ -84,28 +84,35 @@ impl which::sys::Sys for ShellState {
     std::env::split_paths(paths).collect()
   }
 
-  fn env_var_os(&self, name: &OsStr) -> Option<OsString> {
-    self.get_var(name).cloned()
+  fn env_path(&self) -> Option<OsString> {
+    self.get_var(OsStr::new("PATH")).cloned()
+  }
+
+  fn env_path_ext(&self) -> Option<OsString> {
+    self.get_var(OsStr::new("PATHEXT")).cloned()
   }
 
   fn env_windows_path_ext(&self) -> Cow<'static, [String]> {
     Cow::Owned(
       self
-        .env_var(OsStr::new("PATHEXT"))
-        .map(|pathext| {
-          pathext
-            .split(';')
-            .filter_map(|s| {
-              if s.as_bytes().first() == Some(&b'.') {
-                Some(s.to_owned())
-              } else {
-                // Invalid segment; just ignore it.
-                None
-              }
-            })
-            .collect::<Vec<_>>()
+        .env_path_ext()
+        .and_then(|pathext| {
+          Some(
+            pathext
+              .to_str()?
+              .split(';')
+              .filter_map(|s| {
+                if s.as_bytes().first() == Some(&b'.') {
+                  Some(s.to_owned())
+                } else {
+                  // Invalid segment; just ignore it.
+                  None
+                }
+              })
+              .collect::<Vec<_>>(),
+          )
         })
-        .unwrap_or_else(|_| {
+        .unwrap_or_else(|| {
           vec![
             ".EXE".to_string(),
             ".CMD".to_string(),

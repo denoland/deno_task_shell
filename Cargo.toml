@@ -26,8 +26,7 @@ thiserror = "2.0.9"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"], optional = true }
 deno_path_util = "0.4.0"
 sys_traits = { version = "0.1.14", optional = true, features = ["real", "winapi", "libc"] }
-# temporarily using until https://github.com/harryfei/which-rs/pull/109 is released
-which = { package = "temp_deno_which", version = "0.1.0", default-features = false }
+which = { version = "8.0.0", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["signal"], optional = true }
