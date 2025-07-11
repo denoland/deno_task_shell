@@ -839,7 +839,7 @@ fn evaluate_word_parts(
           }
         }
       }
-      let is_absolute = std::path::PathBuf::from(&current_text).is_absolute();
+      let is_absolute = Path::new(&current_text).is_absolute();
       let cwd = state.cwd();
       let pattern = if is_absolute {
         current_text

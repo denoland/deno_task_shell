@@ -125,7 +125,7 @@ async fn resolve_command<'a>(
   // only bother checking for a shebang when the path has a slash
   // in it because for global commands someone on Windows likely
   // won't have a script with a shebang in it on Windows
-  if command_name.name.to_string_lossy().contains('/') {
+  if Path::new(&command_name.name).components().count() > 1 {
     if let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
       ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
     })? {

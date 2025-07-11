@@ -42,9 +42,12 @@ pub fn resolve_command_path(
     return Err(CommandPathResolutionError::CommandEmpty);
   }
 
-  // check for absolute
-  if PathBuf::from(command_name).is_absolute() {
-    return Ok(PathBuf::from(command_name));
+  // check for absolute or relative path
+  let path = Path::new(command_name);
+  if path.is_absolute() {
+    return Ok(path.to_path_buf());
+  } else if path.components().count() > 1 {
+    return Ok(base_dir.join(command_name));
   }
 
   let result = which::WhichConfig::new_with_sys(state.clone())
@@ -95,7 +98,7 @@ impl which::sys::Sys for ShellState {
   fn env_windows_path_ext(&self) -> Cow<'static, [String]> {
     Cow::Owned(
       self
-        .env_path_ext()
+        .get_var(OsStr::new("PATHEXT"))
         .and_then(|pathext| {
           Some(
             pathext
@@ -141,13 +144,42 @@ impl which::sys::Sys for ShellState {
     Ok(Box::new(iter))
   }
 
+  #[cfg(unix)]
   fn is_valid_executable(
     &self,
-    _path: &std::path::Path,
+    path: &std::path::Path,
   ) -> std::io::Result<bool> {
-    // we've considered everything to be executable so that cross platform
-    // shebangs work and so that people don't need to bother marking an
-    // item as executable in git, which is annoying for Windows users
-    Ok(true)
+    use nix::unistd::AccessFlags;
+    use nix::unistd::access;
+
+    match access(path, AccessFlags::X_OK) {
+      Ok(()) => Ok(true),
+      Err(nix::errno::Errno::ENOENT) => Ok(false),
+      Err(e) => Err(std::io::Error::from_raw_os_error(e as i32)),
+    }
+  }
+
+  #[cfg(windows)]
+  fn is_valid_executable(
+    &self,
+    path: &std::path::Path,
+  ) -> std::io::Result<bool> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let name = path
+      .as_os_str()
+      .encode_wide()
+      .chain(Some(0))
+      .collect::<Vec<u16>>();
+    let mut bt: u32 = 0;
+    // SAFETY: winapi call
+    unsafe {
+      Ok(
+        windows_sys::Win32::Storage::FileSystem::GetBinaryTypeW(
+          name.as_ptr(),
+          &mut bt,
+        ) != 0,
+      )
+    }
   }
 }
