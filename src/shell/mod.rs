@@ -1,4 +1,4 @@
-// Copyright 2018-2024 the Deno authors. MIT license.
+// Copyright 2018-2025 the Deno authors. MIT license.
 
 pub use commands::ExecutableCommand;
 pub use commands::ExecuteCommandArgsContext;
@@ -16,6 +16,7 @@ pub use types::ShellPipeWriter;
 pub use types::ShellState;
 pub use types::SignalKind;
 pub use types::pipe;
+pub use which::CommandPathResolutionError;
 
 mod child_process_tracker;
 mod command;
@@ -23,4 +24,4 @@ mod commands;
 mod execute;
 mod fs_util;
 mod types;
-pub mod which;
+mod which;

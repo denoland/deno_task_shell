@@ -1,7 +1,6 @@
-// Copyright 2018-2024 the Deno authors. MIT license.
+// Copyright 2018-2025 the Deno authors. MIT license.
 
 use std::borrow::Cow;
-use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::io::BufRead;
 use std::io::BufReader;
@@ -14,12 +13,12 @@ use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use crate::shell::types::ShellState;
 use anyhow::Result;
 use futures::FutureExt;
 use thiserror::Error;
 
 use super::which::CommandPathResolutionError;
+use super::which::resolve_command_path;
 
 #[derive(Debug, Clone)]
 pub struct UnresolvedCommandName {
@@ -210,23 +209,6 @@ async fn parse_shebang_args(
       context.stderr.clone(),
     )
     .await?,
-  )
-}
-
-pub fn resolve_command_path(
-  command_name: &OsStr,
-  base_dir: &Path,
-  state: &ShellState,
-) -> Result<PathBuf, CommandPathResolutionError> {
-  super::which::resolve_command_path(
-    command_name,
-    base_dir,
-    |name| {
-      state
-        .get_var(OsStr::new(name))
-        .map(|s| Cow::Borrowed(s.as_os_str()))
-    },
-    std::env::current_exe,
   )
 }
 
