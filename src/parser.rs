@@ -1,7 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use std::borrow::Cow;
-
 use anyhow::Result;
 use anyhow::bail;
 use monch::*;
@@ -694,72 +692,81 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
 }
 
 fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<WordPart>> {
-  // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
-  parse_surrounded_expression(
-    input,
-    '"',
-    "Expected closing double quote.",
-    parse_word_parts(ParseWordPartsMode::DoubleQuotes),
-  )
-}
+  fn parse_words_within(input: &str) -> ParseResult<Vec<WordPart>> {
+    match parse_word_parts(ParseWordPartsMode::DoubleQuotes)(input) {
+      Ok((result_input, parts)) => {
+        if !result_input.is_empty() {
+          return ParseError::fail(
+            input,
+            format!(
+              "Failed parsing within double quotes. Unexpected character: {}",
+              result_input
+            ),
+          );
+        }
+        Ok((result_input, parts))
+      }
+      Err(err) => ParseError::fail(
+        input,
+        format!(
+          "Failed parsing within double quotes. {}",
+          match &err {
+            ParseError::Backtrace => "Could not determine expression.",
+            ParseError::Failure(parse_error_failure) =>
+              parse_error_failure.message.as_str(),
+          }
+        ),
+      ),
+    }
+  }
 
-fn parse_surrounded_expression<'a, TResult>(
-  input: &'a str,
-  surrounded_char: char,
-  fail_message: &str,
-  parse: impl Fn(&str) -> ParseResult<TResult>,
-) -> ParseResult<'a, TResult> {
+  // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_03
   let start_input = input;
-  let (input, _) = ch(surrounded_char)(input)?;
+  let (mut input, _) = ch('"')(input)?;
   let mut was_escape = false;
-  for (index, c) in input.char_indices() {
+  let mut pending_parts = Vec::new();
+  let mut iter = input.char_indices().peekable();
+  while let Some((index, c)) = iter.next() {
     match c {
-      c if c == surrounded_char && !was_escape => {
+      c if c == '$'
+        && !was_escape
+        && iter.peek().map(|(_, c)| *c) == Some('(') =>
+      {
+        let previous_input = &input[..index];
+        pending_parts.extend(parse_words_within(previous_input)?.1);
+        let next_input = &input[index..];
+        let (next_input, sequence) = with_error_context(
+          parse_command_substitution,
+          "Failed parsing command substitution in double quoted string.",
+        )(next_input)?;
+        pending_parts.push(WordPart::Command(sequence));
+        iter = next_input.char_indices().peekable();
+        input = next_input;
+      }
+      c if c == '`' && !was_escape => {
+        let previous_input = &input[..index];
+        pending_parts.extend(parse_words_within(previous_input)?.1);
+        let next_input = &input[index..];
+        let (next_input, sequence) = with_error_context(
+          parse_backticks_command_substitution,
+          "Failed parsing backticks in double quoted string.",
+        )(next_input)?;
+        pending_parts.push(WordPart::Command(sequence));
+        iter = next_input.char_indices().peekable();
+        input = next_input;
+      }
+      c if c == '"' && !was_escape => {
         let inner_input = &input[..index];
-        let inner_input =
-          if surrounded_char == '`' && inner_input.contains("\\`") {
-            Cow::Owned(inner_input.replace("\\`", "`"))
-          } else {
-            Cow::Borrowed(inner_input)
-          };
-        let parts = match parse(&inner_input) {
-          Ok((result_input, parts)) => {
-            if !result_input.is_empty() {
-              return ParseError::fail(
-                input,
-                format!(
-                  "Failed parsing within {}. Unexpected character: {}",
-                  if c == '`' {
-                    "backticks"
-                  } else {
-                    "double quotes"
-                  },
-                  result_input
-                ),
-              );
-            }
+        let (_, parts) = parse_words_within(inner_input)?;
+        return Ok((
+          &input[index + 1..],
+          if pending_parts.is_empty() {
             parts
-          }
-          Err(err) => {
-            return ParseError::fail(
-              input,
-              format!(
-                "Failed parsing within {}. {}",
-                if c == '`' {
-                  "backticks"
-                } else {
-                  "double quotes"
-                },
-                match &err {
-                  ParseError::Backtrace => "Could not determine expression.",
-                  ParseError::Failure(parse_error_failure) =>
-                    parse_error_failure.message.as_str(),
-                }
-              ),
-            );
-          }
-        };
-        return Ok((&input[index + 1..], parts));
+          } else {
+            pending_parts.extend(parts);
+            pending_parts
+          },
+        ));
       }
       '\\' => {
         was_escape = true;
@@ -770,7 +777,7 @@ fn parse_surrounded_expression<'a, TResult>(
     }
   }
 
-  ParseError::fail(start_input, fail_message)
+  ParseError::fail(start_input, "Expected closing double quote.")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -941,12 +948,58 @@ fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
 fn parse_backticks_command_substitution(
   input: &str,
 ) -> ParseResult<SequentialList> {
-  parse_surrounded_expression(
-    input,
-    '`',
-    "Expected closing backtick.",
-    parse_sequential_list,
-  )
+  let start_input = input;
+  let (input, _) = ch('`')(input)?;
+  let mut was_escape = false;
+  for (index, c) in input.char_indices() {
+    match c {
+      c if c == '`' && !was_escape => {
+        let inner_input = &input[..index];
+        let inner_input = inner_input.replace("\\`", "`");
+        let parts = match parse_sequential_list(&inner_input) {
+          Ok((result_input, parts)) => {
+            if !result_input.is_empty() {
+              return ParseError::fail(
+                input,
+                format!(
+                  "Failed parsing within backticks. Unexpected character: {}",
+                  result_input
+                ),
+              );
+            }
+            parts
+          }
+          Err(err) => {
+            return ParseError::fail(
+              input,
+              format!(
+                "Failed parsing within {}. {}",
+                if c == '`' {
+                  "backticks"
+                } else {
+                  "double quotes"
+                },
+                match &err {
+                  ParseError::Backtrace => "Could not determine expression.",
+                  ParseError::Failure(parse_error_failure) =>
+                    parse_error_failure.message.as_str(),
+                }
+              ),
+            );
+          }
+        };
+        return Ok((&input[index + 1..], parts));
+      }
+      '\\' => {
+        was_escape = true;
+      }
+      _ => {
+        was_escape = false;
+      }
+    }
+  }
+
+  ParseError::fail(start_input, "Expected closing backtick.")
 }
 
 fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
@@ -1066,8 +1119,10 @@ mod test {
         .unwrap()
         .to_string(),
       concat!(
-        "Failed parsing within double quotes. Expected closing parenthesis for command substitution.\n",
-        "  test$(echo testing\"\n",
+        "Failed parsing command substitution in double quoted string.\n",
+        "\n",
+        "Expected closing double quote.\n",
+        "  \"\n",
         "  ~"
       ),
     );
@@ -1528,7 +1583,9 @@ mod test {
     run_test(
       parse_quoted_string,
       r#""asdf`""#,
-      Err("Failed parsing within double quotes. Expected closing backtick."),
+      Err(
+        "Failed parsing backticks in double quoted string.\n\nExpected closing backtick.",
+      ),
     );
 
     run_test_with_end(
@@ -1536,6 +1593,53 @@ mod test {
       r#""test" asdf"#,
       Ok(vec![WordPart::Text("test".to_string())]),
       " asdf",
+    );
+
+    run_test(
+      parse_quoted_string,
+      r#""test $(deno eval 'console.info("test")') test `backticks "test"` test""#,
+      Ok(vec![
+        WordPart::Text("test ".to_string()),
+        WordPart::Command(SequentialList {
+          items: Vec::from([SequentialListItem {
+            is_async: false,
+            sequence: Sequence::Pipeline(Pipeline {
+              negated: false,
+              inner: PipelineInner::Command(Command {
+                redirect: None,
+                inner: CommandInner::Simple(SimpleCommand {
+                  env_vars: vec![],
+                  args: Vec::from([
+                    Word::new_word("deno"),
+                    Word::new_word("eval"),
+                    Word::new_string("console.info(\"test\")"),
+                  ]),
+                }),
+              }),
+            }),
+          }]),
+        }),
+        WordPart::Text(" test ".to_string()),
+        WordPart::Command(SequentialList {
+          items: Vec::from([SequentialListItem {
+            is_async: false,
+            sequence: Sequence::Pipeline(Pipeline {
+              negated: false,
+              inner: PipelineInner::Command(Command {
+                redirect: None,
+                inner: CommandInner::Simple(SimpleCommand {
+                  env_vars: vec![],
+                  args: Vec::from([
+                    Word::new_word("backticks"),
+                    Word::new_string("test"),
+                  ]),
+                }),
+              }),
+            }),
+          }]),
+        }),
+        WordPart::Text(" test".to_string()),
+      ]),
     );
   }
 
