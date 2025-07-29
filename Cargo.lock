@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "deno_task_shell"
-version = "0.25.3"
+version = "0.26.0"
 dependencies = [
  "anyhow",
  "deno_path_util",
