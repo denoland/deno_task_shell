@@ -771,7 +771,7 @@ fn evaluate_word_parts(
   state: &ShellState,
   stdin: ShellPipeReader,
   stderr: ShellPipeWriter,
-) -> LocalBoxFuture<Result<Vec<OsString>, EvaluateWordTextError>> {
+) -> LocalBoxFuture<'_, Result<Vec<OsString>, EvaluateWordTextError>> {
   #[derive(Debug)]
   enum TextPart {
     Quoted(OsString),
@@ -894,7 +894,7 @@ fn evaluate_word_parts(
     state: &ShellState,
     stdin: ShellPipeReader,
     stderr: ShellPipeWriter,
-  ) -> LocalBoxFuture<Result<Vec<OsString>, EvaluateWordTextError>> {
+  ) -> LocalBoxFuture<'_, Result<Vec<OsString>, EvaluateWordTextError>> {
     // recursive async, so requires boxing
     async move {
       let mut result = Vec::new();

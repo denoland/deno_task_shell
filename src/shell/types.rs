@@ -150,14 +150,14 @@ impl ShellState {
     };
     if name == "PWD" {
       let cwd = Path::new(value);
-      if cwd.is_absolute() {
-        if let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
+      if cwd.is_absolute()
+        && let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
           &sys_traits::impls::RealSys,
           cwd,
-        ) {
-          // this will update the environment variable too
-          self.set_cwd(cwd);
-        }
+        )
+      {
+        // this will update the environment variable too
+        self.set_cwd(cwd);
       }
     } else {
       self.shell_vars.remove(&name);
@@ -252,7 +252,7 @@ impl ExecuteResult {
 /// Reader side of a pipe.
 #[derive(Debug)]
 pub enum ShellPipeReader {
-  OsPipe(os_pipe::PipeReader),
+  OsPipe(std::io::PipeReader),
   StdFile(std::fs::File),
 }
 
@@ -267,10 +267,32 @@ impl Clone for ShellPipeReader {
 
 impl ShellPipeReader {
   pub fn stdin() -> ShellPipeReader {
-    ShellPipeReader::from_raw(os_pipe::dup_stdin().unwrap())
+    #[cfg(unix)]
+    pub fn dup_stdin_as_pipe_reader() -> std::io::PipeReader {
+      use std::os::fd::AsFd;
+      use std::os::fd::FromRawFd;
+      use std::os::fd::IntoRawFd;
+      let owned = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
+      let raw = owned.into_raw_fd();
+      // SAFETY: `raw` is a fresh, owned fd; PipeReader will close it.
+      unsafe { std::io::PipeReader::from_raw_fd(raw) }
+    }
+
+    #[cfg(windows)]
+    pub fn dup_stdin_as_pipe_reader() -> std::io::PipeReader {
+      use std::os::windows::io::AsHandle;
+      use std::os::windows::io::FromRawHandle;
+      use std::os::windows::io::IntoRawHandle;
+      let owned = std::io::stdin().as_handle().try_clone_to_owned().unwrap();
+      let raw = owned.into_raw_handle();
+      // SAFETY: `raw` is a fresh, owned HANDLE; PipeReader will close it.
+      unsafe { std::io::PipeReader::from_raw_handle(raw) }
+    }
+
+    ShellPipeReader::OsPipe(dup_stdin_as_pipe_reader())
   }
 
-  pub fn from_raw(reader: os_pipe::PipeReader) -> Self {
+  pub fn from_raw(reader: std::io::PipeReader) -> Self {
     Self::OsPipe(reader)
   }
 
@@ -282,7 +304,7 @@ impl ShellPipeReader {
   #[allow(clippy::should_implement_trait)]
   pub fn from_str(data: &str) -> Self {
     use std::io::Write;
-    let (read, mut write) = os_pipe::pipe().unwrap();
+    let (read, mut write) = std::io::pipe().unwrap();
     write.write_all(data.as_bytes()).unwrap();
     Self::OsPipe(read)
   }
@@ -370,7 +392,7 @@ impl ShellPipeReader {
 /// prevent deadlocks where the reader hangs waiting for a read.
 #[derive(Debug)]
 pub enum ShellPipeWriter {
-  OsPipe(os_pipe::PipeWriter),
+  OsPipe(std::io::PipeWriter),
   StdFile(std::fs::File),
   // For stdout and stderr, instead of directly duplicating the raw pipes
   // and putting them in a ShellPipeWriter::OsPipe(...), we use Rust std's
@@ -469,7 +491,7 @@ impl ShellPipeWriter {
 
 /// Used to communicate between commands.
 pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
-  let (reader, writer) = os_pipe::pipe().unwrap();
+  let (reader, writer) = std::io::pipe().unwrap();
   (
     ShellPipeReader::OsPipe(reader),
     ShellPipeWriter::OsPipe(writer),

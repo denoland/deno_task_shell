@@ -83,7 +83,7 @@ struct MkdirFlags<'a> {
   paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: &[OsString]) -> Result<MkdirFlags> {
+fn parse_args(args: &[OsString]) -> Result<MkdirFlags<'_>> {
   let mut result = MkdirFlags::default();
 
   for arg in parse_arg_kinds(args) {

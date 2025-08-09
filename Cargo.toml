@@ -11,7 +11,7 @@ description = "Cross platform scripting for deno task"
 
 [features]
 default = ["shell"]
-shell = ["deno_path_util", "futures", "glob", "nix", "os_pipe", "path-dedot", "tokio", "windows-sys", "sys_traits", "which"]
+shell = ["deno_path_util", "futures", "glob", "nix", "path-dedot", "tokio", "windows-sys", "sys_traits", "which"]
 serialization = ["serde"]
 
 [dependencies]
@@ -19,7 +19,6 @@ anyhow = "1.0.75"
 futures = { version = "0.3.29", optional = true }
 glob = { version = "0.3.1", optional = true }
 path-dedot = { version = "3.1.1", optional = true }
-os_pipe = { version = "1.1.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 monch = "0.5.0"
 thiserror = "2.0.9"
