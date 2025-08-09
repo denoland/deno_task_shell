@@ -354,7 +354,9 @@ fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
   Ok((input, SequentialList { items }))
 }
 
-fn parse_sequential_list_item(input: &str) -> ParseResult<'_, SequentialListItem> {
+fn parse_sequential_list_item(
+  input: &str,
+) -> ParseResult<'_, SequentialListItem> {
   let (input, sequence) = parse_sequence(input)?;
   Ok((
     input,
@@ -559,7 +561,9 @@ fn parse_op_str<'a>(
   )
 }
 
-fn parse_pipe_sequence_op(input: &str) -> ParseResult<'_, PipeSequenceOperator> {
+fn parse_pipe_sequence_op(
+  input: &str,
+) -> ParseResult<'_, PipeSequenceOperator> {
   terminated(
     or(
       map(tag("|&"), |_| PipeSequenceOperator::StdoutStderr),
