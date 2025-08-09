@@ -67,9 +67,10 @@ fn xargs_collect_args(
 
     // remove last arg if it is empty
     if let Some(last) = args.last()
-      && last.is_empty() {
-        args.pop();
-      }
+      && last.is_empty()
+    {
+      args.pop();
+    }
   } else {
     args.extend(delimit_blanks(&text)?);
   }

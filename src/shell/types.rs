@@ -154,10 +154,11 @@ impl ShellState {
         && let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
           &sys_traits::impls::RealSys,
           cwd,
-        ) {
-          // this will update the environment variable too
-          self.set_cwd(cwd);
-        }
+        )
+      {
+        // this will update the environment variable too
+        self.set_cwd(cwd);
+      }
     } else {
       self.shell_vars.remove(&name);
       self.env_vars.insert(name, value.to_os_string());
@@ -268,24 +269,24 @@ impl ShellPipeReader {
   pub fn stdin() -> ShellPipeReader {
     #[cfg(unix)]
     pub fn dup_stdin_as_pipe_reader() -> std::io::PipeReader {
-        use std::os::fd::AsFd;
-        use std::os::fd::IntoRawFd;
-        use std::os::fd::FromRawFd;
-        let owned = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
-        let raw = owned.into_raw_fd(); // transfer ownership
-        // SAFETY: `raw` is a fresh, owned fd; PipeReader will close it.
-        unsafe { std::io::PipeReader::from_raw_fd(raw) }
+      use std::os::fd::AsFd;
+      use std::os::fd::FromRawFd;
+      use std::os::fd::IntoRawFd;
+      let owned = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
+      let raw = owned.into_raw_fd();
+      // SAFETY: `raw` is a fresh, owned fd; PipeReader will close it.
+      unsafe { std::io::PipeReader::from_raw_fd(raw) }
     }
 
     #[cfg(windows)]
     pub fn dup_stdin_as_pipe_reader() -> io::Result<PipeReader> {
-        use std::os::windows::io::AsHandle;
-        use std::os::windows::io::IntoRawHandle;
-        use std::os::windows::io::FromRawHandle;
-        let owned = io::stdin().as_handle().try_clone_to_owned().unwrap();
-        let raw = owned.into_raw_handle(); // transfer ownership
-        // SAFETY: `raw` is a fresh, owned HANDLE; PipeReader will close it.
-        unsafe { std::io::PipeReader::from_raw_handle(raw) }
+      use std::os::windows::io::AsHandle;
+      use std::os::windows::io::FromRawHandle;
+      use std::os::windows::io::IntoRawHandle;
+      let owned = io::stdin().as_handle().try_clone_to_owned().unwrap();
+      let raw = owned.into_raw_handle();
+      // SAFETY: `raw` is a fresh, owned HANDLE; PipeReader will close it.
+      unsafe { std::io::PipeReader::from_raw_handle(raw) }
     }
 
     ShellPipeReader::OsPipe(dup_stdin_as_pipe_reader())
