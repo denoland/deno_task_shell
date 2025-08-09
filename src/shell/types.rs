@@ -279,7 +279,7 @@ impl ShellPipeReader {
     }
 
     #[cfg(windows)]
-    pub fn dup_stdin_as_pipe_reader() -> std::io::Result<std::io::PipeReader> {
+    pub fn dup_stdin_as_pipe_reader() -> std::io::PipeReader {
       use std::os::windows::io::AsHandle;
       use std::os::windows::io::FromRawHandle;
       use std::os::windows::io::IntoRawHandle;
