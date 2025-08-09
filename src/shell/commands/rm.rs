@@ -95,7 +95,7 @@ struct RmFlags<'a> {
   paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: &[OsString]) -> Result<RmFlags> {
+fn parse_args(args: &[OsString]) -> Result<RmFlags<'_>> {
   let mut result = RmFlags::default();
 
   for arg in parse_arg_kinds(args) {

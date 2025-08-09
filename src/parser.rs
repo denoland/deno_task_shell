@@ -340,7 +340,7 @@ pub fn parse(input: &str) -> Result<SequentialList> {
   }
 }
 
-fn parse_sequential_list(input: &str) -> ParseResult<SequentialList> {
+fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
   let (input, items) = separated_list(
     terminated(parse_sequential_list_item, skip_whitespace),
     terminated(
@@ -354,7 +354,7 @@ fn parse_sequential_list(input: &str) -> ParseResult<SequentialList> {
   Ok((input, SequentialList { items }))
 }
 
-fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
+fn parse_sequential_list_item(input: &str) -> ParseResult<'_, SequentialListItem> {
   let (input, sequence) = parse_sequence(input)?;
   Ok((
     input,
@@ -365,7 +365,7 @@ fn parse_sequential_list_item(input: &str) -> ParseResult<SequentialListItem> {
   ))
 }
 
-fn parse_sequence(input: &str) -> ParseResult<Sequence> {
+fn parse_sequence(input: &str) -> ParseResult<'_, Sequence> {
   let (input, current) = terminated(
     or(
       parse_shell_var_command,
@@ -394,7 +394,7 @@ fn parse_sequence(input: &str) -> ParseResult<Sequence> {
   })
 }
 
-fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
+fn parse_shell_var_command(input: &str) -> ParseResult<'_, Sequence> {
   let env_vars_input = input;
   let (input, mut env_vars) = if_not_empty(parse_env_vars)(input)?;
   let (input, args) = parse_command_args(input)?;
@@ -413,7 +413,7 @@ fn parse_shell_var_command(input: &str) -> ParseResult<Sequence> {
 
 /// Parses a pipeline, which is a sequence of one or more commands.
 /// https://www.gnu.org/software/bash/manual/html_node/Pipelines.html
-fn parse_pipeline(input: &str) -> ParseResult<Pipeline> {
+fn parse_pipeline(input: &str) -> ParseResult<'_, Pipeline> {
   let (input, maybe_negated) = maybe(parse_negated_op)(input)?;
   let (input, inner) = parse_pipeline_inner(input)?;
 
@@ -425,7 +425,7 @@ fn parse_pipeline(input: &str) -> ParseResult<Pipeline> {
   Ok((input, pipeline))
 }
 
-fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
+fn parse_pipeline_inner(input: &str) -> ParseResult<'_, PipelineInner> {
   let original_input = input;
   let (input, command) = parse_command(input)?;
 
@@ -459,7 +459,7 @@ fn parse_pipeline_inner(input: &str) -> ParseResult<PipelineInner> {
   Ok((input, inner))
 }
 
-fn parse_command(input: &str) -> ParseResult<Command> {
+fn parse_command(input: &str) -> ParseResult<'_, Command> {
   let (input, inner) = terminated(
     or(
       map(parse_subshell, |l| CommandInner::Subshell(Box::new(l))),
@@ -487,13 +487,13 @@ fn parse_command(input: &str) -> ParseResult<Command> {
   Ok((input, command))
 }
 
-fn parse_simple_command(input: &str) -> ParseResult<SimpleCommand> {
+fn parse_simple_command(input: &str) -> ParseResult<'_, SimpleCommand> {
   let (input, env_vars) = parse_env_vars(input)?;
   let (input, args) = if_not_empty(parse_command_args)(input)?;
   ParseResult::Ok((input, SimpleCommand { env_vars, args }))
 }
 
-fn parse_command_args(input: &str) -> ParseResult<Vec<Word>> {
+fn parse_command_args(input: &str) -> ParseResult<'_, Vec<Word>> {
   many_till(
     terminated(parse_shell_arg, assert_whitespace_or_end_and_skip),
     or4(
@@ -505,7 +505,7 @@ fn parse_command_args(input: &str) -> ParseResult<Vec<Word>> {
   )(input)
 }
 
-fn parse_shell_arg(input: &str) -> ParseResult<Word> {
+fn parse_shell_arg(input: &str) -> ParseResult<'_, Word> {
   let (input, value) = parse_word(input)?;
   if value.parts().is_empty() {
     ParseError::backtrace()
@@ -514,14 +514,14 @@ fn parse_shell_arg(input: &str) -> ParseResult<Word> {
   }
 }
 
-fn parse_list_op(input: &str) -> ParseResult<()> {
+fn parse_list_op(input: &str) -> ParseResult<'_, ()> {
   or(
     map(parse_boolean_list_op, |_| ()),
     map(or(parse_sequential_list_op, parse_async_list_op), |_| ()),
   )(input)
 }
 
-fn parse_boolean_list_op(input: &str) -> ParseResult<BooleanListOperator> {
+fn parse_boolean_list_op(input: &str) -> ParseResult<'_, BooleanListOperator> {
   or(
     map(parse_op_str(BooleanListOperator::And.as_str()), |_| {
       BooleanListOperator::And
@@ -532,15 +532,15 @@ fn parse_boolean_list_op(input: &str) -> ParseResult<BooleanListOperator> {
   )(input)
 }
 
-fn parse_sequential_list_op(input: &str) -> ParseResult<&str> {
+fn parse_sequential_list_op(input: &str) -> ParseResult<'_, &str> {
   terminated(tag(";"), skip_whitespace)(input)
 }
 
-fn parse_async_list_op(input: &str) -> ParseResult<&str> {
+fn parse_async_list_op(input: &str) -> ParseResult<'_, &str> {
   parse_op_str("&")(input)
 }
 
-fn parse_negated_op(input: &str) -> ParseResult<&str> {
+fn parse_negated_op(input: &str) -> ParseResult<'_, &str> {
   terminated(
     tag("!"),
     // must have whitespace following
@@ -559,7 +559,7 @@ fn parse_op_str<'a>(
   )
 }
 
-fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
+fn parse_pipe_sequence_op(input: &str) -> ParseResult<'_, PipeSequenceOperator> {
   terminated(
     or(
       map(tag("|&"), |_| PipeSequenceOperator::StdoutStderr),
@@ -569,7 +569,7 @@ fn parse_pipe_sequence_op(input: &str) -> ParseResult<PipeSequenceOperator> {
   )(input)
 }
 
-fn parse_redirect(input: &str) -> ParseResult<Redirect> {
+fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_07
   let (input, maybe_fd) = maybe(parse_u32)(input)?;
   let (input, maybe_ampersand) = if maybe_fd.is_none() {
@@ -607,11 +607,11 @@ fn parse_redirect(input: &str) -> ParseResult<Redirect> {
   ))
 }
 
-fn parse_env_vars(input: &str) -> ParseResult<Vec<EnvVar>> {
+fn parse_env_vars(input: &str) -> ParseResult<'_, Vec<EnvVar>> {
   many0(terminated(parse_env_var, skip_whitespace))(input)
 }
 
-fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
+fn parse_env_var(input: &str) -> ParseResult<'_, EnvVar> {
   let (input, name) = parse_env_var_name(input)?;
   let (input, _) = ch('=')(input)?;
   let (input, value) = with_error_context(
@@ -621,15 +621,15 @@ fn parse_env_var(input: &str) -> ParseResult<EnvVar> {
   Ok((input, EnvVar::new(name.to_string(), value)))
 }
 
-fn parse_env_var_name(input: &str) -> ParseResult<&str> {
+fn parse_env_var_name(input: &str) -> ParseResult<'_, &str> {
   if_not_empty(take_while(is_valid_env_var_char))(input)
 }
 
-fn parse_env_var_value(input: &str) -> ParseResult<Word> {
+fn parse_env_var_value(input: &str) -> ParseResult<'_, Word> {
   parse_word(input)
 }
 
-fn parse_word(input: &str) -> ParseResult<Word> {
+fn parse_word(input: &str) -> ParseResult<'_, Word> {
   let parse_quoted_or_unquoted = or(
     map(parse_quoted_string, |parts| vec![WordPart::Quoted(parts)]),
     parse_unquoted_word,
@@ -644,7 +644,7 @@ fn parse_word(input: &str) -> ParseResult<Word> {
   }
 }
 
-fn parse_unquoted_word(input: &str) -> ParseResult<Vec<WordPart>> {
+fn parse_unquoted_word(input: &str) -> ParseResult<'_, Vec<WordPart>> {
   assert(
     parse_word_parts(ParseWordPartsMode::Unquoted),
     |result| {
@@ -664,7 +664,7 @@ fn parse_unquoted_word(input: &str) -> ParseResult<Vec<WordPart>> {
   )(input)
 }
 
-fn parse_quoted_string(input: &str) -> ParseResult<Vec<WordPart>> {
+fn parse_quoted_string(input: &str) -> ParseResult<'_, Vec<WordPart>> {
   // Strings may be up beside each other, and if they are they
   // should be categorized as the same argument.
   map(
@@ -678,7 +678,7 @@ fn parse_quoted_string(input: &str) -> ParseResult<Vec<WordPart>> {
   )(input)
 }
 
-fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
+fn parse_single_quoted_string(input: &str) -> ParseResult<'_, &str> {
   // single quoted strings cannot contain a single quote
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_02
   delimited(
@@ -691,8 +691,8 @@ fn parse_single_quoted_string(input: &str) -> ParseResult<&str> {
   )(input)
 }
 
-fn parse_double_quoted_string(input: &str) -> ParseResult<Vec<WordPart>> {
-  fn parse_words_within(input: &str) -> ParseResult<Vec<WordPart>> {
+fn parse_double_quoted_string(input: &str) -> ParseResult<'_, Vec<WordPart>> {
+  fn parse_words_within(input: &str) -> ParseResult<'_, Vec<WordPart>> {
     match parse_word_parts(ParseWordPartsMode::DoubleQuotes)(input) {
       Ok((result_input, parts)) => {
         if !result_input.is_empty() {
@@ -788,8 +788,8 @@ enum ParseWordPartsMode {
 
 fn parse_word_parts(
   mode: ParseWordPartsMode,
-) -> impl Fn(&str) -> ParseResult<Vec<WordPart>> {
-  fn parse_escaped_dollar_sign(input: &str) -> ParseResult<char> {
+) -> impl Fn(&str) -> ParseResult<'_, Vec<WordPart>> {
+  fn parse_escaped_dollar_sign(input: &str) -> ParseResult<'_, char> {
     or(
       parse_escaped_char('$'),
       terminated(
@@ -799,7 +799,7 @@ fn parse_word_parts(
     )(input)
   }
 
-  fn parse_special_shell_var(input: &str) -> ParseResult<char> {
+  fn parse_special_shell_var(input: &str) -> ParseResult<'_, char> {
     // for now, these hard error
     preceded(ch('$'), |input| {
       if let Some(char) = input.chars().next() {
@@ -931,7 +931,7 @@ fn parse_word_parts(
   }
 }
 
-fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
+fn parse_command_substitution(input: &str) -> ParseResult<'_, SequentialList> {
   delimited(
     tag("$("),
     parse_sequential_list,
@@ -947,7 +947,7 @@ fn parse_command_substitution(input: &str) -> ParseResult<SequentialList> {
 
 fn parse_backticks_command_substitution(
   input: &str,
-) -> ParseResult<SequentialList> {
+) -> ParseResult<'_, SequentialList> {
   let start_input = input;
   let (input, _) = ch('`')(input)?;
   let mut was_escape = false;
@@ -1002,7 +1002,7 @@ fn parse_backticks_command_substitution(
   ParseError::fail(start_input, "Expected closing backtick.")
 }
 
-fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
+fn parse_subshell(input: &str) -> ParseResult<'_, SequentialList> {
   delimited(
     terminated(ch('('), skip_whitespace),
     parse_sequential_list,
@@ -1013,7 +1013,7 @@ fn parse_subshell(input: &str) -> ParseResult<SequentialList> {
   )(input)
 }
 
-fn parse_u32(input: &str) -> ParseResult<u32> {
+fn parse_u32(input: &str) -> ParseResult<'_, u32> {
   let mut value: u32 = 0;
   let mut byte_index = 0;
   for c in input.chars() {
@@ -1036,11 +1036,11 @@ fn parse_u32(input: &str) -> ParseResult<u32> {
   Ok((&input[byte_index..], value))
 }
 
-fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<()> {
+fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<'_, ()> {
   terminated(assert_whitespace_or_end, skip_whitespace)(input)
 }
 
-fn assert_whitespace_or_end(input: &str) -> ParseResult<()> {
+fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
   if let Some(next_char) = input.chars().next()
     && !next_char.is_whitespace()
     && !matches!(next_char, ';' | '&' | '|' | '(' | ')')
@@ -1074,7 +1074,7 @@ fn is_reserved_word(text: &str) -> bool {
   )
 }
 
-fn fail_for_trailing_input(input: &str) -> ParseErrorFailure {
+fn fail_for_trailing_input(input: &str) -> ParseErrorFailure<'_> {
   ParseErrorFailure::new(input, "Unexpected character.")
 }
 
