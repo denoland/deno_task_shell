@@ -283,7 +283,7 @@ impl ShellPipeReader {
       use std::os::windows::io::AsHandle;
       use std::os::windows::io::FromRawHandle;
       use std::os::windows::io::IntoRawHandle;
-      let owned = io::stdin().as_handle().try_clone_to_owned().unwrap();
+      let owned = std::io::stdin().as_handle().try_clone_to_owned().unwrap();
       let raw = owned.into_raw_handle();
       // SAFETY: `raw` is a fresh, owned HANDLE; PipeReader will close it.
       unsafe { std::io::PipeReader::from_raw_handle(raw) }
