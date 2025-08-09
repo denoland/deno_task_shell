@@ -150,15 +150,14 @@ impl ShellState {
     };
     if name == "PWD" {
       let cwd = Path::new(value);
-      if cwd.is_absolute() {
-        if let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
+      if cwd.is_absolute()
+        && let Ok(cwd) = deno_path_util::fs::canonicalize_path_maybe_not_exists(
           &sys_traits::impls::RealSys,
           cwd,
         ) {
           // this will update the environment variable too
           self.set_cwd(cwd);
         }
-      }
     } else {
       self.shell_vars.remove(&name);
       self.env_vars.insert(name, value.to_os_string());

@@ -3,6 +3,7 @@
 #![deny(clippy::print_stderr)]
 #![deny(clippy::print_stdout)]
 #![deny(clippy::unused_async)]
+#![allow(mismatched_lifetime_syntaxes)]
 
 pub mod parser;
 

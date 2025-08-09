@@ -651,11 +651,10 @@ fn parse_unquoted_word(input: &str) -> ParseResult<Vec<WordPart>> {
       result
         .ok()
         .map(|(_, parts)| {
-          if parts.len() == 1 {
-            if let WordPart::Text(text) = &parts[0] {
+          if parts.len() == 1
+            && let WordPart::Text(text) = &parts[0] {
               return !is_reserved_word(text);
             }
-          }
           true
         })
         .unwrap_or(true)
@@ -1041,13 +1040,12 @@ fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<()> {
 }
 
 fn assert_whitespace_or_end(input: &str) -> ParseResult<()> {
-  if let Some(next_char) = input.chars().next() {
-    if !next_char.is_whitespace()
+  if let Some(next_char) = input.chars().next()
+    && !next_char.is_whitespace()
       && !matches!(next_char, ';' | '&' | '|' | '(' | ')')
     {
       return Err(ParseError::Failure(fail_for_trailing_input(input)));
     }
-  }
   Ok((input, ()))
 }
 

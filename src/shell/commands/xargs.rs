@@ -66,11 +66,10 @@ fn xargs_collect_args(
     args.extend(text.split(delimiter).map(|t| t.into()));
 
     // remove last arg if it is empty
-    if let Some(last) = args.last() {
-      if last.is_empty() {
+    if let Some(last) = args.last()
+      && last.is_empty() {
         args.pop();
       }
-    }
   } else {
     args.extend(delimit_blanks(&text)?);
   }

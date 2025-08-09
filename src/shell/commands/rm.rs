@@ -62,15 +62,14 @@ async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<()> {
     } else {
       remove_file_or_dir(&path, &flags).await
     };
-    if let Err(err) = result {
-      if err.kind() != ErrorKind::NotFound || !flags.force {
+    if let Err(err) = result
+      && (err.kind() != ErrorKind::NotFound || !flags.force) {
         bail!(
           "cannot remove '{}': {}",
           specified_path.to_string_lossy(),
           err
         );
       }
-    }
   }
 
   Ok(())
