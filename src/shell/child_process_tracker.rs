@@ -39,10 +39,11 @@ impl ChildProcessTracker {
   }
 
   pub fn track(&self, child: &Child) {
-    if let Err(err) = self.0.track(child) {
-      if cfg!(debug_assertions) && child.id().is_some() {
-        panic!("Could not track process: {:#}", err);
-      }
+    if let Err(err) = self.0.track(child)
+      && cfg!(debug_assertions)
+      && child.id().is_some()
+    {
+      panic!("Could not track process: {:#}", err);
     }
   }
 }

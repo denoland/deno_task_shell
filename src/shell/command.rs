@@ -80,7 +80,7 @@ enum CommandName {
 
 struct ResolvedCommand<'a> {
   command_name: CommandName,
-  args: Cow<'a, Vec<OsString>>,
+  args: Cow<'a, [OsString]>,
 }
 
 #[derive(Error, Debug)]
@@ -111,7 +111,7 @@ impl FailedShebangError {
 async fn resolve_command<'a>(
   command_name: &UnresolvedCommandName,
   context: &ShellCommandContext,
-  original_args: &'a Vec<OsString>,
+  original_args: &'a [OsString],
 ) -> Result<ResolvedCommand<'a>, ResolveCommandError> {
   let command_path = match resolve_command_path(
     &command_name.name,
@@ -125,31 +125,31 @@ async fn resolve_command<'a>(
   // only bother checking for a shebang when the path has a slash
   // in it because for global commands someone on Windows likely
   // won't have a script with a shebang in it on Windows
-  if Path::new(&command_name.name).components().count() > 1 {
-    if let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
+  if Path::new(&command_name.name).components().count() > 1
+    && let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
       ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
-    })? {
-      let (shebang_command_name, mut args) = if shebang.string_split {
-        let mut args = parse_shebang_args(&shebang.command, context)
-          .await
-          .map_err(FailedShebangError::Any)?;
-        args.push(command_path.clone().into_os_string());
-        (args.remove(0), args)
-      } else {
-        (
-          shebang.command.into(),
-          vec![command_path.clone().into_os_string()],
-        )
-      };
-      args.extend(original_args.iter().cloned());
-      return Ok(ResolvedCommand {
-        command_name: CommandName::Unresolved(UnresolvedCommandName {
-          name: shebang_command_name,
-          base_dir: command_path.parent().unwrap().to_path_buf(),
-        }),
-        args: Cow::Owned(args),
-      });
-    }
+    })?
+  {
+    let (shebang_command_name, mut args) = if shebang.string_split {
+      let mut args = parse_shebang_args(&shebang.command, context)
+        .await
+        .map_err(FailedShebangError::Any)?;
+      args.push(command_path.clone().into_os_string());
+      (args.remove(0), args)
+    } else {
+      (
+        shebang.command.into(),
+        vec![command_path.clone().into_os_string()],
+      )
+    };
+    args.extend(original_args.iter().cloned());
+    return Ok(ResolvedCommand {
+      command_name: CommandName::Unresolved(UnresolvedCommandName {
+        name: shebang_command_name,
+        base_dir: command_path.parent().unwrap().to_path_buf(),
+      }),
+      args: Cow::Owned(args),
+    });
   }
 
   Ok(ResolvedCommand {

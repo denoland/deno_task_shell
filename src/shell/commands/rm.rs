@@ -62,14 +62,14 @@ async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<()> {
     } else {
       remove_file_or_dir(&path, &flags).await
     };
-    if let Err(err) = result {
-      if err.kind() != ErrorKind::NotFound || !flags.force {
-        bail!(
-          "cannot remove '{}': {}",
-          specified_path.to_string_lossy(),
-          err
-        );
-      }
+    if let Err(err) = result
+      && (err.kind() != ErrorKind::NotFound || !flags.force)
+    {
+      bail!(
+        "cannot remove '{}': {}",
+        specified_path.to_string_lossy(),
+        err
+      );
     }
   }
 
@@ -95,7 +95,7 @@ struct RmFlags<'a> {
   paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: &[OsString]) -> Result<RmFlags> {
+fn parse_args(args: &[OsString]) -> Result<RmFlags<'_>> {
   let mut result = RmFlags::default();
 
   for arg in parse_arg_kinds(args) {
