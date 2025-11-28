@@ -37,6 +37,7 @@ use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::KillSignal;
+use crate::shell::types::ProcessSignaler;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
@@ -78,6 +79,68 @@ pub async fn execute(
     ShellPipeWriter::stderr(),
   )
   .await
+}
+
+/// Executes a command list and returns the ProcessSignaler for monitoring child processes.
+///
+/// This is useful when you need to track spawned child PIDs for signal forwarding.
+/// The returned `ProcessSignaler` can be used to:
+/// - Get the current foreground process PID via `current_pid()`
+/// - Subscribe to process spawn notifications via `subscribe()`
+///
+/// # Example
+///
+/// ```ignore
+/// use deno_task_shell::{execute_with_signaler, KillSignal, SignalKind};
+///
+/// let kill_signal = KillSignal::default();
+/// let (signaler, execute_future) = execute_with_signaler(
+///     list,
+///     env_vars,
+///     cwd,
+///     custom_commands,
+///     kill_signal.clone(),
+/// );
+///
+/// // Check the current child process
+/// if let Some(child_pid) = signaler.current_pid() {
+///     // Decide whether to forward signals based on process group
+///     let child_pgid = unsafe { libc::getpgid(child_pid as i32) };
+///     let our_pgid = unsafe { libc::getpgid(0) };
+///
+///     if child_pgid != our_pgid {
+///         kill_signal.send(SignalKind::SIGINT);
+///     }
+/// }
+///
+/// let exit_code = execute_future.await;
+/// ```
+pub fn execute_with_signaler(
+  list: SequentialList,
+  env_vars: HashMap<OsString, OsString>,
+  cwd: PathBuf,
+  custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
+  kill_signal: KillSignal,
+) -> (ProcessSignaler, impl std::future::Future<Output = i32>) {
+  let signaler = ProcessSignaler::new();
+  let state = ShellState::new_with_process_signaler(
+    env_vars,
+    cwd,
+    custom_commands,
+    kill_signal,
+    signaler.clone(),
+  );
+  let future = async move {
+    execute_with_pipes(
+      list,
+      state,
+      ShellPipeReader::stdin(),
+      ShellPipeWriter::stdout(),
+      ShellPipeWriter::stderr(),
+    )
+    .await
+  };
+  (signaler, future)
 }
 
 /// Executes a `SequentialList` of commands with specified input and output pipes.
