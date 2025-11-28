@@ -1665,8 +1665,8 @@ async fn test_process_signaler_with_execute() {
 
 #[tokio::test]
 async fn test_process_signaler_tracks_external_command() {
-  use std::collections::HashMap;
   use std::cell::Cell;
+  use std::collections::HashMap;
   use std::rc::Rc;
 
   // Use an external command that definitely spawns a process
@@ -1688,29 +1688,31 @@ async fn test_process_signaler_tracks_external_command() {
 
   // Run the execution in a local set
   let local_set = tokio::task::LocalSet::new();
-  let exit_code = local_set.run_until(async move {
-    // Spawn a local task to periodically check the current PID
-    let handle = tokio::task::spawn_local(async move {
-      // Check every 5ms for up to 1 second
-      for _ in 0..200 {
-        if let Some(pid) = signaler_clone.current_pid() {
-          seen_pid_clone.set(Some(pid));
-          break;
+  let exit_code = local_set
+    .run_until(async move {
+      // Spawn a local task to periodically check the current PID
+      let handle = tokio::task::spawn_local(async move {
+        // Check every 5ms for up to 1 second
+        for _ in 0..200 {
+          if let Some(pid) = signaler_clone.current_pid() {
+            seen_pid_clone.set(Some(pid));
+            break;
+          }
+          tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-      }
-    });
+      });
 
-    // Yield to let the checker task start
-    tokio::task::yield_now().await;
+      // Yield to let the checker task start
+      tokio::task::yield_now().await;
 
-    let exit_code = execute_future.await;
+      let exit_code = execute_future.await;
 
-    // Wait for the checker task to complete
-    let _ = handle.await;
+      // Wait for the checker task to complete
+      let _ = handle.await;
 
-    exit_code
-  }).await;
+      exit_code
+    })
+    .await;
 
   assert_eq!(exit_code, 0);
   assert!(
