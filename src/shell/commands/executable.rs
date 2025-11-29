@@ -59,10 +59,10 @@ impl ShellCommand for ExecutableCommand {
 
       context.state.track_child_process(&child);
 
-      // Notify about the spawned child process
-      let process_signaler = context.state.process_signaler().clone();
+      // Track the spawned child process in the kill signal
+      let kill_signal = context.state.kill_signal().clone();
       if let Some(pid) = child.id() {
-        process_signaler.notify_spawn(pid);
+        kill_signal.set_child_process(pid);
       }
 
       // avoid deadlock since this is holding onto the pipes
@@ -72,7 +72,7 @@ impl ShellCommand for ExecutableCommand {
         tokio::select! {
           result = child.wait() => match result {
             Ok(status) => {
-              process_signaler.notify_exit();
+              kill_signal.clear_child_process();
               return ExecuteResult::Continue(
                 status.code().unwrap_or(1),
                 Vec::new(),
@@ -80,12 +80,12 @@ impl ShellCommand for ExecutableCommand {
               );
             }
             Err(err) => {
-              process_signaler.notify_exit();
+              kill_signal.clear_child_process();
               let _ = stderr.write_line(&format!("{}", err));
               return ExecuteResult::from_exit_code(1);
             }
           },
-          signal = context.state.kill_signal().wait_any() => {
+          signal = kill_signal.wait_any() => {
             if let Some(_id) = child.id() {
               #[cfg(unix)]
               kill(_id as i32, signal);
@@ -93,7 +93,7 @@ impl ShellCommand for ExecutableCommand {
               if cfg!(not(unix)) && signal.causes_abort() {
                 let _ = child.start_kill();
                 let status = child.wait().await.ok();
-                process_signaler.notify_exit();
+                kill_signal.clear_child_process();
                 return ExecuteResult::from_exit_code(
                   status.and_then(|s| s.code()).unwrap_or(signal.aborted_code()),
                 );

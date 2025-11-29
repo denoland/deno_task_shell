@@ -57,7 +57,6 @@ pub struct ShellState {
   kill_signal: KillSignal,
   process_tracker: ChildProcessTracker,
   tree_exit_code_cell: TreeExitCodeCell,
-  process_signaler: ProcessSignaler,
 }
 
 impl ShellState {
@@ -66,25 +65,6 @@ impl ShellState {
     cwd: PathBuf,
     custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
     kill_signal: KillSignal,
-  ) -> Self {
-    Self::new_with_process_signaler(
-      env_vars,
-      cwd,
-      custom_commands,
-      kill_signal,
-      ProcessSignaler::new(),
-    )
-  }
-
-  /// Creates a new ShellState with a custom ProcessSignaler.
-  ///
-  /// Use this when you need to track child process PIDs for signal forwarding.
-  pub fn new_with_process_signaler(
-    env_vars: HashMap<OsString, OsString>,
-    cwd: PathBuf,
-    custom_commands: HashMap<String, Rc<dyn ShellCommand>>,
-    kill_signal: KillSignal,
-    process_signaler: ProcessSignaler,
   ) -> Self {
     assert!(cwd.is_absolute());
     let mut commands = builtin_commands();
@@ -97,7 +77,6 @@ impl ShellState {
       kill_signal,
       process_tracker: ChildProcessTracker::new(),
       tree_exit_code_cell: Default::default(),
-      process_signaler,
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -188,11 +167,6 @@ impl ShellState {
 
   pub fn kill_signal(&self) -> &KillSignal {
     &self.kill_signal
-  }
-
-  /// Returns the process signaler for tracking child process PIDs.
-  pub fn process_signaler(&self) -> &ProcessSignaler {
-    &self.process_signaler
   }
 
   pub fn track_child_process(&self, child: &tokio::process::Child) {
@@ -524,6 +498,17 @@ pub fn pipe() -> (ShellPipeReader, ShellPipeWriter) {
   )
 }
 
+/// Information about the current child process being tracked.
+#[derive(Debug, Clone, Copy, Default)]
+struct ChildProcessInfo {
+  /// The PID of the current foreground child process.
+  pid: Option<u32>,
+  /// The PGID of the current foreground child process (Unix only).
+  /// Cached at spawn time to avoid repeated syscalls.
+  #[cfg(unix)]
+  pgid: Option<i32>,
+}
+
 #[derive(Debug)]
 struct KillSignalInner {
   // WARNING: This should struct should not be made Sync.
@@ -535,6 +520,8 @@ struct KillSignalInner {
   aborted_code: RefCell<Option<i32>>,
   sender: broadcast::Sender<SignalKind>,
   children: RefCell<Vec<Weak<KillSignalInner>>>,
+  /// Information about the current child process.
+  child_process: Cell<ChildProcessInfo>,
 }
 
 impl KillSignalInner {
@@ -570,6 +557,7 @@ impl Default for KillSignal {
       aborted_code: RefCell::new(None),
       sender,
       children: Default::default(),
+      child_process: Cell::new(ChildProcessInfo::default()),
     }))
   }
 }
@@ -588,6 +576,7 @@ impl KillSignal {
       aborted_code: RefCell::new(self.aborted_code()),
       sender,
       children: RefCell::new(Vec::new()),
+      child_process: Cell::new(ChildProcessInfo::default()),
     });
 
     // Add the child to the parent's list of children
@@ -633,6 +622,48 @@ impl KillSignal {
     // unwrap is ok because we're holding a sender in `self`
     receiver.recv().await.unwrap()
   }
+
+  /// Returns the PID of the current foreground child process, if any.
+  ///
+  /// This is useful for signal forwarding scenarios where you need to check
+  /// if the child process is in the same process group as the parent.
+  pub fn current_child_pid(&self) -> Option<u32> {
+    self.0.child_process.get().pid
+  }
+
+  /// Returns the PGID of the current foreground child process, if any.
+  ///
+  /// The PGID is cached at spawn time to avoid repeated syscalls.
+  /// This is useful for determining whether to forward signals:
+  /// if the child is in the same process group, the terminal's signal
+  /// will already reach it directly.
+  #[cfg(unix)]
+  pub fn current_child_pgid(&self) -> Option<i32> {
+    self.0.child_process.get().pgid
+  }
+
+  /// Called internally when a child process is spawned.
+  ///
+  /// On Unix, this also caches the child's PGID.
+  pub(crate) fn set_child_process(&self, pid: u32) {
+    #[cfg(unix)]
+    let pgid = {
+      // Cache the PGID at spawn time
+      let pgid = unsafe { nix::libc::getpgid(pid as i32) };
+      if pgid > 0 { Some(pgid) } else { None }
+    };
+
+    self.0.child_process.set(ChildProcessInfo {
+      pid: Some(pid),
+      #[cfg(unix)]
+      pgid,
+    });
+  }
+
+  /// Called internally when a child process exits.
+  pub(crate) fn clear_child_process(&self) {
+    self.0.child_process.set(ChildProcessInfo::default());
+  }
 }
 
 /// Guard that on drop will send a signal on the associated `KillSignal`.
@@ -655,81 +686,6 @@ impl KillSignalDropGuard {
   /// Prevent the drop guard from sending a signal on drop.
   pub fn disarm(&self) {
     self.disarmed.set(true);
-  }
-}
-
-#[derive(Debug, Default)]
-struct ProcessSignalerInner {
-  /// The PID of the current foreground process, if any.
-  current_pid: Cell<Option<u32>>,
-  /// Sender for process spawn notifications.
-  /// Lazily initialized on first subscribe.
-  sender: RefCell<Option<broadcast::Sender<u32>>>,
-}
-
-/// Provides access to the currently running foreground child process.
-///
-/// This is useful for signal forwarding scenarios where you need to check
-/// if the child process is in the same process group as the parent.
-///
-/// # Example
-///
-/// ```ignore
-/// let signaler = ProcessSignaler::new();
-/// let mut receiver = signaler.subscribe();
-///
-/// // In a signal handler, check if we should forward the signal
-/// if let Some(child_pid) = signaler.current_pid() {
-///     // Check if child is in same process group
-///     let child_pgid = unsafe { libc::getpgid(child_pid as i32) };
-///     let our_pgid = unsafe { libc::getpgid(0) };
-///
-///     if child_pgid != our_pgid {
-///         // Child in different process group, forward signal
-///         kill_signal.send(SignalKind::SIGINT);
-///     }
-/// }
-/// ```
-#[derive(Debug, Clone, Default)]
-pub struct ProcessSignaler(Rc<ProcessSignalerInner>);
-
-impl ProcessSignaler {
-  /// Creates a new ProcessSignaler.
-  pub fn new() -> Self {
-    Self::default()
-  }
-
-  /// Returns the PID of the current foreground child process, if any.
-  ///
-  /// Returns `None` if no child process is currently running.
-  pub fn current_pid(&self) -> Option<u32> {
-    self.0.current_pid.get()
-  }
-
-  /// Subscribe to receive notifications when child processes spawn.
-  ///
-  /// Returns a receiver that yields PIDs of spawned processes.
-  /// The channel is lazily created on first subscription.
-  pub fn subscribe(&self) -> broadcast::Receiver<u32> {
-    let mut sender_ref = self.0.sender.borrow_mut();
-    if sender_ref.is_none() {
-      let (sender, _) = broadcast::channel(16);
-      *sender_ref = Some(sender);
-    }
-    sender_ref.as_ref().unwrap().subscribe()
-  }
-
-  /// Called internally when a child process is spawned.
-  pub(crate) fn notify_spawn(&self, pid: u32) {
-    self.0.current_pid.set(Some(pid));
-    if let Some(sender) = self.0.sender.borrow().as_ref() {
-      let _ = sender.send(pid);
-    }
-  }
-
-  /// Called internally when a child process exits.
-  pub(crate) fn notify_exit(&self) {
-    self.0.current_pid.set(None);
   }
 }
 
@@ -816,7 +772,6 @@ impl From<SignalKind> for i32 {
 
 #[cfg(test)]
 mod test {
-  use super::ProcessSignaler;
   use crate::KillSignal;
   use crate::SignalKind;
 
@@ -964,77 +919,41 @@ mod test {
   }
 
   #[test]
-  fn test_process_signaler_current_pid() {
-    let signaler = ProcessSignaler::new();
-    assert_eq!(signaler.current_pid(), None);
+  fn test_kill_signal_child_process_tracking() {
+    let kill_signal = KillSignal::default();
 
-    signaler.notify_spawn(1234);
-    assert_eq!(signaler.current_pid(), Some(1234));
+    // Initially no child process
+    assert_eq!(kill_signal.current_child_pid(), None);
+    #[cfg(unix)]
+    assert_eq!(kill_signal.current_child_pgid(), None);
 
-    signaler.notify_spawn(5678);
-    assert_eq!(signaler.current_pid(), Some(5678));
+    // Set a child process
+    kill_signal.set_child_process(1234);
+    assert_eq!(kill_signal.current_child_pid(), Some(1234));
+    // PGID is retrieved via syscall, so it might be None for a fake PID
 
-    signaler.notify_exit();
-    assert_eq!(signaler.current_pid(), None);
+    // Clear the child process
+    kill_signal.clear_child_process();
+    assert_eq!(kill_signal.current_child_pid(), None);
+    #[cfg(unix)]
+    assert_eq!(kill_signal.current_child_pgid(), None);
   }
 
   #[test]
-  fn test_process_signaler_clone() {
-    let signaler = ProcessSignaler::new();
-    let signaler_clone = signaler.clone();
+  fn test_child_signal_has_separate_child_process_tracking() {
+    let parent_signal = KillSignal::default();
+    let child_signal = parent_signal.child_signal();
 
-    signaler.notify_spawn(1234);
+    // Set child process on parent
+    parent_signal.set_child_process(1234);
+    assert_eq!(parent_signal.current_child_pid(), Some(1234));
+    // Child signal should not see parent's child process
+    assert_eq!(child_signal.current_child_pid(), None);
 
-    // Both should see the same PID since they share the inner state
-    assert_eq!(signaler.current_pid(), Some(1234));
-    assert_eq!(signaler_clone.current_pid(), Some(1234));
-
-    signaler_clone.notify_exit();
-    assert_eq!(signaler.current_pid(), None);
-    assert_eq!(signaler_clone.current_pid(), None);
-  }
-
-  #[tokio::test]
-  async fn test_process_signaler_subscribe() {
-    let signaler = ProcessSignaler::new();
-    let mut receiver = signaler.subscribe();
-
-    // Spawn notification should be received
-    signaler.notify_spawn(1234);
-
-    let pid = receiver.recv().await.unwrap();
-    assert_eq!(pid, 1234);
-
-    // Multiple spawns should be received
-    signaler.notify_spawn(5678);
-    let pid2 = receiver.recv().await.unwrap();
-    assert_eq!(pid2, 5678);
-  }
-
-  #[tokio::test]
-  async fn test_process_signaler_multiple_subscribers() {
-    let signaler = ProcessSignaler::new();
-    let mut receiver1 = signaler.subscribe();
-    let mut receiver2 = signaler.subscribe();
-
-    signaler.notify_spawn(1234);
-
-    // Both receivers should get the notification
-    let pid1 = receiver1.recv().await.unwrap();
-    let pid2 = receiver2.recv().await.unwrap();
-    assert_eq!(pid1, 1234);
-    assert_eq!(pid2, 1234);
-  }
-
-  #[test]
-  fn test_process_signaler_no_subscribers() {
-    // Should not panic when there are no subscribers
-    let signaler = ProcessSignaler::new();
-    signaler.notify_spawn(1234);
-    signaler.notify_exit();
-
-    // PID should still be tracked even without subscribers
-    signaler.notify_spawn(5678);
-    assert_eq!(signaler.current_pid(), Some(5678));
+    // Set child process on child signal
+    child_signal.set_child_process(5678);
+    assert_eq!(child_signal.current_child_pid(), Some(5678));
+    // Parent should still see its own child process
+    assert_eq!(parent_signal.current_child_pid(), Some(1234));
   }
 }
