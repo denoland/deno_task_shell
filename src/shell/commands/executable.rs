@@ -59,32 +59,49 @@ impl ShellCommand for ExecutableCommand {
 
       context.state.track_child_process(&child);
 
+      // Track the spawned child process in the kill signal
+      let kill_signal = context.state.kill_signal().clone();
+      if let Some(pid) = child.id() {
+        kill_signal.set_child_process(pid);
+      }
+
       // avoid deadlock since this is holding onto the pipes
       drop(sub_command);
+
+      // Get the child's PGID for signal forwarding decisions
+      #[cfg(unix)]
+      let child_pgid = kill_signal.current_child_pgid();
 
       loop {
         tokio::select! {
           result = child.wait() => match result {
-            Ok(status) => return ExecuteResult::Continue(
-              status.code().unwrap_or(1),
-              Vec::new(),
-              Vec::new(),
-            ),
+            Ok(status) => {
+              kill_signal.clear_child_process();
+              return ExecuteResult::Continue(
+                status.code().unwrap_or(1),
+                Vec::new(),
+                Vec::new(),
+              );
+            }
             Err(err) => {
+              kill_signal.clear_child_process();
               let _ = stderr.write_line(&format!("{}", err));
               return ExecuteResult::from_exit_code(1);
             }
           },
-          signal = context.state.kill_signal().wait_any() => {
+          signal = kill_signal.wait_any() => {
             if let Some(_id) = child.id() {
               #[cfg(unix)]
-              kill(_id as i32, signal);
+              if signal.should_forward_to(child_pgid) {
+                kill(_id as i32, signal.kind);
+              }
 
-              if cfg!(not(unix)) && signal.causes_abort() {
+              if cfg!(not(unix)) && signal.kind.causes_abort() {
                 let _ = child.start_kill();
                 let status = child.wait().await.ok();
+                kill_signal.clear_child_process();
                 return ExecuteResult::from_exit_code(
-                  status.and_then(|s| s.code()).unwrap_or(signal.aborted_code()),
+                  status.and_then(|s| s.code()).unwrap_or(signal.kind.aborted_code()),
                 );
               }
             }

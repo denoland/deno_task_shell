@@ -131,7 +131,7 @@ macro_rules! execute_with_cancellation {
         result
       },
       signal = $kill_signal.wait_aborted() => {
-        ExecuteResult::from_exit_code(signal.aborted_code())
+        ExecuteResult::from_exit_code(signal.kind.aborted_code())
       }
     }
   };
