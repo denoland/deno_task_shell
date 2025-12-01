@@ -65,11 +65,24 @@ impl ShellCommand for ExecutableCommand {
       loop {
         tokio::select! {
           result = child.wait() => match result {
-            Ok(status) => return ExecuteResult::Continue(
-              status.code().unwrap_or(1),
-              Vec::new(),
-              Vec::new(),
-            ),
+            Ok(status) => {
+              #[cfg(unix)]
+              let exit_code = {
+                use std::os::unix::process::ExitStatusExt;
+                status.code().unwrap_or_else(|| {
+                  // Process was terminated by a signal, return 128 + signal_number per POSIX
+                  status.signal().map(|sig| 128 + sig).unwrap_or(1)
+                })
+              };
+              #[cfg(not(unix))]
+              let exit_code = status.code().unwrap_or(1);
+
+              return ExecuteResult::Continue(
+                exit_code,
+                Vec::new(),
+                Vec::new(),
+              );
+            }
             Err(err) => {
               let _ = stderr.write_line(&format!("{}", err));
               return ExecuteResult::from_exit_code(1);
