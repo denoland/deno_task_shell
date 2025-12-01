@@ -518,26 +518,26 @@ struct KillSignalInner {
   // then awaited after. If an abort happened between that then
   // it could be missed.
   aborted_code: RefCell<Option<i32>>,
-  sender: broadcast::Sender<SignalKind>,
+  sender: broadcast::Sender<SignalMessage>,
   children: RefCell<Vec<Weak<KillSignalInner>>>,
   /// Information about the current child process.
   child_process: Cell<ChildProcessInfo>,
 }
 
 impl KillSignalInner {
-  pub fn send(&self, signal_kind: SignalKind) {
-    if signal_kind.causes_abort() {
+  pub fn send(&self, signal: SignalMessage) {
+    if signal.kind.causes_abort() {
       let mut stored_aborted_code = self.aborted_code.borrow_mut();
       if stored_aborted_code.is_none() {
-        *stored_aborted_code = Some(signal_kind.aborted_code());
+        *stored_aborted_code = Some(signal.kind.aborted_code());
       }
     }
-    _ = self.sender.send(signal_kind);
+    _ = self.sender.send(signal);
 
     // notify children
     self.children.borrow_mut().retain(|weak_child| {
       if let Some(child) = weak_child.upgrade() {
-        child.send(signal_kind);
+        child.send(signal);
         true
       } else {
         false // clean-up dropped children
@@ -599,25 +599,35 @@ impl KillSignal {
     }
   }
 
-  /// Send a signal to commands being run.
+  /// Send a signal to commands being run (programmatic, always forwarded).
   pub fn send(&self, signal: SignalKind) {
-    self.0.send(signal)
+    self.0.send(SignalMessage::new(signal))
+  }
+
+  /// Send a signal that originated from a specific process group.
+  ///
+  /// Use this when forwarding signals that came from the terminal (e.g., Ctrl+C).
+  /// Children in the same process group as `origin_pgid` will not receive
+  /// a duplicate signal, since the terminal already sent it to them directly.
+  #[cfg(unix)]
+  pub fn send_from_pgid(&self, signal: SignalKind, origin_pgid: i32) {
+    self.0.send(SignalMessage::from_pgid(signal, origin_pgid))
   }
 
   /// Waits for only signals deemed to abort a command.
-  pub async fn wait_aborted(&self) -> SignalKind {
+  pub async fn wait_aborted(&self) -> SignalMessage {
     let mut receiver = self.0.sender.subscribe();
     loop {
       // unwrap is ok because we're holding a sender in `self`
       let signal = receiver.recv().await.unwrap();
-      if signal.causes_abort() {
+      if signal.kind.causes_abort() {
         return signal;
       }
     }
   }
 
   /// Waits for any signal to be received.
-  pub async fn wait_any(&self) -> SignalKind {
+  pub async fn wait_any(&self) -> SignalMessage {
     let mut receiver = self.0.sender.subscribe();
     // unwrap is ok because we're holding a sender in `self`
     receiver.recv().await.unwrap()
@@ -698,6 +708,62 @@ pub enum SignalKind {
   SIGINT,
   SIGSTOP,
   Other(i32),
+}
+
+/// A signal message that includes origin information to prevent double-signaling.
+///
+/// When a signal originates from the terminal (e.g., Ctrl+C), it's sent to all
+/// processes in the foreground process group. If the shell also forwards the
+/// signal programmatically, children would receive it twice. The `origin_pgid`
+/// field allows recipients to skip forwarding if the child is in the same
+/// process group as the signal origin.
+#[derive(Debug, Clone, Copy)]
+pub struct SignalMessage {
+  pub kind: SignalKind,
+  /// The process group ID where this signal originated.
+  /// If Some, children in the same PGID already received this signal
+  /// from the terminal and should not be signaled again.
+  /// If None, the signal is programmatic and should always be forwarded.
+  #[cfg(unix)]
+  pub origin_pgid: Option<i32>,
+}
+
+impl SignalMessage {
+  /// Create a new signal message for programmatic signals (always forwarded).
+  pub fn new(kind: SignalKind) -> Self {
+    Self {
+      kind,
+      #[cfg(unix)]
+      origin_pgid: None,
+    }
+  }
+
+  /// Create a new signal message originating from a specific process group.
+  /// Children in the same PGID will not receive a duplicate signal.
+  #[cfg(unix)]
+  pub fn from_pgid(kind: SignalKind, pgid: i32) -> Self {
+    Self {
+      kind,
+      origin_pgid: Some(pgid),
+    }
+  }
+
+  /// Check if a signal should be forwarded to a child process.
+  /// Returns true if the signal should be forwarded, false if the child
+  /// already received it from the terminal.
+  #[cfg(unix)]
+  pub fn should_forward_to(&self, child_pgid: Option<i32>) -> bool {
+    match (self.origin_pgid, child_pgid) {
+      (Some(origin), Some(child)) => origin != child,
+      _ => true, // Forward if we can't determine (programmatic or unknown PGID)
+    }
+  }
+
+  /// On non-Unix platforms, always forward signals.
+  #[cfg(not(unix))]
+  pub fn should_forward_to(&self, _child_pgid: Option<i32>) -> bool {
+    true
+  }
 }
 
 impl SignalKind {
@@ -787,7 +853,7 @@ mod test {
 
     // Wait for the signal in the main task
     let signal = kill_signal.wait_any().await;
-    assert_eq!(signal, SignalKind::SIGTERM);
+    assert_eq!(signal.kind, SignalKind::SIGTERM);
   }
 
   #[tokio::test]
@@ -810,7 +876,7 @@ mod test {
     );
 
     for signal in [signals.0, signals.1, signals.2].into_iter() {
-      assert_eq!(signal, SignalKind::SIGKILL);
+      assert_eq!(signal.kind, SignalKind::SIGKILL);
     }
     assert_eq!(child_signal.aborted_code(), Some(128 + 9));
     assert_eq!(sibling_signal.aborted_code(), Some(128 + 9));
@@ -846,7 +912,7 @@ mod test {
 
     // Wait for the aborting signal in the main task
     let signal = kill_signal.wait_aborted().await;
-    assert_eq!(signal, SignalKind::SIGABRT);
+    assert_eq!(signal.kind, SignalKind::SIGABRT);
     assert!(kill_signal.aborted_code().is_some());
   }
 
@@ -868,7 +934,7 @@ mod test {
 
     // Wait for the signal in the child
     let signal = child_signal.wait_aborted().await;
-    assert_eq!(signal, SignalKind::SIGQUIT);
+    assert_eq!(signal.kind, SignalKind::SIGQUIT);
     assert_eq!(parent_signal.aborted_code(), Some(128 + 3));
     assert_eq!(child_signal.aborted_code(), Some(128 + 3));
   }
@@ -893,7 +959,7 @@ mod test {
 
     // Verify no panic occurred and the parent still functions
     let signal = parent_signal.wait_any().await;
-    assert_eq!(signal, SignalKind::SIGTERM);
+    assert_eq!(signal.kind, SignalKind::SIGTERM);
   }
 
   #[tokio::test]
@@ -955,5 +1021,45 @@ mod test {
     assert_eq!(child_signal.current_child_pid(), Some(5678));
     // Parent should still see its own child process
     assert_eq!(parent_signal.current_child_pid(), Some(1234));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn test_signal_message_should_forward_to() {
+    use super::SignalMessage;
+
+    // Programmatic signal (no origin_pgid) should always forward
+    let programmatic = SignalMessage::new(SignalKind::SIGINT);
+    assert!(programmatic.should_forward_to(Some(1000)));
+    assert!(programmatic.should_forward_to(Some(2000)));
+    assert!(programmatic.should_forward_to(None));
+
+    // Signal from PGID 1000 should NOT forward to child in same PGID
+    let from_tty = SignalMessage::from_pgid(SignalKind::SIGINT, 1000);
+    assert!(!from_tty.should_forward_to(Some(1000))); // Same PGID - don't forward
+    assert!(from_tty.should_forward_to(Some(2000))); // Different PGID - forward
+    assert!(from_tty.should_forward_to(None)); // Unknown PGID - forward (safe default)
+  }
+
+  #[cfg(unix)]
+  #[tokio::test]
+  async fn test_send_from_pgid() {
+    let kill_signal = KillSignal::default();
+
+    // Spawn a task to send a signal from a specific PGID
+    let signal_sender = kill_signal.clone();
+    deno_unsync::spawn(async move {
+      signal_sender.send_from_pgid(SignalKind::SIGINT, 12345);
+    });
+
+    // Wait for the signal
+    let signal = kill_signal.wait_any().await;
+    assert_eq!(signal.kind, SignalKind::SIGINT);
+    assert_eq!(signal.origin_pgid, Some(12345));
+
+    // Same PGID should not forward
+    assert!(!signal.should_forward_to(Some(12345)));
+    // Different PGID should forward
+    assert!(signal.should_forward_to(Some(99999)));
   }
 }

@@ -15,6 +15,7 @@ pub use types::ShellPipeReader;
 pub use types::ShellPipeWriter;
 pub use types::ShellState;
 pub use types::SignalKind;
+pub use types::SignalMessage;
 pub use types::pipe;
 pub use which::CommandPathResolutionError;
 
