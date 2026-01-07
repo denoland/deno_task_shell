@@ -1631,3 +1631,49 @@ fn no_such_file_error_text() -> &'static str {
     "No such file or directory (os error 2)"
   }
 }
+
+#[tokio::test]
+#[cfg(unix)]
+async fn signal_exit_codes() {
+  // Test SIGPIPE exit code (128 + 13 = 141)
+  TestBuilder::new()
+    .command("sh -c 'kill -PIPE $$'")
+    .assert_exit_code(141)
+    .run()
+    .await;
+
+  // Test SIGTERM exit code (128 + 15 = 143)
+  TestBuilder::new()
+    .command("sh -c 'kill -TERM $$'")
+    .assert_exit_code(143)
+    .run()
+    .await;
+
+  // Test SIGINT exit code (128 + 2 = 130)
+  TestBuilder::new()
+    .command("sh -c 'kill -INT $$'")
+    .assert_exit_code(130)
+    .run()
+    .await;
+
+  // Test SIGKILL exit code (128 + 9 = 137)
+  TestBuilder::new()
+    .command("sh -c 'kill -KILL $$'")
+    .assert_exit_code(137)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn sigpipe_from_pipeline() {
+  // Test that SIGPIPE from a closed pipe doesn't cause issues
+  // and the pipeline completes successfully
+  // `yes` outputs infinite "y\n" until SIGPIPE, `head -n 1` reads one line
+  TestBuilder::new()
+    .command("yes | head -n 1")
+    .assert_stdout("y\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
