@@ -1068,19 +1068,21 @@ async fn rm() {
     .run()
     .await;
 
-  // rm -rf with non-matching glob expands to no args, so rm errors with "missing operand"
+  // rm -rf with non-matching glob passes literal to rm, which silently ignores it with -f
+  // This is bash default behavior
   TestBuilder::new()
     .file("keep.txt", "")
     .command("rm -rf *.nonexistent")
-    .assert_stderr("rm: missing operand\n")
-    .assert_exit_code(1)
+    .assert_stderr("")
+    .assert_exit_code(0)
     .assert_exists("keep.txt")
     .run()
     .await;
 
   // rm -rf with mix of matching and non-matching globs should remove matching files
   // This is the fix for https://github.com/prefix-dev/pixi/issues/3969
-  // The non-matching glob expands to nothing, but the matching glob still works
+  // Non-matching glob passes literal string, matching glob expands normally
+  // rm -f silently ignores the non-existent literal path
   TestBuilder::new()
     .directory("dist")
     .file("dist/file.txt", "")
@@ -1404,15 +1406,14 @@ async fn glob_basic() {
     .run()
     .await;
 
-  // Non-matching globs expand to nothing (nullglob behavior)
-  // cat with no files reads from stdin (which is empty), so succeeds with no output
+  // Non-matching globs pass literal pattern to command (bash default behavior)
+  // cat receives literal "*.ts", fails with "No such file or directory"
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts")
-    .assert_stderr("")
-    .assert_stdout("")
-    .assert_exit_code(0)
+    .assert_stderr("cat: *.ts: No such file or directory (os error 2)\n")
+    .assert_exit_code(1)
     .run()
     .await;
 
@@ -1428,24 +1429,24 @@ async fn glob_basic() {
     .run()
     .await;
 
-  // Non-matching glob + || - since cat succeeds (reads empty stdin), || branch is not taken
+  // Non-matching glob + || - cat fails on literal pattern, so || branch runs
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts || echo 2")
-    .assert_stderr("")
-    .assert_stdout("")
+    .assert_stderr("cat: *.ts: No such file or directory (os error 2)\n")
+    .assert_stdout("2\n")
     .assert_exit_code(0)
     .run()
     .await;
 
-  // Same with stderr redirect - cat still succeeds
+  // Same with stderr redirect - cat fails, || branch runs
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts 2> /dev/null || echo 2")
     .assert_stderr("")
-    .assert_stdout("")
+    .assert_stdout("2\n")
     .assert_exit_code(0)
     .run()
     .await;

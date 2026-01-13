@@ -839,6 +839,8 @@ fn evaluate_word_parts(
       }
       let is_absolute = Path::new(&current_text).is_absolute();
       let cwd = state.cwd();
+      // Save original text before potentially moving it into pattern
+      let original_text = current_text.clone();
       let pattern = if is_absolute {
         current_text
       } else {
@@ -860,7 +862,8 @@ fn evaluate_word_parts(
           let paths =
             paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
           if paths.is_empty() {
-            Ok(vec![])
+            // No matches: return the literal pattern (bash default behavior)
+            Ok(vec![original_text.into()])
           } else {
             let paths = if is_absolute {
               paths
