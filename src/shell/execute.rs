@@ -748,8 +748,6 @@ pub enum EvaluateWordTextError {
   },
   #[error("glob: no matches found '{}'. Pattern part was not valid utf-8", part.to_string_lossy())]
   NotUtf8Pattern { part: OsString },
-  #[error("glob: no matches found '{}'", pattern)]
-  NoFilesMatched { pattern: String },
   #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
     #[from]
@@ -862,7 +860,7 @@ fn evaluate_word_parts(
           let paths =
             paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
           if paths.is_empty() {
-            Err(EvaluateWordTextError::NoFilesMatched { pattern })
+            Ok(vec![])
           } else {
             let paths = if is_absolute {
               paths

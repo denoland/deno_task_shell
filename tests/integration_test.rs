@@ -1067,6 +1067,29 @@ async fn rm() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  // rm -rf with non-matching glob expands to no args, so rm errors with "missing operand"
+  TestBuilder::new()
+    .file("keep.txt", "")
+    .command("rm -rf *.nonexistent")
+    .assert_stderr("rm: missing operand\n")
+    .assert_exit_code(1)
+    .assert_exists("keep.txt")
+    .run()
+    .await;
+
+  // rm -rf with mix of matching and non-matching globs should remove matching files
+  // This is the fix for https://github.com/prefix-dev/pixi/issues/3969
+  // The non-matching glob expands to nothing, but the matching glob still works
+  TestBuilder::new()
+    .directory("dist")
+    .file("dist/file.txt", "")
+    .command("rm -rf **/*.egg-info **/dist")
+    .assert_stderr("")
+    .assert_exit_code(0)
+    .assert_not_exists("dist")
+    .run()
+    .await;
 }
 
 // Basic integration tests as there are unit tests in the commands
@@ -1381,15 +1404,19 @@ async fn glob_basic() {
     .run()
     .await;
 
+  // Non-matching globs expand to nothing (nullglob behavior)
+  // cat with no files reads from stdin (which is empty), so succeeds with no output
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
-    .assert_exit_code(1)
+    .assert_stderr("")
+    .assert_stdout("")
+    .assert_exit_code(0)
     .run()
     .await;
 
+  // Invalid glob pattern (empty brackets) still produces an error
   let mut builder = TestBuilder::new();
   let temp_dir_path = builder.temp_dir_path();
   let error_pos = temp_dir_path.to_string_lossy().len() + 1;
@@ -1401,22 +1428,24 @@ async fn glob_basic() {
     .run()
     .await;
 
+  // Non-matching glob + || - since cat succeeds (reads empty stdin), || branch is not taken
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts || echo 2")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
-    .assert_stdout("2\n")
+    .assert_stderr("")
+    .assert_stdout("")
     .assert_exit_code(0)
     .run()
     .await;
 
+  // Same with stderr redirect - cat still succeeds
   TestBuilder::new()
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts 2> /dev/null || echo 2")
     .assert_stderr("")
-    .assert_stdout("2\n")
+    .assert_stdout("")
     .assert_exit_code(0)
     .run()
     .await;
