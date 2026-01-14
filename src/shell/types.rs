@@ -44,6 +44,13 @@ impl TreeExitCodeCell {
   }
 }
 
+/// Shell options that can be set via `set -o` / `set +o`.
+#[derive(Clone, Default)]
+pub struct ShellOptions {
+  /// When enabled, pipeline exit code is the rightmost non-zero exit code.
+  pub pipefail: bool,
+}
+
 #[derive(Clone)]
 pub struct ShellState {
   /// Environment variables that should be passed down to sub commands
@@ -54,6 +61,7 @@ pub struct ShellState {
   shell_vars: HashMap<OsString, OsString>,
   cwd: PathBuf,
   commands: Rc<HashMap<String, Rc<dyn ShellCommand>>>,
+  options: ShellOptions,
   kill_signal: KillSignal,
   process_tracker: ChildProcessTracker,
   tree_exit_code_cell: TreeExitCodeCell,
@@ -74,6 +82,7 @@ impl ShellState {
       shell_vars: Default::default(),
       cwd: PathBuf::new(),
       commands: Rc::new(commands),
+      options: Default::default(),
       kill_signal,
       process_tracker: ChildProcessTracker::new(),
       tree_exit_code_cell: Default::default(),
@@ -92,6 +101,17 @@ impl ShellState {
 
   pub fn env_vars(&self) -> &HashMap<OsString, OsString> {
     &self.env_vars
+  }
+
+  pub fn options(&self) -> &ShellOptions {
+    &self.options
+  }
+
+  pub fn set_option(&mut self, name: &str, value: bool) {
+    match name {
+      "pipefail" => self.options.pipefail = value,
+      _ => {} // ignore unknown options
+    }
   }
 
   pub fn get_var(&self, name: &OsStr) -> Option<&OsString> {
@@ -137,6 +157,9 @@ impl ShellState {
       }
       EnvChange::Cd(new_dir) => {
         self.set_cwd(new_dir.clone());
+      }
+      EnvChange::SetOption(name, value) => {
+        self.set_option(name, *value);
       }
     }
   }
@@ -222,6 +245,8 @@ pub enum EnvChange {
   // `unset ENV_VAR`
   UnsetVar(OsString),
   Cd(PathBuf),
+  // `set -o OPTION` or `set +o OPTION`
+  SetOption(String, bool),
 }
 
 pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;
