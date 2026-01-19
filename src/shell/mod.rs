@@ -11,6 +11,7 @@ pub use types::ExecuteResult;
 pub use types::FutureExecuteResult;
 pub use types::KillSignal;
 pub use types::KillSignalDropGuard;
+pub use types::ShellOptions;
 pub use types::ShellPipeReader;
 pub use types::ShellPipeWriter;
 pub use types::ShellState;

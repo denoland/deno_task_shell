@@ -12,6 +12,7 @@ mod head;
 mod mkdir;
 mod pwd;
 mod rm;
+mod shopt;
 mod sleep;
 mod unset;
 mod xargs;
@@ -75,6 +76,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
     (
       "rm".to_string(),
       Rc::new(rm::RmCommand) as Rc<dyn ShellCommand>,
+    ),
+    (
+      "shopt".to_string(),
+      Rc::new(shopt::ShoptCommand) as Rc<dyn ShellCommand>,
     ),
     (
       "sleep".to_string(),
