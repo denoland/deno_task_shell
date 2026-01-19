@@ -1385,7 +1385,7 @@ async fn glob_basic() {
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_exit_code(1)
     .run()
     .await;
@@ -1405,7 +1405,7 @@ async fn glob_basic() {
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts || echo 2")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_stdout("2\n")
     .assert_exit_code(0)
     .run()
@@ -1756,7 +1756,7 @@ async fn shopt_nullglob() {
   TestBuilder::new()
     .file("test.txt", "test\n")
     .command("echo *.nonexistent")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_exit_code(1)
     .run()
     .await;
@@ -1795,7 +1795,7 @@ async fn shopt_failglob() {
   TestBuilder::new()
     .file("test.txt", "test\n")
     .command("echo *.nonexistent")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_exit_code(1)
     .run()
     .await;
@@ -1813,7 +1813,7 @@ async fn shopt_failglob() {
   TestBuilder::new()
     .file("test.txt", "test\n")
     .command("shopt -s nullglob && shopt -s failglob && echo *.nonexistent")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_exit_code(1)
     .run()
     .await;

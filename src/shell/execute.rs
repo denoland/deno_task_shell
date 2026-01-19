@@ -749,7 +749,10 @@ pub enum EvaluateWordTextError {
   },
   #[error("glob: no matches found '{}'. Pattern part was not valid utf-8", part.to_string_lossy())]
   NotUtf8Pattern { part: OsString },
-  #[error("glob: no matches found '{}'", pattern)]
+  #[error(
+    "glob: no matches found '{}' (run `shopt -u failglob` to pass unmatched glob patterns literally)",
+    pattern
+  )]
   NoFilesMatched { pattern: String },
   #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
