@@ -20,24 +20,23 @@ impl ShellCommand for ShoptCommand {
       let mut set_mode = None; // None = query, Some(true) = -s, Some(false) = -u
       let mut options_to_change = Vec::new();
 
-      let mut args = context.args.into_iter().peekable();
-      while let Some(arg) = args.next() {
+      for arg in context.args.into_iter().peekable() {
         let arg_str = arg.to_string_lossy();
         match arg_str.as_ref() {
           "-s" => {
             if set_mode == Some(false) {
-              let _ = context
-                .stderr
-                .write_line("shopt: cannot set and unset options simultaneously");
+              let _ = context.stderr.write_line(
+                "shopt: cannot set and unset options simultaneously",
+              );
               return ExecuteResult::from_exit_code(1);
             }
             set_mode = Some(true);
           }
           "-u" => {
             if set_mode == Some(true) {
-              let _ = context
-                .stderr
-                .write_line("shopt: cannot set and unset options simultaneously");
+              let _ = context.stderr.write_line(
+                "shopt: cannot set and unset options simultaneously",
+              );
               return ExecuteResult::from_exit_code(1);
             }
             set_mode = Some(false);
@@ -47,9 +46,10 @@ impl ShellCommand for ShoptCommand {
             match parse_option_name(&arg_str) {
               Some(opt) => options_to_change.push(opt),
               None => {
-                let _ = context
-                  .stderr
-                  .write_line(&format!("shopt: {}: invalid shell option name", arg_str));
+                let _ = context.stderr.write_line(&format!(
+                  "shopt: {}: invalid shell option name",
+                  arg_str
+                ));
                 return ExecuteResult::from_exit_code(1);
               }
             }
@@ -104,9 +104,11 @@ impl ShellCommand for ShoptCommand {
                 any_off = true;
               }
               let name = option_to_name(opt);
-              let _ = context
-                .stdout
-                .write_line(&format!("{}\t{}", name, if is_on { "on" } else { "off" }));
+              let _ = context.stdout.write_line(&format!(
+                "{}\t{}",
+                name,
+                if is_on { "on" } else { "off" }
+              ));
             }
             ExecuteResult::from_exit_code(if any_off { 1 } else { 0 })
           }
