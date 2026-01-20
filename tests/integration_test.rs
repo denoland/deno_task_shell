@@ -1067,6 +1067,28 @@ async fn rm() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  // rm -f should ignore non-existent files
+  TestBuilder::new()
+    .command("rm -f nonexistent.txt")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // rm -rf should ignore non-existent directories
+  TestBuilder::new()
+    .command("rm -rf nonexistent_dir")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // rm -rf with glob pattern that matches nothing should succeed
+  // (when failglob is disabled, the pattern is passed literally to rm)
+  TestBuilder::new()
+    .command("shopt -u failglob && rm -rf *.nonexistent")
+    .assert_exit_code(0)
+    .run()
+    .await;
 }
 
 // Basic integration tests as there are unit tests in the commands
