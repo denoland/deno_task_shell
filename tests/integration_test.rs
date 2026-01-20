@@ -1385,7 +1385,7 @@ async fn glob_basic() {
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_exit_code(1)
     .run()
     .await;
@@ -1405,7 +1405,7 @@ async fn glob_basic() {
     .file("test.txt", "test\n")
     .file("test2.txt", "test2\n")
     .command("cat *.ts || echo 2")
-    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts'\n")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.ts' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
     .assert_stdout("2\n")
     .assert_exit_code(0)
     .run()
@@ -1673,6 +1673,156 @@ async fn sigpipe_from_pipeline() {
   TestBuilder::new()
     .command("yes | head -n 1")
     .assert_stdout("y\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn shopt() {
+  // query all options (default: failglob on, nullglob off)
+  TestBuilder::new()
+    .command("shopt")
+    .assert_stdout("failglob\ton\nnullglob\toff\n")
+    .run()
+    .await;
+
+  // query specific option
+  TestBuilder::new()
+    .command("shopt nullglob")
+    .assert_stdout("nullglob\toff\n")
+    .assert_exit_code(1) // returns 1 when option is off
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command("shopt failglob")
+    .assert_stdout("failglob\ton\n")
+    .assert_exit_code(0) // returns 0 when option is on
+    .run()
+    .await;
+
+  // enable option
+  TestBuilder::new()
+    .command("shopt -s nullglob && shopt nullglob")
+    .assert_stdout("nullglob\ton\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // disable option
+  TestBuilder::new()
+    .command("shopt -u failglob && shopt failglob")
+    .assert_stdout("failglob\toff\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // invalid option name
+  TestBuilder::new()
+    .command("shopt -s invalidopt")
+    .assert_stderr("shopt: invalidopt: invalid shell option name\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // -s without option name
+  TestBuilder::new()
+    .command("shopt -s")
+    .assert_stderr("shopt: option name required\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // cannot set and unset simultaneously
+  TestBuilder::new()
+    .command("shopt -s -u nullglob")
+    .assert_stderr("shopt: cannot set and unset options simultaneously\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // multiple options
+  TestBuilder::new()
+    .command("shopt -s nullglob && shopt -u failglob && shopt")
+    .assert_stdout("failglob\toff\nnullglob\ton\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn shopt_nullglob() {
+  // default behavior (failglob on): unmatched glob causes error
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("echo *.nonexistent")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // with nullglob: unmatched glob expands to nothing
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -u failglob && shopt -s nullglob && echo *.nonexistent")
+    .assert_stdout("\n") // echo with no args outputs newline
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // nullglob with other args: unmatched glob removed, other args kept
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -u failglob && shopt -s nullglob && echo hello *.nonexistent world")
+    .assert_stdout("hello world\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // nullglob: matched glob still works normally
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -u failglob && shopt -s nullglob && cat *.txt")
+    .assert_stdout("test\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn shopt_failglob() {
+  // failglob on (default): unmatched glob causes error
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("echo *.nonexistent")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // failglob off: unmatched glob passed through literally (bash default)
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -u failglob && echo *.nonexistent")
+    .assert_stdout("*.nonexistent\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // failglob takes precedence over nullglob
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -s nullglob && shopt -s failglob && echo *.nonexistent")
+    .assert_stderr("glob: no matches found '$TEMP_DIR/*.nonexistent' (run `shopt -u failglob` to pass unmatched glob patterns literally)\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // failglob off, nullglob off: literal pattern (bash default)
+  TestBuilder::new()
+    .file("test.txt", "test\n")
+    .command("shopt -u failglob && shopt -u nullglob && echo *.nonexistent")
+    .assert_stdout("*.nonexistent\n")
     .assert_exit_code(0)
     .run()
     .await;

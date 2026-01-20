@@ -37,6 +37,7 @@ use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::KillSignal;
+use crate::shell::types::ShellOptions;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
@@ -748,7 +749,10 @@ pub enum EvaluateWordTextError {
   },
   #[error("glob: no matches found '{}'. Pattern part was not valid utf-8", part.to_string_lossy())]
   NotUtf8Pattern { part: OsString },
-  #[error("glob: no matches found '{}'", pattern)]
+  #[error(
+    "glob: no matches found '{}' (run `shopt -u failglob` to pass unmatched glob patterns literally)",
+    pattern
+  )]
   NoFilesMatched { pattern: String },
   #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
@@ -842,7 +846,7 @@ fn evaluate_word_parts(
       let is_absolute = Path::new(&current_text).is_absolute();
       let cwd = state.cwd();
       let pattern = if is_absolute {
-        current_text
+        current_text.clone()
       } else {
         format!("{}/{}", cwd.display(), current_text)
       };
@@ -862,7 +866,17 @@ fn evaluate_word_parts(
           let paths =
             paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
           if paths.is_empty() {
-            Err(EvaluateWordTextError::NoFilesMatched { pattern })
+            let options = state.shell_options();
+            // failglob - error when set
+            if options.contains(ShellOptions::FAILGLOB) {
+              Err(EvaluateWordTextError::NoFilesMatched { pattern })
+            } else if options.contains(ShellOptions::NULLGLOB) {
+              // nullglob - return empty vec (pattern expands to nothing)
+              Ok(Vec::new())
+            } else {
+              // default bash behavior - return pattern literally
+              Ok(vec![current_text.into()])
+            }
           } else {
             let paths = if is_absolute {
               paths
