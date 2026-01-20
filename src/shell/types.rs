@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::rc::Weak;
 
 use anyhow::Result;
+use bitflags::bitflags;
 use futures::future::LocalBoxFuture;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -22,6 +23,30 @@ use crate::shell::child_process_tracker::ChildProcessTracker;
 
 use super::commands::ShellCommand;
 use super::commands::builtin_commands;
+
+bitflags! {
+  /// Shell options that can be set via `shopt` or `set -o`.
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  pub struct ShellOptions: u32 {
+    /// When set, a glob pattern that matches no files expands to nothing
+    /// (empty) rather than returning an error.
+    const NULLGLOB = 1 << 0;
+    /// When set, a glob pattern that matches no files causes an error.
+    /// This is the default for deno_task_shell (differs from bash).
+    /// When unset, unmatched globs are passed through literally (bash default).
+    const FAILGLOB = 1 << 1;
+    /// When set, pipeline exit code is the rightmost non-zero exit code.
+    /// Set via `set -o pipefail`.
+    const PIPEFAIL = 1 << 2;
+  }
+}
+
+impl Default for ShellOptions {
+  fn default() -> Self {
+    // failglob is on by default to preserve existing deno_task_shell behavior
+    ShellOptions::FAILGLOB
+  }
+}
 
 /// Exit code set when an async task fails or the main execution
 /// line fail.
@@ -57,6 +82,8 @@ pub struct ShellState {
   kill_signal: KillSignal,
   process_tracker: ChildProcessTracker,
   tree_exit_code_cell: TreeExitCodeCell,
+  /// Shell options set via `shopt` or `set -o`.
+  shell_options: ShellOptions,
 }
 
 impl ShellState {
@@ -77,6 +104,7 @@ impl ShellState {
       kill_signal,
       process_tracker: ChildProcessTracker::new(),
       tree_exit_code_cell: Default::default(),
+      shell_options: ShellOptions::default(),
     };
     // ensure the data is normalized
     for (name, value) in env_vars {
@@ -138,6 +166,9 @@ impl ShellState {
       EnvChange::Cd(new_dir) => {
         self.set_cwd(new_dir.clone());
       }
+      EnvChange::SetOption(option, enabled) => {
+        self.set_shell_option(*option, *enabled);
+      }
     }
   }
 
@@ -167,6 +198,18 @@ impl ShellState {
 
   pub fn kill_signal(&self) -> &KillSignal {
     &self.kill_signal
+  }
+
+  pub fn shell_options(&self) -> ShellOptions {
+    self.shell_options
+  }
+
+  pub fn set_shell_option(&mut self, option: ShellOptions, enabled: bool) {
+    if enabled {
+      self.shell_options.insert(option);
+    } else {
+      self.shell_options.remove(option);
+    }
   }
 
   pub fn track_child_process(&self, child: &tokio::process::Child) {
@@ -213,7 +256,7 @@ impl sys_traits::BaseEnvVar for ShellState {
   }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvChange {
   // `export ENV_VAR=VALUE`
   SetEnvVar(OsString, OsString),
@@ -222,6 +265,8 @@ pub enum EnvChange {
   // `unset ENV_VAR`
   UnsetVar(OsString),
   Cd(PathBuf),
+  // `shopt -s/-u option` or `set -o option`
+  SetOption(ShellOptions, bool),
 }
 
 pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;

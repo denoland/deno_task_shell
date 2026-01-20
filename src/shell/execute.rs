@@ -37,6 +37,7 @@ use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
 use crate::shell::types::FutureExecuteResult;
 use crate::shell::types::KillSignal;
+use crate::shell::types::ShellOptions;
 use crate::shell::types::ShellPipeReader;
 use crate::shell::types::ShellPipeWriter;
 use crate::shell::types::ShellState;
@@ -575,20 +576,33 @@ async fn execute_pipe_sequence(
   let output_handle = tokio::task::spawn_blocking(|| {
     last_output.unwrap().pipe_to_sender(stdout).unwrap();
   });
-  let mut results = futures::future::join_all(wait_tasks).await;
+  let results = futures::future::join_all(wait_tasks).await;
   output_handle.await.unwrap();
-  let last_result = results.pop().unwrap();
+
+  // Determine exit code based on pipefail option
+  let exit_code = if state.shell_options().contains(ShellOptions::PIPEFAIL) {
+    // With pipefail: return the rightmost non-zero exit code, or 0 if all succeeded
+    results
+      .iter()
+      .rev()
+      .find_map(|r| {
+        let code = match r {
+          ExecuteResult::Exit(c, _) => *c,
+          ExecuteResult::Continue(c, _, _) => *c,
+        };
+        if code != 0 { Some(code) } else { None }
+      })
+      .unwrap_or(0)
+  } else {
+    // Without pipefail: return the last command's exit code
+    match results.last().unwrap() {
+      ExecuteResult::Exit(code, _) => *code,
+      ExecuteResult::Continue(code, _, _) => *code,
+    }
+  };
+
   let all_handles = results.into_iter().flat_map(|r| r.into_handles());
-  match last_result {
-    ExecuteResult::Exit(code, mut handles) => {
-      handles.extend(all_handles);
-      ExecuteResult::Continue(code, Vec::new(), handles)
-    }
-    ExecuteResult::Continue(code, _, mut handles) => {
-      handles.extend(all_handles);
-      ExecuteResult::Continue(code, Vec::new(), handles)
-    }
-  }
+  ExecuteResult::Continue(exit_code, Vec::new(), all_handles.collect())
 }
 
 async fn execute_subshell(
@@ -748,6 +762,11 @@ pub enum EvaluateWordTextError {
   },
   #[error("glob: no matches found '{}'. Pattern part was not valid utf-8", part.to_string_lossy())]
   NotUtf8Pattern { part: OsString },
+  #[error(
+    "glob: no matches found '{}' (run `shopt -u failglob` to pass unmatched glob patterns literally)",
+    pattern
+  )]
+  NoFilesMatched { pattern: String },
   #[error("invalid utf-8: {}", err)]
   InvalidUtf8 {
     #[from]
@@ -839,10 +858,8 @@ fn evaluate_word_parts(
       }
       let is_absolute = Path::new(&current_text).is_absolute();
       let cwd = state.cwd();
-      // Save original text before potentially moving it into pattern
-      let original_text = current_text.clone();
       let pattern = if is_absolute {
-        current_text
+        current_text.clone()
       } else {
         format!("{}/{}", cwd.display(), current_text)
       };
@@ -862,8 +879,17 @@ fn evaluate_word_parts(
           let paths =
             paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
           if paths.is_empty() {
-            // No matches: return the literal pattern (bash default behavior)
-            Ok(vec![original_text.into()])
+            let options = state.shell_options();
+            // failglob - error when set
+            if options.contains(ShellOptions::FAILGLOB) {
+              Err(EvaluateWordTextError::NoFilesMatched { pattern })
+            } else if options.contains(ShellOptions::NULLGLOB) {
+              // nullglob - return empty vec (pattern expands to nothing)
+              Ok(Vec::new())
+            } else {
+              // default bash behavior - return pattern literally
+              Ok(vec![current_text.into()])
+            }
           } else {
             let paths = if is_absolute {
               paths
