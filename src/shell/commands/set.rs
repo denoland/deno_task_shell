@@ -4,6 +4,7 @@ use futures::future::LocalBoxFuture;
 
 use crate::shell::types::EnvChange;
 use crate::shell::types::ExecuteResult;
+use crate::shell::types::ShellOptions;
 
 use super::ShellCommand;
 use super::ShellCommandContext;
@@ -37,7 +38,7 @@ fn execute_set(context: &mut ShellCommandContext) -> ExecuteResult {
         let option_name = &args[i + 1];
         match option_name.as_str() {
           "pipefail" => {
-            changes.push(EnvChange::SetOption("pipefail".to_string(), enable));
+            changes.push(EnvChange::SetOption(ShellOptions::PIPEFAIL, enable));
           }
           _ => {
             let _ = context

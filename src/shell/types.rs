@@ -122,14 +122,6 @@ impl ShellState {
     &self.env_vars
   }
 
-  /// Sets a shell option by name (used by `set -o` / `set +o`).
-  pub fn set_option(&mut self, name: &str, value: bool) {
-    match name {
-      "pipefail" => self.set_shell_option(ShellOptions::PIPEFAIL, value),
-      _ => {} // ignore unknown options
-    }
-  }
-
   pub fn get_var(&self, name: &OsStr) -> Option<&OsString> {
     let name = if cfg!(windows) {
       Cow::Owned(name.to_ascii_uppercase())
@@ -174,10 +166,7 @@ impl ShellState {
       EnvChange::Cd(new_dir) => {
         self.set_cwd(new_dir.clone());
       }
-      EnvChange::SetOption(name, value) => {
-        self.set_option(name, *value);
-      }
-      EnvChange::SetShellOption(option, enabled) => {
+      EnvChange::SetOption(option, enabled) => {
         self.set_shell_option(*option, *enabled);
       }
     }
@@ -276,10 +265,8 @@ pub enum EnvChange {
   // `unset ENV_VAR`
   UnsetVar(OsString),
   Cd(PathBuf),
-  // `set -o OPTION` or `set +o OPTION`
-  SetOption(String, bool),
-  // `shopt -s/-u option`
-  SetShellOption(ShellOptions, bool),
+  // `shopt -s/-u option` or `set -o option`
+  SetOption(ShellOptions, bool),
 }
 
 pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;

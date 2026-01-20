@@ -1864,6 +1864,14 @@ async fn pipefail_option() {
     .assert_exit_code(0)
     .run()
     .await;
+
+  // invalid option name
+  TestBuilder::new()
+    .command("set -o invalidopt")
+    .assert_stderr("set: unknown option: invalidopt\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]

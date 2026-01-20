@@ -67,7 +67,7 @@ impl ShellCommand for ShoptCommand {
 
           let changes: Vec<EnvChange> = options_to_change
             .into_iter()
-            .map(|opt| EnvChange::SetShellOption(opt, enabled))
+            .map(|opt| EnvChange::SetOption(opt, enabled))
             .collect();
 
           ExecuteResult::Continue(0, changes, Vec::new())
