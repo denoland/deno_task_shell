@@ -1827,3 +1827,61 @@ async fn shopt_failglob() {
     .run()
     .await;
 }
+
+#[tokio::test]
+async fn pipefail_option() {
+  // Without pipefail: exit code is from last command (0)
+  TestBuilder::new()
+    .command("sh -c 'exit 1' | true")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // With pipefail: exit code is rightmost non-zero (1)
+  TestBuilder::new()
+    .command("set -o pipefail && sh -c 'exit 1' | true")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // Multiple failures - should return rightmost non-zero
+  TestBuilder::new()
+    .command("set -o pipefail && sh -c 'exit 2' | sh -c 'exit 3' | true")
+    .assert_exit_code(3)
+    .run()
+    .await;
+
+  // All succeed - should return 0
+  TestBuilder::new()
+    .command("set -o pipefail && true | true | true")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // Disable pipefail with +o
+  TestBuilder::new()
+    .command("set -o pipefail && set +o pipefail && sh -c 'exit 1' | true")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // invalid option name
+  TestBuilder::new()
+    .command("set -o invalidopt")
+    .assert_stderr("set: unknown option: invalidopt\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn pipefail_with_sigpipe() {
+  // With pipefail and SIGPIPE: should return 141 (128 + 13)
+  TestBuilder::new()
+    .command("set -o pipefail && yes | head -n 1")
+    .assert_stdout("y\n")
+    .assert_exit_code(141)
+    .run()
+    .await;
+}

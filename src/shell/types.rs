@@ -25,7 +25,7 @@ use super::commands::ShellCommand;
 use super::commands::builtin_commands;
 
 bitflags! {
-  /// Shell options that can be set via `shopt`.
+  /// Shell options that can be set via `shopt` or `set -o`.
   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
   pub struct ShellOptions: u32 {
     /// When set, a glob pattern that matches no files expands to nothing
@@ -35,6 +35,9 @@ bitflags! {
     /// This is the default for deno_task_shell (differs from bash).
     /// When unset, unmatched globs are passed through literally (bash default).
     const FAILGLOB = 1 << 1;
+    /// When set, pipeline exit code is the rightmost non-zero exit code.
+    /// Set via `set -o pipefail`.
+    const PIPEFAIL = 1 << 2;
   }
 }
 
@@ -79,7 +82,7 @@ pub struct ShellState {
   kill_signal: KillSignal,
   process_tracker: ChildProcessTracker,
   tree_exit_code_cell: TreeExitCodeCell,
-  /// Shell options set via `shopt`.
+  /// Shell options set via `shopt` or `set -o`.
   shell_options: ShellOptions,
 }
 
@@ -163,7 +166,7 @@ impl ShellState {
       EnvChange::Cd(new_dir) => {
         self.set_cwd(new_dir.clone());
       }
-      EnvChange::SetShellOption(option, enabled) => {
+      EnvChange::SetOption(option, enabled) => {
         self.set_shell_option(*option, *enabled);
       }
     }
@@ -262,8 +265,8 @@ pub enum EnvChange {
   // `unset ENV_VAR`
   UnsetVar(OsString),
   Cd(PathBuf),
-  // `shopt -s/-u option`
-  SetShellOption(ShellOptions, bool),
+  // `shopt -s/-u option` or `set -o option`
+  SetOption(ShellOptions, bool),
 }
 
 pub type FutureExecuteResult = LocalBoxFuture<'static, ExecuteResult>;

@@ -576,20 +576,33 @@ async fn execute_pipe_sequence(
   let output_handle = tokio::task::spawn_blocking(|| {
     last_output.unwrap().pipe_to_sender(stdout).unwrap();
   });
-  let mut results = futures::future::join_all(wait_tasks).await;
+  let results = futures::future::join_all(wait_tasks).await;
   output_handle.await.unwrap();
-  let last_result = results.pop().unwrap();
+
+  // Determine exit code based on pipefail option
+  let exit_code = if state.shell_options().contains(ShellOptions::PIPEFAIL) {
+    // With pipefail: return the rightmost non-zero exit code, or 0 if all succeeded
+    results
+      .iter()
+      .rev()
+      .find_map(|r| {
+        let code = match r {
+          ExecuteResult::Exit(c, _) => *c,
+          ExecuteResult::Continue(c, _, _) => *c,
+        };
+        if code != 0 { Some(code) } else { None }
+      })
+      .unwrap_or(0)
+  } else {
+    // Without pipefail: return the last command's exit code
+    match results.last().unwrap() {
+      ExecuteResult::Exit(code, _) => *code,
+      ExecuteResult::Continue(code, _, _) => *code,
+    }
+  };
+
   let all_handles = results.into_iter().flat_map(|r| r.into_handles());
-  match last_result {
-    ExecuteResult::Exit(code, mut handles) => {
-      handles.extend(all_handles);
-      ExecuteResult::Continue(code, Vec::new(), handles)
-    }
-    ExecuteResult::Continue(code, _, mut handles) => {
-      handles.extend(all_handles);
-      ExecuteResult::Continue(code, Vec::new(), handles)
-    }
-  }
+  ExecuteResult::Continue(exit_code, Vec::new(), all_handles.collect())
 }
 
 async fn execute_subshell(

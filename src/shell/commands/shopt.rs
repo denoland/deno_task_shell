@@ -67,7 +67,7 @@ impl ShellCommand for ShoptCommand {
 
           let changes: Vec<EnvChange> = options_to_change
             .into_iter()
-            .map(|opt| EnvChange::SetShellOption(opt, enabled))
+            .map(|opt| EnvChange::SetOption(opt, enabled))
             .collect();
 
           ExecuteResult::Continue(0, changes, Vec::new())
@@ -77,7 +77,7 @@ impl ShellCommand for ShoptCommand {
           let current_options = context.state.shell_options();
 
           if options_to_change.is_empty() {
-            // print all options
+            // print all options (alphabetical order)
             let _ = context.stdout.write_line(&format!(
               "failglob\t{}",
               if current_options.contains(ShellOptions::FAILGLOB) {
