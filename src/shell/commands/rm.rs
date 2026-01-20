@@ -63,7 +63,7 @@ async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<()> {
       remove_file_or_dir(&path, &flags).await
     };
     if let Err(err) = result
-      && (err.kind() != ErrorKind::NotFound || !flags.force)
+      && !(flags.force && should_ignore_error_with_force(&err))
     {
       bail!(
         "cannot remove '{}': {}",
@@ -74,6 +74,24 @@ async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<()> {
   }
 
   Ok(())
+}
+
+/// Check if an error should be silently ignored when -f (force) flag is used.
+/// This includes:
+/// - NotFound: file doesn't exist
+/// - On Windows: InvalidFilename (os error 123) - happens when literal glob
+///   patterns like "*.nonexistent" are passed (since * is invalid in Windows filenames)
+fn should_ignore_error_with_force(err: &std::io::Error) -> bool {
+  if err.kind() == ErrorKind::NotFound {
+    return true;
+  }
+  // On Windows, glob characters like * are invalid in filenames.
+  // When a non-matching glob is passed literally, Windows returns error 123.
+  #[cfg(windows)]
+  if err.raw_os_error() == Some(123) {
+    return true;
+  }
+  false
 }
 
 async fn remove_file_or_dir(
