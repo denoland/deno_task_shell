@@ -108,6 +108,7 @@ name = "deno_task_shell"
 version = "0.26.2"
 dependencies = [
  "anyhow",
+ "bitflags",
  "deno_path_util",
  "deno_unsync",
  "futures",
