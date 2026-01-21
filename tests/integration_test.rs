@@ -1870,15 +1870,14 @@ async fn shopt_failglob() {
 #[tokio::test]
 async fn shopt_globstar() {
   // globstar on by default: ** matches zero or more directories
+  // use cat to verify all files are matched (content order verifies glob worked)
   TestBuilder::new()
     .directory("sub/deep")
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
     .file("sub/deep/c.txt", "c\n")
-    .command("echo **/*.txt | tr ' ' '\\n' | sort")
-    .assert_stdout(&format!(
-      "a.txt\nsub{FOLDER_SEPERATOR}b.txt\nsub{FOLDER_SEPERATOR}deep{FOLDER_SEPERATOR}c.txt\n"
-    ))
+    .command("cat **/*.txt")
+    .assert_stdout("a\nb\nc\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -1900,8 +1899,8 @@ async fn shopt_globstar() {
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
     .file("sub/deep/c.txt", "c\n")
-    .command("shopt -u globstar && echo **/*.txt")
-    .assert_stdout(&format!("sub{FOLDER_SEPERATOR}b.txt\n")) // only matches one level deep
+    .command("shopt -u globstar && cat **/*.txt")
+    .assert_stdout("b\n") // only matches one level deep (sub/b.txt)
     .assert_exit_code(0)
     .run()
     .await;
@@ -1912,10 +1911,8 @@ async fn shopt_globstar() {
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
     .file("sub/deep/c.txt", "c\n")
-    .command("shopt -u globstar && shopt -s globstar && echo **/*.txt | tr ' ' '\\n' | sort")
-    .assert_stdout(&format!(
-      "a.txt\nsub{FOLDER_SEPERATOR}b.txt\nsub{FOLDER_SEPERATOR}deep{FOLDER_SEPERATOR}c.txt\n"
-    ))
+    .command("shopt -u globstar && shopt -s globstar && cat **/*.txt")
+    .assert_stdout("a\nb\nc\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -1925,21 +1922,21 @@ async fn shopt_globstar() {
 async fn pipefail_option() {
   // Without pipefail: exit code is from last command (0)
   TestBuilder::new()
-    .command("sh -c 'exit 1' | true")
+    .command("(exit 1) | true")
     .assert_exit_code(0)
     .run()
     .await;
 
   // With pipefail: exit code is rightmost non-zero (1)
   TestBuilder::new()
-    .command("set -o pipefail && sh -c 'exit 1' | true")
+    .command("set -o pipefail && (exit 1) | true")
     .assert_exit_code(1)
     .run()
     .await;
 
   // Multiple failures - should return rightmost non-zero
   TestBuilder::new()
-    .command("set -o pipefail && sh -c 'exit 2' | sh -c 'exit 3' | true")
+    .command("set -o pipefail && (exit 2) | (exit 3) | true")
     .assert_exit_code(3)
     .run()
     .await;
@@ -1953,7 +1950,7 @@ async fn pipefail_option() {
 
   // Disable pipefail with +o
   TestBuilder::new()
-    .command("set -o pipefail && set +o pipefail && sh -c 'exit 1' | true")
+    .command("set -o pipefail && set +o pipefail && (exit 1) | true")
     .assert_exit_code(0)
     .run()
     .await;
