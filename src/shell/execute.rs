@@ -1,5 +1,6 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -862,17 +863,21 @@ fn evaluate_word_parts(
 
       // when globstar is disabled, replace ** with * so it doesn't match
       // across directory boundaries (the glob crate always treats ** as recursive)
-      let pattern_text = if !options.contains(ShellOptions::GLOBSTAR)
+      let pattern_text: Cow<str> = if !options.contains(ShellOptions::GLOBSTAR)
         && current_text.contains("**")
       {
-        // replace ** with * to disable recursive matching
-        current_text.replace("**", "*")
+        // repeatedly replace ** with * to handle cases like *** -> ** -> *
+        let mut result = current_text.clone();
+        while result.contains("**") {
+          result = result.replace("**", "*");
+        }
+        Cow::Owned(result)
       } else {
-        current_text.clone()
+        Cow::Borrowed(&current_text)
       };
 
       let pattern = if is_absolute {
-        pattern_text.clone()
+        pattern_text.into_owned()
       } else {
         format!("{}/{}", cwd.display(), pattern_text)
       };
