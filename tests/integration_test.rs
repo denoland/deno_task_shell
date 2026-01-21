@@ -1372,14 +1372,14 @@ async fn glob_basic() {
     .run()
     .await;
 
-  // ** only matches recursively when globstar is enabled
+  // ** matches recursively (globstar on by default)
   TestBuilder::new()
     .directory("sub_dir/sub")
     .file("sub_dir/sub/1.txt", "1\n")
     .file("sub_dir/2.txt", "2\n")
     .file("sub_dir/other.ts", "other\n")
     .file("3.txt", "3\n")
-    .command("shopt -s globstar && cat **/*.txt")
+    .command("cat **/*.txt")
     .assert_stdout("3\n2\n1\n")
     .run()
     .await;
@@ -1390,7 +1390,7 @@ async fn glob_basic() {
     .file("sub_dir/2.txt", "2\n")
     .file("sub_dir/other.ts", "other\n")
     .file("3.txt", "3\n")
-    .command("shopt -s globstar && cat $PWD/**/*.txt")
+    .command("cat $PWD/**/*.txt")
     .assert_stdout("3\n2\n1\n")
     .run()
     .await;
@@ -1703,10 +1703,10 @@ async fn sigpipe_from_pipeline() {
 
 #[tokio::test]
 async fn shopt() {
-  // query all options (default: failglob on, globstar off, nullglob off)
+  // query all options (default: failglob on, globstar on, nullglob off)
   TestBuilder::new()
     .command("shopt")
-    .assert_stdout("failglob\ton\nglobstar\toff\nnullglob\toff\n")
+    .assert_stdout("failglob\ton\nglobstar\ton\nnullglob\toff\n")
     .run()
     .await;
 
@@ -1768,23 +1768,23 @@ async fn shopt() {
   // multiple options
   TestBuilder::new()
     .command("shopt -s nullglob && shopt -u failglob && shopt")
-    .assert_stdout("failglob\toff\nglobstar\toff\nnullglob\ton\n")
+    .assert_stdout("failglob\toff\nglobstar\ton\nnullglob\ton\n")
     .run()
     .await;
 
-  // query globstar option
+  // query globstar option (on by default)
   TestBuilder::new()
     .command("shopt globstar")
-    .assert_stdout("globstar\toff\n")
-    .assert_exit_code(1) // returns 1 when option is off
+    .assert_stdout("globstar\ton\n")
+    .assert_exit_code(0) // returns 0 when option is on
     .run()
     .await;
 
-  // enable globstar
+  // disable globstar
   TestBuilder::new()
-    .command("shopt -s globstar && shopt globstar")
-    .assert_stdout("globstar\ton\n")
-    .assert_exit_code(0)
+    .command("shopt -u globstar && shopt globstar")
+    .assert_stdout("globstar\toff\n")
+    .assert_exit_code(1)
     .run()
     .await;
 }
@@ -1869,42 +1869,15 @@ async fn shopt_failglob() {
 
 #[tokio::test]
 async fn shopt_globstar() {
-  // without globstar: ** behaves like * (single-segment match, doesn't recurse)
-  // **/*.txt without globstar is like */*.txt - matches one level deep only
+  // globstar on by default: ** matches zero or more directories
   TestBuilder::new()
     .directory("sub/deep")
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
     .file("sub/deep/c.txt", "c\n")
-    .command("echo **/*.txt")
-    .assert_stdout(&format!("sub{FOLDER_SEPERATOR}b.txt\n")) // only matches one level deep
-    .assert_exit_code(0)
-    .run()
-    .await;
-
-  // with globstar: ** matches zero or more directories
-  TestBuilder::new()
-    .directory("sub/deep")
-    .file("a.txt", "a\n")
-    .file("sub/b.txt", "b\n")
-    .file("sub/deep/c.txt", "c\n")
-    .command("shopt -s globstar && echo **/*.txt | tr ' ' '\\n' | sort")
+    .command("echo **/*.txt | tr ' ' '\\n' | sort")
     .assert_stdout(&format!(
       "a.txt\nsub{FOLDER_SEPERATOR}b.txt\nsub{FOLDER_SEPERATOR}deep{FOLDER_SEPERATOR}c.txt\n"
-    ))
-    .assert_exit_code(0)
-    .run()
-    .await;
-
-  // globstar with **/ prefix matches recursively in subdirectories
-  TestBuilder::new()
-    .directory("sub/deep")
-    .file("root.txt", "r\n")
-    .file("sub/nested.txt", "n\n")
-    .file("sub/deep/deeper.txt", "d\n")
-    .command("shopt -s globstar && echo **/*.txt | tr ' ' '\\n' | sort")
-    .assert_stdout(&format!(
-      "root.txt\nsub{FOLDER_SEPERATOR}deep{FOLDER_SEPERATOR}deeper.txt\nsub{FOLDER_SEPERATOR}nested.txt\n"
     ))
     .assert_exit_code(0)
     .run()
@@ -1915,20 +1888,34 @@ async fn shopt_globstar() {
     .directory("sub")
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
-    .command("shopt -s globstar && echo *.txt")
+    .command("echo *.txt")
     .assert_stdout("a.txt\n")
     .assert_exit_code(0)
     .run()
     .await;
 
-  // disabling globstar goes back to single-segment behavior
+  // disabling globstar: ** behaves like * (single-segment match)
   TestBuilder::new()
     .directory("sub/deep")
     .file("a.txt", "a\n")
     .file("sub/b.txt", "b\n")
     .file("sub/deep/c.txt", "c\n")
-    .command("shopt -s globstar && shopt -u globstar && echo **/*.txt")
-    .assert_stdout(&format!("sub{FOLDER_SEPERATOR}b.txt\n")) // back to single-level match
+    .command("shopt -u globstar && echo **/*.txt")
+    .assert_stdout(&format!("sub{FOLDER_SEPERATOR}b.txt\n")) // only matches one level deep
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // re-enabling globstar restores recursive behavior
+  TestBuilder::new()
+    .directory("sub/deep")
+    .file("a.txt", "a\n")
+    .file("sub/b.txt", "b\n")
+    .file("sub/deep/c.txt", "c\n")
+    .command("shopt -u globstar && shopt -s globstar && echo **/*.txt | tr ' ' '\\n' | sort")
+    .assert_stdout(&format!(
+      "a.txt\nsub{FOLDER_SEPERATOR}b.txt\nsub{FOLDER_SEPERATOR}deep{FOLDER_SEPERATOR}c.txt\n"
+    ))
     .assert_exit_code(0)
     .run()
     .await;

@@ -46,8 +46,7 @@ bitflags! {
 
 impl Default for ShellOptions {
   fn default() -> Self {
-    // failglob is on by default to preserve existing deno_task_shell behavior
-    ShellOptions::FAILGLOB
+    ShellOptions::FAILGLOB.union(ShellOptions::GLOBSTAR)
   }
 }
 
