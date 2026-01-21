@@ -444,7 +444,8 @@ mod test {
           return Ok(0);
         }
         let read_length = min(buffer.len(), data.len() - offset);
-        buffer[..read_length].copy_from_slice(&data[offset..(offset + read_length)]);
+        buffer[..read_length]
+          .copy_from_slice(&data[offset..(offset + read_length)]);
         offset += read_length;
         Ok(read_length)
       },
@@ -469,7 +470,8 @@ mod test {
           return Ok(0);
         }
         let read_length = min(buffer.len(), data.len() - offset);
-        buffer[..read_length].copy_from_slice(&data[offset..(offset + read_length)]);
+        buffer[..read_length]
+          .copy_from_slice(&data[offset..(offset + read_length)]);
         offset += read_length;
         Ok(read_length)
       },
@@ -494,7 +496,8 @@ mod test {
           return Ok(0);
         }
         let read_length = min(buffer.len(), data.len() - offset);
-        buffer[..read_length].copy_from_slice(&data[offset..(offset + read_length)]);
+        buffer[..read_length]
+          .copy_from_slice(&data[offset..(offset + read_length)]);
         offset += read_length;
         Ok(read_length)
       },
