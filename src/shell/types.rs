@@ -38,13 +38,15 @@ bitflags! {
     /// When set, pipeline exit code is the rightmost non-zero exit code.
     /// Set via `set -o pipefail`.
     const PIPEFAIL = 1 << 2;
+    /// When set, the pattern `**` used in a pathname expansion context will
+    /// match all files and zero or more directories and subdirectories.
+    const GLOBSTAR = 1 << 3;
   }
 }
 
 impl Default for ShellOptions {
   fn default() -> Self {
-    // failglob is on by default to preserve existing deno_task_shell behavior
-    ShellOptions::FAILGLOB
+    ShellOptions::FAILGLOB.union(ShellOptions::GLOBSTAR)
   }
 }
 

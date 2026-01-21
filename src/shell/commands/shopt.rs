@@ -87,6 +87,14 @@ impl ShellCommand for ShoptCommand {
               }
             ));
             let _ = context.stdout.write_line(&format!(
+              "globstar\t{}",
+              if current_options.contains(ShellOptions::GLOBSTAR) {
+                "on"
+              } else {
+                "off"
+              }
+            ));
+            let _ = context.stdout.write_line(&format!(
               "nullglob\t{}",
               if current_options.contains(ShellOptions::NULLGLOB) {
                 "on"
@@ -122,6 +130,7 @@ fn parse_option_name(name: &str) -> Option<ShellOptions> {
   match name {
     "nullglob" => Some(ShellOptions::NULLGLOB),
     "failglob" => Some(ShellOptions::FAILGLOB),
+    "globstar" => Some(ShellOptions::GLOBSTAR),
     _ => None,
   }
 }
@@ -131,6 +140,8 @@ fn option_to_name(opt: ShellOptions) -> &'static str {
     "nullglob"
   } else if opt == ShellOptions::FAILGLOB {
     "failglob"
+  } else if opt == ShellOptions::GLOBSTAR {
+    "globstar"
   } else {
     "unknown"
   }

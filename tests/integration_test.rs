@@ -1412,6 +1412,7 @@ async fn glob_basic() {
     .run()
     .await;
 
+  // ** matches recursively (globstar on by default)
   TestBuilder::new()
     .directory("sub_dir/sub")
     .file("sub_dir/sub/1.txt", "1\n")
@@ -1742,10 +1743,10 @@ async fn sigpipe_from_pipeline() {
 
 #[tokio::test]
 async fn shopt() {
-  // query all options (default: failglob on, nullglob off)
+  // query all options (default: failglob on, globstar on, nullglob off)
   TestBuilder::new()
     .command("shopt")
-    .assert_stdout("failglob\ton\nnullglob\toff\n")
+    .assert_stdout("failglob\ton\nglobstar\ton\nnullglob\toff\n")
     .run()
     .await;
 
@@ -1807,7 +1808,23 @@ async fn shopt() {
   // multiple options
   TestBuilder::new()
     .command("shopt -s nullglob && shopt -u failglob && shopt")
-    .assert_stdout("failglob\toff\nnullglob\ton\n")
+    .assert_stdout("failglob\toff\nglobstar\ton\nnullglob\ton\n")
+    .run()
+    .await;
+
+  // query globstar option (on by default)
+  TestBuilder::new()
+    .command("shopt globstar")
+    .assert_stdout("globstar\ton\n")
+    .assert_exit_code(0) // returns 0 when option is on
+    .run()
+    .await;
+
+  // disable globstar
+  TestBuilder::new()
+    .command("shopt -u globstar && shopt globstar")
+    .assert_stdout("globstar\toff\n")
+    .assert_exit_code(1)
     .run()
     .await;
 }
@@ -1891,24 +1908,75 @@ async fn shopt_failglob() {
 }
 
 #[tokio::test]
+async fn shopt_globstar() {
+  // globstar on by default: ** matches zero or more directories
+  // use cat to verify all files are matched (content order verifies glob worked)
+  TestBuilder::new()
+    .directory("sub/deep")
+    .file("a.txt", "a\n")
+    .file("sub/b.txt", "b\n")
+    .file("sub/deep/c.txt", "c\n")
+    .command("cat **/*.txt")
+    .assert_stdout("a\nb\nc\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // single * still behaves normally even with globstar enabled
+  TestBuilder::new()
+    .directory("sub")
+    .file("a.txt", "a\n")
+    .file("sub/b.txt", "b\n")
+    .command("echo *.txt")
+    .assert_stdout("a.txt\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // disabling globstar: ** behaves like * (single-segment match)
+  TestBuilder::new()
+    .directory("sub/deep")
+    .file("a.txt", "a\n")
+    .file("sub/b.txt", "b\n")
+    .file("sub/deep/c.txt", "c\n")
+    .command("shopt -u globstar && cat **/*.txt")
+    .assert_stdout("b\n") // only matches one level deep (sub/b.txt)
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // re-enabling globstar restores recursive behavior
+  TestBuilder::new()
+    .directory("sub/deep")
+    .file("a.txt", "a\n")
+    .file("sub/b.txt", "b\n")
+    .file("sub/deep/c.txt", "c\n")
+    .command("shopt -u globstar && shopt -s globstar && cat **/*.txt")
+    .assert_stdout("a\nb\nc\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn pipefail_option() {
   // Without pipefail: exit code is from last command (0)
   TestBuilder::new()
-    .command("sh -c 'exit 1' | true")
+    .command("(exit 1) | true")
     .assert_exit_code(0)
     .run()
     .await;
 
   // With pipefail: exit code is rightmost non-zero (1)
   TestBuilder::new()
-    .command("set -o pipefail && sh -c 'exit 1' | true")
+    .command("set -o pipefail && (exit 1) | true")
     .assert_exit_code(1)
     .run()
     .await;
 
   // Multiple failures - should return rightmost non-zero
   TestBuilder::new()
-    .command("set -o pipefail && sh -c 'exit 2' | sh -c 'exit 3' | true")
+    .command("set -o pipefail && (exit 2) | (exit 3) | true")
     .assert_exit_code(3)
     .run()
     .await;
@@ -1922,7 +1990,7 @@ async fn pipefail_option() {
 
   // Disable pipefail with +o
   TestBuilder::new()
-    .command("set -o pipefail && set +o pipefail && sh -c 'exit 1' | true")
+    .command("set -o pipefail && set +o pipefail && (exit 1) | true")
     .assert_exit_code(0)
     .run()
     .await;
