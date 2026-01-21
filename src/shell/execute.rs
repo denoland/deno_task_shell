@@ -858,11 +858,25 @@ fn evaluate_word_parts(
       }
       let is_absolute = Path::new(&current_text).is_absolute();
       let cwd = state.cwd();
-      let pattern = if is_absolute {
-        current_text.clone()
+      let options = state.shell_options();
+
+      // when globstar is disabled, replace ** with * so it doesn't match
+      // across directory boundaries (the glob crate always treats ** as recursive)
+      let pattern_text = if !options.contains(ShellOptions::GLOBSTAR)
+        && current_text.contains("**")
+      {
+        // replace ** with * to disable recursive matching
+        current_text.replace("**", "*")
       } else {
-        format!("{}/{}", cwd.display(), current_text)
+        current_text.clone()
       };
+
+      let pattern = if is_absolute {
+        pattern_text.clone()
+      } else {
+        format!("{}/{}", cwd.display(), pattern_text)
+      };
+
       let result = glob::glob_with(
         &pattern,
         glob::MatchOptions {
@@ -879,7 +893,6 @@ fn evaluate_word_parts(
           let paths =
             paths.into_iter().filter_map(|p| p.ok()).collect::<Vec<_>>();
           if paths.is_empty() {
-            let options = state.shell_options();
             // failglob - error when set
             if options.contains(ShellOptions::FAILGLOB) {
               Err(EvaluateWordTextError::NoFilesMatched { pattern })

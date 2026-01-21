@@ -38,6 +38,9 @@ bitflags! {
     /// When set, pipeline exit code is the rightmost non-zero exit code.
     /// Set via `set -o pipefail`.
     const PIPEFAIL = 1 << 2;
+    /// When set, the pattern `**` used in a pathname expansion context will
+    /// match all files and zero or more directories and subdirectories.
+    const GLOBSTAR = 1 << 3;
   }
 }
 
