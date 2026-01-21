@@ -953,6 +953,46 @@ async fn head() {
     .assert_stdout("foo\nbar\nbaz\n")
     .run()
     .await;
+
+  // negative line count: -n -1 (all but last 1 line)
+  TestBuilder::new()
+    .command("head -n -1")
+    .stdin("line1\nline2\nline3\nline4\nline5\n")
+    .assert_stdout("line1\nline2\nline3\nline4\n")
+    .run()
+    .await;
+
+  // negative line count: -n -2 (all but last 2 lines)
+  TestBuilder::new()
+    .command("head -n -2")
+    .stdin("line1\nline2\nline3\nline4\nline5\n")
+    .assert_stdout("line1\nline2\nline3\n")
+    .run()
+    .await;
+
+  // negative line count with --lines
+  TestBuilder::new()
+    .command("head --lines=-3")
+    .stdin("line1\nline2\nline3\nline4\nline5\n")
+    .assert_stdout("line1\nline2\n")
+    .run()
+    .await;
+
+  // negative line count with file
+  TestBuilder::new()
+    .command("head -n -1 file")
+    .file("file", "line1\nline2\nline3\nline4\nline5\n")
+    .assert_stdout("line1\nline2\nline3\nline4\n")
+    .run()
+    .await;
+
+  // negative line count where skip >= total lines (empty output)
+  TestBuilder::new()
+    .command("head -n -10")
+    .stdin("line1\nline2\nline3\n")
+    .assert_stdout("")
+    .run()
+    .await;
 }
 
 // Basic integration tests as there are unit tests in the commands
