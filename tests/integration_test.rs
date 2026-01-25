@@ -2002,6 +2002,14 @@ async fn pipefail_option() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  // invalid argument
+  TestBuilder::new()
+    .command("set -x")
+    .assert_stderr("set: invalid option: -x\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
 }
 
 #[tokio::test]

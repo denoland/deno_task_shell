@@ -54,8 +54,11 @@ fn execute_set(context: &mut ShellCommandContext) -> ExecuteResult {
         i += 1;
       }
     } else {
-      // Unknown argument
-      i += 1;
+      // unknown argument
+      let _ = context
+        .stderr
+        .write_line(&format!("set: invalid option: {}", arg));
+      return ExecuteResult::from_exit_code(1);
     }
   }
 
