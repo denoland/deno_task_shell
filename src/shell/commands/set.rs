@@ -22,42 +22,77 @@ impl ShellCommand for SetCommand {
 }
 
 fn execute_set(context: &mut ShellCommandContext) -> ExecuteResult {
-  let mut changes = Vec::new();
   let args: Vec<String> = context
     .args
     .iter()
     .filter_map(|a| a.to_str().map(|s| s.to_string()))
     .collect();
 
+  // no arguments - in bash this would list all shell variables
+  // for now, just return success
+  if args.is_empty() {
+    return ExecuteResult::from_exit_code(0);
+  }
+
+  // set -o (list options in human-readable format)
+  if args.len() == 1 && args[0] == "-o" {
+    let opts = context.state.shell_options();
+    let _ = context.stdout.write_line(&format!(
+      "pipefail\t{}",
+      if opts.contains(ShellOptions::PIPEFAIL) {
+        "on"
+      } else {
+        "off"
+      }
+    ));
+    return ExecuteResult::from_exit_code(0);
+  }
+
+  // set +o (output commands to recreate current settings)
+  if args.len() == 1 && args[0] == "+o" {
+    let opts = context.state.shell_options();
+    let _ = context.stdout.write_line(&format!(
+      "set {} pipefail",
+      if opts.contains(ShellOptions::PIPEFAIL) {
+        "-o"
+      } else {
+        "+o"
+      }
+    ));
+    return ExecuteResult::from_exit_code(0);
+  }
+
+  // parse option changes: set -o opt1 -o opt2 +o opt3 ...
+  let mut changes = Vec::new();
   let mut i = 0;
   while i < args.len() {
     let arg = &args[i];
-    if arg == "-o" || arg == "+o" {
+    if (arg == "-o" || arg == "+o") && i + 1 < args.len() {
       let enable = arg == "-o";
-      if i + 1 < args.len() {
-        let option_name = &args[i + 1];
-        match option_name.as_str() {
-          "pipefail" => {
-            changes.push(EnvChange::SetOption(ShellOptions::PIPEFAIL, enable));
-          }
-          _ => {
-            let _ = context
-              .stderr
-              .write_line(&format!("set: unknown option: {}", option_name));
-            return ExecuteResult::from_exit_code(1);
-          }
-        }
+      let option_name = &args[i + 1];
+      if let Some(option) = parse_option_name(option_name) {
+        changes.push(EnvChange::SetOption(option, enable));
         i += 2;
       } else {
-        // No option name provided - in bash this would list options
-        // For now, just return success
-        i += 1;
+        let _ = context
+          .stderr
+          .write_line(&format!("set: unknown option: {}", option_name));
+        return ExecuteResult::from_exit_code(1);
       }
     } else {
-      // Unknown argument
-      i += 1;
+      let _ = context
+        .stderr
+        .write_line(&format!("set: invalid option: {}", arg));
+      return ExecuteResult::from_exit_code(1);
     }
   }
 
   ExecuteResult::Continue(0, changes, Vec::new())
+}
+
+fn parse_option_name(name: &str) -> Option<ShellOptions> {
+  match name {
+    "pipefail" => Some(ShellOptions::PIPEFAIL),
+    _ => None,
+  }
 }

@@ -2002,6 +2002,54 @@ async fn pipefail_option() {
     .assert_exit_code(1)
     .run()
     .await;
+
+  // invalid option
+  TestBuilder::new()
+    .command("set -x")
+    .assert_stderr("set: invalid option: -x\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // invalid option (non-option argument)
+  TestBuilder::new()
+    .command("set foo")
+    .assert_stderr("set: invalid option: foo\n")
+    .assert_exit_code(1)
+    .run()
+    .await;
+
+  // set -o (list options, readable format)
+  TestBuilder::new()
+    .command("set -o")
+    .assert_stdout("pipefail\toff\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // set -o after enabling pipefail
+  TestBuilder::new()
+    .command("set -o pipefail && set -o")
+    .assert_stdout("pipefail\ton\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // set +o (list options, reusable format)
+  TestBuilder::new()
+    .command("set +o")
+    .assert_stdout("set +o pipefail\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // set +o after enabling pipefail
+  TestBuilder::new()
+    .command("set -o pipefail && set +o")
+    .assert_stdout("set -o pipefail\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
 }
 
 #[tokio::test]
