@@ -1,6 +1,6 @@
 [package]
 name = "deno_task_shell"
-version = "0.28.0"
+version = "0.29.0"
 authors = ["the Deno authors"]
 documentation = "https://docs.rs/deno_task_shell"
 edition = "2024"
