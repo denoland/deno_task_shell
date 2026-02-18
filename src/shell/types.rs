@@ -32,7 +32,6 @@ bitflags! {
     /// (empty) rather than returning an error.
     const NULLGLOB = 1 << 0;
     /// When set, a glob pattern that matches no files causes an error.
-    /// This is the default for deno_task_shell (differs from bash).
     /// When unset, unmatched globs are passed through literally (bash default).
     const FAILGLOB = 1 << 1;
     /// When set, pipeline exit code is the rightmost non-zero exit code.
@@ -46,7 +45,7 @@ bitflags! {
 
 impl Default for ShellOptions {
   fn default() -> Self {
-    ShellOptions::FAILGLOB.union(ShellOptions::GLOBSTAR)
+    ShellOptions::GLOBSTAR
   }
 }
 
