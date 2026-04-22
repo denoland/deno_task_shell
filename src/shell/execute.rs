@@ -183,6 +183,13 @@ fn execute_sequential_list(
             async_handles.extend(handles);
             // use the final sequential item's exit code
             final_exit_code = exit_code;
+            if exit_code != 0
+              && state
+                .shell_options()
+                .contains(crate::shell::types::ShellOptions::ERREXIT)
+            {
+              break;
+            }
           }
         }
       }
