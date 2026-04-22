@@ -322,6 +322,38 @@ pub enum RedirectOpOutput {
 }
 
 pub fn parse(input: &str) -> Result<SequentialList> {
+  /// Clips the snippet to the current line and, for multi-line input,
+  /// prefixes the message with a 1-based line number.
+  fn failure_to_error(
+    original: &str,
+    failure: ParseErrorFailure<'_>,
+  ) -> ParseErrorFailureError {
+    fn line_of(original: &str, remaining: &str) -> usize {
+      let offset = original.len().saturating_sub(remaining.len());
+      original[..offset].bytes().filter(|&b| b == b'\n').count() + 1
+    }
+
+    let snippet: String = failure
+      .input
+      .chars()
+      .take_while(|&c| c != '\n' && c != '\r')
+      .take(60)
+      .collect();
+    let message = if original.contains('\n') {
+      format!(
+        "{} (line {})",
+        failure.message,
+        line_of(original, failure.input)
+      )
+    } else {
+      failure.message
+    };
+    ParseErrorFailureError {
+      message,
+      code_snippet: Some(snippet),
+    }
+  }
+
   match parse_sequential_list(input) {
     Ok((remaining, expr)) => {
       if remaining.trim().is_empty() {
@@ -339,39 +371,6 @@ pub fn parse(input: &str) -> Result<SequentialList> {
     }
     Err(ParseError::Failure(e)) => Err(failure_to_error(input, e).into()),
   }
-}
-
-/// Clips the snippet to the current line and, for multi-line input,
-/// prefixes the message with a 1-based line number.
-fn failure_to_error(
-  original: &str,
-  failure: ParseErrorFailure<'_>,
-) -> ParseErrorFailureError {
-  let snippet: String = failure
-    .input
-    .chars()
-    .take_while(|&c| c != '\n' && c != '\r')
-    .take(60)
-    .collect();
-  let message = if original.contains('\n') {
-    format!(
-      "{} (line {})",
-      failure.message,
-      line_of(original, failure.input)
-    )
-  } else {
-    failure.message
-  };
-  ParseErrorFailureError {
-    message,
-    code_snippet: Some(snippet),
-  }
-}
-
-/// 1-based line number where the parser stopped.
-fn line_of(original: &str, remaining: &str) -> usize {
-  let offset = original.len().saturating_sub(remaining.len());
-  original[..offset].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
@@ -1250,6 +1249,7 @@ mod test {
 
     // after a trailing operator, a newline is a continuation not a terminator
     assert_eq!(parse("echo foo &&\necho bar").unwrap().items.len(), 1);
+    assert_eq!(parse("false ||\necho fallback").unwrap().items.len(), 1);
     assert_eq!(parse("echo foo |\ngrep bar").unwrap().items.len(), 1);
     assert_eq!(parse("echo foo;\necho bar").unwrap().items.len(), 2);
 
@@ -1317,6 +1317,23 @@ mod test {
     assert_eq!(parse("echo hello\\\r\nworld").unwrap().items.len(), 1);
     // after a shell var assignment
     assert_eq!(parse("FOO=bar \\\necho $FOO").unwrap().items.len(), 1);
+    // trailing `\` at EOF is a literal backslash, not a continuation (bash-compatible)
+    let list = parse("echo hello\\").unwrap();
+    assert_eq!(list.items.len(), 1);
+    let Sequence::Pipeline(pipeline) = &list.items[0].sequence else {
+      panic!("expected pipeline");
+    };
+    let PipelineInner::Command(cmd) = &pipeline.inner else {
+      panic!("expected command");
+    };
+    let CommandInner::Simple(simple) = &cmd.inner else {
+      panic!("expected simple command");
+    };
+    assert_eq!(simple.args.len(), 2);
+    assert_eq!(
+      simple.args[1].parts(),
+      &vec![WordPart::Text("hello\\".to_string())],
+    );
   }
 
   #[test]
@@ -2149,6 +2166,7 @@ mod test {
       serialize_to_json("./example > output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2186,6 +2204,7 @@ mod test {
       serialize_to_json("./example 2> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2226,6 +2245,7 @@ mod test {
       serialize_to_json("./example &> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2265,6 +2285,7 @@ mod test {
       serialize_to_json("./example < output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2303,6 +2324,7 @@ mod test {
       serialize_to_json("./example <&0"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
