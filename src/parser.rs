@@ -368,24 +368,14 @@ fn failure_to_error(
   }
 }
 
-/// 1-based line number where `remaining` begins within `original`. Falls
-/// back to 1 if `remaining` isn't actually a subslice of `original`.
+/// 1-based line number where the parser stopped. Relies on the invariant
+/// that `remaining` is always a suffix of `original` produced by consuming
+/// from the front, so its byte-length gives the offset directly without
+/// any pointer arithmetic — which also handles monch's detached `""`
+/// case (length 0 → offset = end of input).
 fn line_of(original: &str, remaining: &str) -> usize {
-  let line_count = |s: &str| s.bytes().filter(|&b| b == b'\n').count() + 1;
-  // when the failure is at end-of-input, the failure slice may be a
-  // detached `""` (monch's `skip_whitespace` returns the literal `""`
-  // when it consumes all remaining chars), so handle that up-front.
-  if remaining.is_empty() {
-    return line_count(original);
-  }
-  let orig_ptr = original.as_ptr() as usize;
-  let rem_ptr = remaining.as_ptr() as usize;
-  let orig_end = orig_ptr + original.len();
-  if rem_ptr < orig_ptr || rem_ptr > orig_end {
-    return 1;
-  }
-  let offset = rem_ptr - orig_ptr;
-  line_count(&original[..offset])
+  let offset = original.len().saturating_sub(remaining.len());
+  original[..offset].bytes().filter(|&b| b == b'\n').count() + 1
 }
 
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
