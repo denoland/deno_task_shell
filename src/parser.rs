@@ -320,31 +320,78 @@ pub enum RedirectOpOutput {
 
 pub fn parse(input: &str) -> Result<SequentialList> {
   match parse_sequential_list(input) {
-    Ok((input, expr)) => {
-      if input.trim().is_empty() {
+    Ok((remaining, expr)) => {
+      if remaining.trim().is_empty() {
         if expr.items.is_empty() {
           bail!("Empty command.")
         } else {
           Ok(expr)
         }
       } else {
-        fail_for_trailing_input(input)
-          .into_result()
-          .map_err(|err| err.into())
+        Err(failure_to_error(input, fail_for_trailing_input(remaining)).into())
       }
     }
-    Err(ParseError::Backtrace) => fail_for_trailing_input(input)
-      .into_result()
-      .map_err(|err| err.into()),
-    Err(ParseError::Failure(e)) => e.into_result().map_err(|err| err.into()),
+    Err(ParseError::Backtrace) => {
+      Err(failure_to_error(input, fail_for_trailing_input(input)).into())
+    }
+    Err(ParseError::Failure(e)) => Err(failure_to_error(input, e).into()),
   }
 }
 
+/// Turns a `ParseErrorFailure` into a final `ParseErrorFailureError`.
+///
+/// The code-snippet is clipped to the current line so the error's `~` caret
+/// always points at the correct column, and the message is prefixed with
+/// the 1-based line number when the original input spans multiple lines.
+fn failure_to_error(
+  original: &str,
+  failure: ParseErrorFailure<'_>,
+) -> ParseErrorFailureError {
+  let snippet: String = failure
+    .input
+    .chars()
+    .take_while(|&c| c != '\n' && c != '\r')
+    .take(60)
+    .collect();
+  let message = if original.contains('\n') {
+    format!("{} (line {})", failure.message, line_of(original, failure.input))
+  } else {
+    failure.message
+  };
+  ParseErrorFailureError {
+    message,
+    code_snippet: Some(snippet),
+  }
+}
+
+/// 1-based line number where `remaining` begins within `original`. Falls
+/// back to 1 if `remaining` isn't actually a subslice of `original`.
+fn line_of(original: &str, remaining: &str) -> usize {
+  let line_count =
+    |s: &str| s.bytes().filter(|&b| b == b'\n').count() + 1;
+  // when the failure is at end-of-input, the failure slice may be a
+  // detached `""` (monch's `skip_whitespace` returns the literal `""`
+  // when it consumes all remaining chars), so handle that up-front.
+  if remaining.is_empty() {
+    return line_count(original);
+  }
+  let orig_ptr = original.as_ptr() as usize;
+  let rem_ptr = remaining.as_ptr() as usize;
+  let orig_end = orig_ptr + original.len();
+  if rem_ptr < orig_ptr || rem_ptr > orig_end {
+    return 1;
+  }
+  let offset = rem_ptr - orig_ptr;
+  line_count(&original[..offset])
+}
+
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
+  // allow blank leading lines (POSIX `linebreak`)
+  let (input, _) = skip_whitespace(input)?;
   let (input, items) = separated_list(
-    terminated(parse_sequential_list_item, skip_whitespace),
+    terminated(parse_sequential_list_item, skip_inline_whitespace),
     terminated(
-      skip_whitespace,
+      skip_inline_whitespace,
       or(
         map(parse_sequential_list_op, |_| ()),
         map(parse_async_list_op, |_| ()),
@@ -373,7 +420,7 @@ fn parse_sequence(input: &str) -> ParseResult<'_, Sequence> {
       parse_shell_var_command,
       map(parse_pipeline, Sequence::Pipeline),
     ),
-    skip_whitespace,
+    skip_inline_whitespace,
   )(input)?;
 
   Ok(match parse_boolean_list_op(input) {
@@ -467,12 +514,12 @@ fn parse_command(input: &str) -> ParseResult<'_, Command> {
       map(parse_subshell, |l| CommandInner::Subshell(Box::new(l))),
       map(parse_simple_command, CommandInner::Simple),
     ),
-    skip_whitespace,
+    skip_inline_whitespace,
   )(input)?;
 
   let before_redirects_input = input;
   let (input, mut redirects) =
-    many0(terminated(parse_redirect, skip_whitespace))(input)?;
+    many0(terminated(parse_redirect, skip_inline_whitespace))(input)?;
 
   if redirects.len() > 1 {
     return ParseError::fail(
@@ -535,7 +582,10 @@ fn parse_boolean_list_op(input: &str) -> ParseResult<'_, BooleanListOperator> {
 }
 
 fn parse_sequential_list_op(input: &str) -> ParseResult<'_, &str> {
-  terminated(tag(";"), skip_whitespace)(input)
+  // `;`, a newline, or a CRLF newline all terminate a command (POSIX
+  // treats `\n` as equivalent to `;`). Any trailing blank lines /
+  // whitespace are then skipped.
+  terminated(or3(tag(";"), tag("\r\n"), tag("\n")), skip_whitespace)(input)
 }
 
 fn parse_async_list_op(input: &str) -> ParseResult<'_, &str> {
@@ -590,7 +640,7 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
   )(input)?;
   let (input, io_file) = or(
     map(preceded(ch('&'), parse_u32), IoFile::Fd),
-    map(preceded(skip_whitespace, parse_word), IoFile::Word),
+    map(preceded(skip_inline_whitespace, parse_word), IoFile::Word),
   )(input)?;
 
   let maybe_fd = if let Some(fd) = maybe_fd {
@@ -612,7 +662,7 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
 }
 
 fn parse_env_vars(input: &str) -> ParseResult<'_, Vec<EnvVar>> {
-  many0(terminated(parse_env_var, skip_whitespace))(input)
+  many0(terminated(parse_env_var, skip_inline_whitespace))(input)
 }
 
 fn parse_env_var(input: &str) -> ParseResult<'_, EnvVar> {
@@ -865,7 +915,16 @@ fn parse_word_parts(
 
     let original_input = input;
     let (input, parts) = many0(or7(
-      or3(
+      or4(
+        // a backslash immediately followed by a newline is a POSIX
+        // line continuation — both characters are consumed and produce
+        // nothing. Applies in unquoted words and inside `"..."`; inside
+        // `'...'` the single-quote parser never reaches this branch so
+        // the characters are preserved, as per POSIX.
+        map(
+          or(tag("\\\r\n"), tag("\\\n")),
+          |_| PendingPart::Parts(Vec::new()),
+        ),
         map(tag("$?"), |_| PendingPart::Variable("?")),
         map(first_escaped_char(mode), PendingPart::Char),
         map(parse_command_substitution, PendingPart::Command),
@@ -1041,7 +1100,9 @@ fn parse_u32(input: &str) -> ParseResult<'_, u32> {
 }
 
 fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<'_, ()> {
-  terminated(assert_whitespace_or_end, skip_whitespace)(input)
+  // a newline terminates the command — don't skip it here so that
+  // `parse_sequential_list_op` can pick it up as a separator.
+  terminated(assert_whitespace_or_end, skip_inline_whitespace)(input)
 }
 
 fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
@@ -1052,6 +1113,39 @@ fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
     return Err(ParseError::Failure(fail_for_trailing_input(input)));
   }
   Ok((input, ()))
+}
+
+/// Like `monch::skip_whitespace`, but stops at `\n` / `\r\n`. A backslash
+/// immediately followed by a newline is consumed as a POSIX line
+/// continuation.
+fn skip_inline_whitespace(input: &str) -> ParseResult<'_, ()> {
+  let bytes = input.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() {
+    match bytes[i] {
+      b' ' | b'\t' => i += 1,
+      b'\\' if bytes.get(i + 1) == Some(&b'\n') => i += 2,
+      b'\\'
+        if bytes.get(i + 1) == Some(&b'\r')
+          && bytes.get(i + 2) == Some(&b'\n') =>
+      {
+        i += 3;
+      }
+      c if !c.is_ascii() => {
+        // any non-ASCII whitespace (U+00A0, etc.) — still skip, but
+        // not `\n` which is ASCII and handled above.
+        let rest = &input[i..];
+        let ch = rest.chars().next().unwrap();
+        if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+          i += ch.len_utf8();
+        } else {
+          break;
+        }
+      }
+      _ => break,
+    }
+  }
+  Ok((&input[i..], ()))
 }
 
 fn is_valid_env_var_char(c: char) -> bool {
@@ -1135,6 +1229,135 @@ mod test {
     assert!(parse("command --arg=\"value\"").is_ok());
     assert!(
       parse("deno run --allow-read=. --allow-write=./testing main.ts").is_ok(),
+    );
+  }
+
+  #[test]
+  fn multi_line_input() {
+    // single-line sanity checks (unchanged)
+    assert_eq!(parse("echo foo").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo; echo bar").unwrap().items.len(), 2);
+    assert_eq!(parse("echo foo && echo bar").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo | grep bar").unwrap().items.len(), 1);
+
+    // newline acts as a sequence separator, like `;`
+    assert_eq!(parse("echo foo\necho bar").unwrap().items.len(), 2);
+    // blank lines between commands are skipped
+    assert_eq!(parse("echo foo\n\n\necho bar").unwrap().items.len(), 2);
+    // a trailing newline is ignored
+    assert_eq!(parse("echo foo\n").unwrap().items.len(), 1);
+    // leading blank lines are ignored
+    assert_eq!(parse("\n\necho foo").unwrap().items.len(), 1);
+    // CRLF line endings behave the same as LF
+    assert_eq!(parse("echo foo\r\necho bar").unwrap().items.len(), 2);
+
+    // newlines inside quoted strings are preserved as part of the arg
+    assert_eq!(parse("echo \"hello\nworld\"").unwrap().items.len(), 1);
+    assert_eq!(parse("echo 'hello\nworld'").unwrap().items.len(), 1);
+
+    // after a trailing operator, a newline is a continuation not a terminator
+    assert_eq!(parse("echo foo &&\necho bar").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo |\ngrep bar").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo;\necho bar").unwrap().items.len(), 2);
+
+    // newlines inside a subshell act as separators within the subshell
+    assert_eq!(parse("(echo a\necho b)").unwrap().items.len(), 1);
+
+    // multi-command scripts
+    assert_eq!(
+      parse("cd webview\nexport FOO=bar\nmake").unwrap().items.len(),
+      3,
+    );
+
+    // env assignment on its own line is a shell var
+    assert_eq!(parse("FOO=bar\ncmd").unwrap().items.len(), 2);
+  }
+
+  #[test]
+  fn backslash_newline_line_continuation() {
+    // between tokens with a preceding space: the bs+nl is elided
+    assert_eq!(parse("echo hello \\\nworld").unwrap().items.len(), 1);
+    // inside a word (no separator): the two halves are joined into one token
+    assert_eq!(parse("echo hello\\\nworld").unwrap().items.len(), 1);
+    // between command name and first arg: also joined
+    assert_eq!(parse("echo\\\nhello").unwrap().items.len(), 1);
+    // inside double quotes: joined (bash-compatible)
+    assert_eq!(parse("echo \"hello\\\nworld\"").unwrap().items.len(), 1);
+    // inside single quotes: preserved literally (bash-compatible)
+    assert_eq!(parse("echo 'hello\\\nworld'").unwrap().items.len(), 1);
+    // line continuation with a CRLF newline
+    assert_eq!(parse("echo hello\\\r\nworld").unwrap().items.len(), 1);
+    // after a shell var assignment
+    assert_eq!(parse("FOO=bar \\\necho $FOO").unwrap().items.len(), 1);
+  }
+
+  #[test]
+  fn multi_line_error_messages_point_at_the_right_line() {
+    // unclosed double quote on line 2
+    assert_eq!(
+      parse("echo ok\necho \"unclosed").unwrap_err().to_string(),
+      concat!(
+        "Expected closing double quote. (line 2)\n",
+        "  \"unclosed\n",
+        "  ~",
+      ),
+    );
+    // unclosed double quote on line 1
+    assert_eq!(
+      parse("echo \"unclosed\necho ok").unwrap_err().to_string(),
+      concat!(
+        "Expected closing double quote. (line 1)\n",
+        "  \"unclosed\n",
+        "  ~",
+      ),
+    );
+    // bad operator at start of line 2
+    assert_eq!(
+      parse("echo ok\n&& echo bad").unwrap_err().to_string(),
+      concat!(
+        "Unexpected character. (line 2)\n",
+        "  && echo bad\n",
+        "  ~",
+      ),
+    );
+    // unexpected `;` on line 3
+    assert_eq!(
+      parse("echo ok\necho ok\n; foo").unwrap_err().to_string(),
+      concat!("Unexpected character. (line 3)\n", "  ; foo\n", "  ~",),
+    );
+    // trailing `&&` with nothing following
+    assert_eq!(
+      parse("echo ok &&\n").unwrap_err().to_string(),
+      concat!(
+        "Expected command following boolean operator. (line 2)\n",
+        "  \n",
+        "  ~",
+      ),
+    );
+    // unclosed subshell: caret points at the opening `(`
+    assert_eq!(
+      parse("echo ok\n(echo nested\necho more")
+        .unwrap_err()
+        .to_string(),
+      concat!(
+        "Expected closing parenthesis on subshell. (line 2)\n",
+        "  (echo nested\n",
+        "  ~",
+      ),
+    );
+    // unclosed backtick on line 2
+    assert_eq!(
+      parse("echo a\necho `not closed").unwrap_err().to_string(),
+      concat!(
+        "Expected closing backtick. (line 2)\n",
+        "  `not closed\n",
+        "  ~",
+      ),
+    );
+    // single-line input keeps its unchanged message (no `(line N)` suffix)
+    assert_eq!(
+      parse("echo \"unclosed").unwrap_err().to_string(),
+      concat!("Expected closing double quote.\n", "  \"unclosed\n", "  ~",),
     );
   }
 
