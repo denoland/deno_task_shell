@@ -51,7 +51,10 @@ async fn cp_command(
   }
 }
 
-async fn execute_cp(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
+async fn execute_cp(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<(), ShellCommandError> {
   let flags = parse_cp_args(cwd, args)?;
   for (from, to) in &flags.operations {
     if let Err(err) = do_copy_operation(&flags, from, to).await {
@@ -144,7 +147,10 @@ struct CpFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_cp_args(cwd: &Path, args: &[OsString]) -> Result<CpFlags, ShellCommandError> {
+fn parse_cp_args(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<CpFlags, ShellCommandError> {
   let mut paths = Vec::new();
   let mut recursive = false;
   for arg in parse_arg_kinds(args) {
@@ -206,7 +212,10 @@ async fn mv_command(
   }
 }
 
-async fn execute_mv(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
+async fn execute_mv(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<(), ShellCommandError> {
   let flags = parse_mv_args(cwd, args)?;
   for (from, to) in flags.operations {
     if let Err(err) = tokio::fs::rename(&from.path, &to.path).await {
@@ -225,7 +234,10 @@ struct MvFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_mv_args(cwd: &Path, args: &[OsString]) -> Result<MvFlags, ShellCommandError> {
+fn parse_mv_args(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<MvFlags, ShellCommandError> {
   let mut paths = Vec::new();
   for arg in parse_arg_kinds(args) {
     match arg {

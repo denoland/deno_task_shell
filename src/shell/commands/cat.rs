@@ -32,7 +32,9 @@ impl ShellCommand for CatCommand {
   }
 }
 
-fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult, ShellCommandError> {
+fn execute_cat(
+  mut context: ShellCommandContext,
+) -> Result<ExecuteResult, ShellCommandError> {
   let flags = parse_args(context.args)?;
   let mut exit_code = 0;
   let mut buf = vec![0; 4096];

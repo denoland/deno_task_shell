@@ -48,7 +48,10 @@ async fn mkdir_command(
   }
 }
 
-async fn execute_mkdir(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
+async fn execute_mkdir(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<(), ShellCommandError> {
   let flags = parse_args(args)?;
   for specified_path in flags.paths {
     let path = cwd.join(specified_path);

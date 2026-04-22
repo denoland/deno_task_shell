@@ -49,7 +49,10 @@ async fn rm_command(
   }
 }
 
-async fn execute_remove(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
+async fn execute_remove(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<(), ShellCommandError> {
   let flags = parse_args(args)?;
   for specified_path in &flags.paths {
     let path = cwd.join(specified_path);

@@ -131,7 +131,9 @@ fn copy_all_but_last_lines<F: FnMut(&mut [u8]) -> std::io::Result<usize>>(
   Ok(ExecuteResult::from_exit_code(0))
 }
 
-fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult, ShellCommandError> {
+fn execute_head(
+  mut context: ShellCommandContext,
+) -> Result<ExecuteResult, ShellCommandError> {
   let flags = parse_args(&context.args)?;
   match flags.lines {
     LineCount::First(max_lines) => {
@@ -219,7 +221,9 @@ fn parse_line_count(s: &str) -> Result<LineCount, ShellCommandError> {
   }
 }
 
-fn parse_args<'a>(args: &'a [OsString]) -> Result<HeadFlags<'a>, ShellCommandError> {
+fn parse_args<'a>(
+  args: &'a [OsString],
+) -> Result<HeadFlags<'a>, ShellCommandError> {
   let mut path: Option<&'a OsStr> = None;
   let mut lines: Option<LineCount> = None;
   let mut iterator = parse_arg_kinds(args).into_iter();

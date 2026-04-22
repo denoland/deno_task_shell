@@ -107,7 +107,10 @@ mod windows {
       }
     }
 
-    fn add_process_handle(&self, process_handle: HANDLE) -> std::io::Result<()> {
+    fn add_process_handle(
+      &self,
+      process_handle: HANDLE,
+    ) -> std::io::Result<()> {
       // SAFETY: WinAPI call
       unsafe {
         let result = AssignProcessToJobObject(self.0.as_raw(), process_handle);

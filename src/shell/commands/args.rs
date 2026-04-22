@@ -19,9 +19,9 @@ impl ArgKind<'_> {
         "unsupported argument: {}",
         arg.to_string_lossy()
       ))),
-      ArgKind::LongFlag(name) => {
-        Err(ShellCommandError::new(format!("unsupported flag: --{name}")))
-      }
+      ArgKind::LongFlag(name) => Err(ShellCommandError::new(format!(
+        "unsupported flag: --{name}"
+      ))),
       ArgKind::ShortFlag(name) => {
         Err(ShellCommandError::new(format!("unsupported flag: -{name}")))
       }

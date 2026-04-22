@@ -39,7 +39,10 @@ impl ShellCommand for CdCommand {
   }
 }
 
-fn execute_cd(cwd: &Path, args: &[OsString]) -> Result<PathBuf, ShellCommandError> {
+fn execute_cd(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<PathBuf, ShellCommandError> {
   let path = parse_args(args)?;
   let new_dir = cwd.join(path);
   let new_dir = match new_dir.parse_dot() {

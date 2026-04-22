@@ -371,7 +371,10 @@ impl ShellPipeReader {
     self.pipe_to_inner(writer, false)
   }
 
-  fn pipe_to_with_flushing(self, writer: &mut dyn Write) -> std::io::Result<()> {
+  fn pipe_to_with_flushing(
+    self,
+    writer: &mut dyn Write,
+  ) -> std::io::Result<()> {
     self.pipe_to_inner(writer, true)
   }
 
@@ -398,7 +401,10 @@ impl ShellPipeReader {
   }
 
   /// Pipes this pipe to the specified sender.
-  pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> std::io::Result<()> {
+  pub fn pipe_to_sender(
+    self,
+    mut sender: ShellPipeWriter,
+  ) -> std::io::Result<()> {
     match &mut sender {
       ShellPipeWriter::OsPipe(pipe) => self.pipe_to(pipe),
       ShellPipeWriter::StdFile(file) => self.pipe_to(file),

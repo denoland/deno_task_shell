@@ -34,7 +34,10 @@ impl ShellCommand for PwdCommand {
   }
 }
 
-fn execute_pwd(cwd: &Path, args: &[OsString]) -> Result<String, ShellCommandError> {
+fn execute_pwd(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<String, ShellCommandError> {
   let flags = parse_args(args)?;
   let cwd = if flags.logical {
     fs_util::canonicalize_path(cwd).map_err(|err| {
