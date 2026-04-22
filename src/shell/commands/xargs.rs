@@ -2,8 +2,6 @@
 
 use std::ffi::OsString;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 
@@ -15,6 +13,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 
 pub struct XargsCommand;
 
@@ -49,7 +49,7 @@ impl ShellCommand for XargsCommand {
 fn xargs_collect_args(
   cli_args: &[OsString],
   stdin: ShellPipeReader,
-) -> Result<Vec<OsString>> {
+) -> Result<Vec<OsString>, ShellCommandError> {
   let flags = parse_args(cli_args)?;
   let mut buf = Vec::new();
   stdin.pipe_to(&mut buf)?;
@@ -78,7 +78,7 @@ fn xargs_collect_args(
   Ok(args)
 }
 
-fn delimit_blanks(text: &str) -> Result<Vec<OsString>> {
+fn delimit_blanks(text: &str) -> Result<Vec<OsString>, ShellCommandError> {
   let mut chars = text.chars().peekable();
   let mut result = Vec::new();
   while chars.peek().is_some() {
@@ -127,8 +127,8 @@ struct XargsFlags {
   is_null_delimited: bool,
 }
 
-fn parse_args(args: &[OsString]) -> Result<XargsFlags> {
-  fn parse_delimiter(arg: &str) -> Result<char> {
+fn parse_args(args: &[OsString]) -> Result<XargsFlags, ShellCommandError> {
+  fn parse_delimiter(arg: &str) -> Result<char, ShellCommandError> {
     let mut chars = arg.chars();
     if let Some(first_char) = chars.next() {
       let mut delimiter = first_char;

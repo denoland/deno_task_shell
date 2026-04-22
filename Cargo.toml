@@ -15,7 +15,6 @@ shell = ["deno_path_util", "futures", "glob", "nix", "path-dedot", "tokio", "win
 serialization = ["serde"]
 
 [dependencies]
-anyhow = "1.0.75"
 bitflags = "2.6"
 futures = { version = "0.3.29", optional = true }
 glob = { version = "0.3.1", optional = true }

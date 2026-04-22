@@ -5,6 +5,7 @@ mod cat;
 mod cd;
 mod cp_mv;
 mod echo;
+mod error;
 mod executable;
 mod exit;
 mod export;

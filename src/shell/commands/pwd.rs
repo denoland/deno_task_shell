@@ -1,7 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use anyhow::Context;
-use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use std::ffi::OsString;
 use std::path::Path;
@@ -13,6 +11,7 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
 
 pub struct PwdCommand;
 
@@ -35,11 +34,19 @@ impl ShellCommand for PwdCommand {
   }
 }
 
-fn execute_pwd(cwd: &Path, args: &[OsString]) -> Result<String> {
+fn execute_pwd(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<String, ShellCommandError> {
   let flags = parse_args(args)?;
   let cwd = if flags.logical {
-    fs_util::canonicalize_path(cwd)
-      .with_context(|| format!("error canonicalizing: {}", cwd.display()))?
+    fs_util::canonicalize_path(cwd).map_err(|err| {
+      ShellCommandError::new(format!(
+        "error canonicalizing: {}: {}",
+        cwd.display(),
+        err
+      ))
+    })?
   } else {
     cwd.to_path_buf()
   };
@@ -51,7 +58,7 @@ struct PwdFlags {
   logical: bool,
 }
 
-fn parse_args(args: &[OsString]) -> Result<PwdFlags> {
+fn parse_args(args: &[OsString]) -> Result<PwdFlags, ShellCommandError> {
   let mut logical = false;
   for arg in parse_arg_kinds(args) {
     match arg {
