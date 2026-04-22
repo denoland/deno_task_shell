@@ -2149,6 +2149,7 @@ mod test {
       serialize_to_json("./example > output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2186,6 +2187,7 @@ mod test {
       serialize_to_json("./example 2> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2226,6 +2228,7 @@ mod test {
       serialize_to_json("./example &> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2265,6 +2268,7 @@ mod test {
       serialize_to_json("./example < output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2303,6 +2307,7 @@ mod test {
       serialize_to_json("./example <&0"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
