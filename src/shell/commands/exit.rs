@@ -2,8 +2,6 @@
 
 use std::ffi::OsString;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::future::LocalBoxFuture;
 
 use crate::shell::types::ExecuteResult;
@@ -12,6 +10,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 
 pub struct ExitCommand;
 
@@ -31,7 +31,7 @@ impl ShellCommand for ExitCommand {
   }
 }
 
-fn execute_exit(args: &[OsString]) -> Result<i32> {
+fn execute_exit(args: &[OsString]) -> Result<i32, ShellCommandError> {
   let exit_code = parse_args(args)?;
 
   Ok(if exit_code < 0 {
@@ -42,7 +42,7 @@ fn execute_exit(args: &[OsString]) -> Result<i32> {
   })
 }
 
-fn parse_args(args: &[OsString]) -> Result<i32> {
+fn parse_args(args: &[OsString]) -> Result<i32, ShellCommandError> {
   let args = parse_arg_kinds(args);
   let mut paths = Vec::new();
   for arg in args {

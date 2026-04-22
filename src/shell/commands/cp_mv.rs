@@ -5,9 +5,6 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::Context;
-use anyhow::Result;
-use anyhow::bail;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use futures::future::LocalBoxFuture;
@@ -19,6 +16,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 use super::execute_with_cancellation;
 
 pub struct CpCommand;
@@ -52,7 +51,7 @@ async fn cp_command(
   }
 }
 
-async fn execute_cp(cwd: &Path, args: &[OsString]) -> Result<()> {
+async fn execute_cp(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
   let flags = parse_cp_args(cwd, args)?;
   for (from, to) in &flags.operations {
     if let Err(err) = do_copy_operation(&flags, from, to).await {
@@ -71,7 +70,7 @@ async fn do_copy_operation(
   flags: &CpFlags,
   from: &PathWithSpecified,
   to: &PathWithSpecified,
-) -> Result<()> {
+) -> Result<(), ShellCommandError> {
   // These are racy with the file system, but that's ok.
   // They only exists to give better error messages.
   if from.path.is_dir() {
@@ -97,15 +96,15 @@ async fn do_copy_operation(
 fn copy_dir_recursively(
   from: PathBuf,
   to: PathBuf,
-) -> BoxFuture<'static, Result<()>> {
+) -> BoxFuture<'static, Result<(), ShellCommandError>> {
   // recursive, so box it
   async move {
-    tokio::fs::create_dir_all(&to)
-      .await
-      .with_context(|| format!("Creating {}", to.display()))?;
-    let mut read_dir = tokio::fs::read_dir(&from)
-      .await
-      .with_context(|| format!("Reading {}", from.display()))?;
+    tokio::fs::create_dir_all(&to).await.map_err(|err| {
+      ShellCommandError::new(format!("Creating {}: {}", to.display(), err))
+    })?;
+    let mut read_dir = tokio::fs::read_dir(&from).await.map_err(|err| {
+      ShellCommandError::new(format!("Reading {}: {}", from.display(), err))
+    })?;
 
     while let Some(entry) = read_dir.next_entry().await? {
       let file_type = entry.file_type().await?;
@@ -115,12 +114,22 @@ fn copy_dir_recursively(
       if file_type.is_dir() {
         copy_dir_recursively(new_from.clone(), new_to.clone())
           .await
-          .with_context(|| {
-            format!("Dir {} to {}", new_from.display(), new_to.display())
+          .map_err(|err| {
+            ShellCommandError::new(format!(
+              "Dir {} to {}: {}",
+              new_from.display(),
+              new_to.display(),
+              err
+            ))
           })?;
       } else if file_type.is_file() {
-        tokio::fs::copy(&new_from, &new_to).await.with_context(|| {
-          format!("Copying {} to {}", new_from.display(), new_to.display())
+        tokio::fs::copy(&new_from, &new_to).await.map_err(|err| {
+          ShellCommandError::new(format!(
+            "Copying {} to {}: {}",
+            new_from.display(),
+            new_to.display(),
+            err
+          ))
         })?;
       }
     }
@@ -135,7 +144,7 @@ struct CpFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_cp_args(cwd: &Path, args: &[OsString]) -> Result<CpFlags> {
+fn parse_cp_args(cwd: &Path, args: &[OsString]) -> Result<CpFlags, ShellCommandError> {
   let mut paths = Vec::new();
   let mut recursive = false;
   for arg in parse_arg_kinds(args) {
@@ -197,7 +206,7 @@ async fn mv_command(
   }
 }
 
-async fn execute_mv(cwd: &Path, args: &[OsString]) -> Result<()> {
+async fn execute_mv(cwd: &Path, args: &[OsString]) -> Result<(), ShellCommandError> {
   let flags = parse_mv_args(cwd, args)?;
   for (from, to) in flags.operations {
     if let Err(err) = tokio::fs::rename(&from.path, &to.path).await {
@@ -216,7 +225,7 @@ struct MvFlags {
   operations: Vec<(PathWithSpecified, PathWithSpecified)>,
 }
 
-fn parse_mv_args(cwd: &Path, args: &[OsString]) -> Result<MvFlags> {
+fn parse_mv_args(cwd: &Path, args: &[OsString]) -> Result<MvFlags, ShellCommandError> {
   let mut paths = Vec::new();
   for arg in parse_arg_kinds(args) {
     match arg {
@@ -248,7 +257,7 @@ struct PathWithSpecified {
 fn get_copy_and_move_operations(
   cwd: &Path,
   mut paths: Vec<&OsStr>,
-) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>> {
+) -> Result<Vec<(PathWithSpecified, PathWithSpecified)>, ShellCommandError> {
   // copy and move share the same logic
   let specified_destination = paths.pop().unwrap();
   let destination = cwd.join(specified_destination);

@@ -13,10 +13,11 @@ use crate::ExecuteResult;
 use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
-use anyhow::Result;
 use futures::FutureExt;
+use monch::ParseErrorFailureError;
 use thiserror::Error;
 
+use super::execute::EvaluateWordTextError;
 use super::which::CommandPathResolutionError;
 use super::which::resolve_command_path;
 
@@ -96,16 +97,30 @@ enum FailedShebangError {
   #[error(transparent)]
   CommandPath(#[from] CommandPathResolutionError),
   #[error(transparent)]
-  Any(#[from] anyhow::Error),
+  Io(#[from] std::io::Error),
+  #[error(transparent)]
+  Shebang(#[from] ShebangError),
 }
 
 impl FailedShebangError {
   pub fn exit_code(&self) -> i32 {
     match self {
       FailedShebangError::CommandPath(err) => err.exit_code(),
-      FailedShebangError::Any(_) => 1,
+      FailedShebangError::Io(_) | FailedShebangError::Shebang(_) => 1,
     }
   }
+}
+
+#[derive(Error, Debug)]
+enum ShebangError {
+  #[error(
+    "unsupported shebang. Please report this as a bug (https://github.com/denoland/deno).\n\nShebang: {0}"
+  )]
+  Unsupported(String),
+  #[error(transparent)]
+  Parse(#[from] ParseErrorFailureError),
+  #[error(transparent)]
+  EvaluateArgs(#[from] EvaluateWordTextError),
 }
 
 async fn resolve_command<'a>(
@@ -127,13 +142,13 @@ async fn resolve_command<'a>(
   // won't have a script with a shebang in it on Windows
   if Path::new(&command_name.name).components().count() > 1
     && let Some(shebang) = resolve_shebang(&command_path).map_err(|err| {
-      ResolveCommandError::FailedShebang(FailedShebangError::Any(err.into()))
+      ResolveCommandError::FailedShebang(FailedShebangError::Io(err))
     })?
   {
     let (shebang_command_name, mut args) = if shebang.string_split {
       let mut args = parse_shebang_args(&shebang.command, context)
         .await
-        .map_err(FailedShebangError::Any)?;
+        .map_err(FailedShebangError::Shebang)?;
       args.push(command_path.clone().into_os_string());
       (args.remove(0), args)
     } else {
@@ -161,12 +176,9 @@ async fn resolve_command<'a>(
 async fn parse_shebang_args(
   text: &str,
   context: &ShellCommandContext,
-) -> Result<Vec<OsString>> {
-  fn err_unsupported(text: &str) -> Result<Vec<OsString>> {
-    anyhow::bail!(
-      "unsupported shebang. Please report this as a bug (https://github.com/denoland/deno).\n\nShebang: {}",
-      text
-    )
+) -> Result<Vec<OsString>, ShebangError> {
+  fn err_unsupported(text: &str) -> Result<Vec<OsString>, ShebangError> {
+    Err(ShebangError::Unsupported(text.to_string()))
   }
 
   let mut args = crate::parser::parse(text)?;

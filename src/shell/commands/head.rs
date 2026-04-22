@@ -5,8 +5,6 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::future::LocalBoxFuture;
 
 use crate::ExecuteResult;
@@ -17,6 +15,8 @@ use crate::shell::KillSignal;
 
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 
 pub struct HeadCommand;
 
@@ -37,13 +37,13 @@ impl ShellCommand for HeadCommand {
   }
 }
 
-fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
+fn copy_lines<F: FnMut(&mut [u8]) -> std::io::Result<usize>>(
   writer: &mut ShellPipeWriter,
   max_lines: u64,
   kill_signal: &KillSignal,
   mut read: F,
   buffer_size: usize,
-) -> Result<ExecuteResult> {
+) -> std::io::Result<ExecuteResult> {
   let mut written_lines = 0;
   let mut buffer = vec![0; buffer_size];
   while written_lines < max_lines {
@@ -81,12 +81,12 @@ fn copy_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
   Ok(ExecuteResult::from_exit_code(0))
 }
 
-fn copy_all_but_last_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
+fn copy_all_but_last_lines<F: FnMut(&mut [u8]) -> std::io::Result<usize>>(
   writer: &mut ShellPipeWriter,
   skip_last: u64,
   kill_signal: &KillSignal,
   mut read: F,
-) -> Result<ExecuteResult> {
+) -> std::io::Result<ExecuteResult> {
   // read all content first
   let mut content = Vec::new();
   let mut buffer = vec![0; 512];
@@ -131,28 +131,28 @@ fn copy_all_but_last_lines<F: FnMut(&mut [u8]) -> Result<usize>>(
   Ok(ExecuteResult::from_exit_code(0))
 }
 
-fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
+fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult, ShellCommandError> {
   let flags = parse_args(&context.args)?;
   match flags.lines {
     LineCount::First(max_lines) => {
       if flags.path == "-" {
-        copy_lines(
+        Ok(copy_lines(
           &mut context.stdout,
           max_lines,
           context.state.kill_signal(),
           |buf| context.stdin.read(buf),
           512,
-        )
+        )?)
       } else {
         let path = flags.path;
         match File::open(context.state.cwd().join(path)) {
-          Ok(mut file) => copy_lines(
+          Ok(mut file) => Ok(copy_lines(
             &mut context.stdout,
             max_lines,
             context.state.kill_signal(),
-            |buf| file.read(buf).map_err(Into::into),
+            |buf| file.read(buf),
             512,
-          ),
+          )?),
           Err(err) => {
             context.stderr.write_line(&format!(
               "head: {}: {}",
@@ -166,21 +166,21 @@ fn execute_head(mut context: ShellCommandContext) -> Result<ExecuteResult> {
     }
     LineCount::AllButLast(skip_last) => {
       if flags.path == "-" {
-        copy_all_but_last_lines(
+        Ok(copy_all_but_last_lines(
           &mut context.stdout,
           skip_last,
           context.state.kill_signal(),
           |buf| context.stdin.read(buf),
-        )
+        )?)
       } else {
         let path = flags.path;
         match File::open(context.state.cwd().join(path)) {
-          Ok(mut file) => copy_all_but_last_lines(
+          Ok(mut file) => Ok(copy_all_but_last_lines(
             &mut context.stdout,
             skip_last,
             context.state.kill_signal(),
-            |buf| file.read(buf).map_err(Into::into),
-          ),
+            |buf| file.read(buf),
+          )?),
           Err(err) => {
             context.stderr.write_line(&format!(
               "head: {}: {}",
@@ -209,7 +209,7 @@ struct HeadFlags<'a> {
   lines: LineCount,
 }
 
-fn parse_line_count(s: &str) -> Result<LineCount> {
+fn parse_line_count(s: &str) -> Result<LineCount, ShellCommandError> {
   if let Some(rest) = s.strip_prefix('-') {
     let num = rest.parse::<u64>()?;
     Ok(LineCount::AllButLast(num))
@@ -219,7 +219,7 @@ fn parse_line_count(s: &str) -> Result<LineCount> {
   }
 }
 
-fn parse_args<'a>(args: &'a [OsString]) -> Result<HeadFlags<'a>> {
+fn parse_args<'a>(args: &'a [OsString]) -> Result<HeadFlags<'a>, ShellCommandError> {
   let mut path: Option<&'a OsStr> = None;
   let mut lines: Option<LineCount> = None;
   let mut iterator = parse_arg_kinds(args).into_iter();

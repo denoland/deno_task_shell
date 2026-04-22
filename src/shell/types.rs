@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::rc::Weak;
 
-use anyhow::Result;
 use bitflags::bitflags;
 use futures::future::LocalBoxFuture;
 use tokio::sync::broadcast;
@@ -366,13 +365,13 @@ impl ShellPipeReader {
   }
 
   /// Pipe everything to the specified writer
-  pub fn pipe_to(self, writer: &mut dyn Write) -> Result<()> {
+  pub fn pipe_to(self, writer: &mut dyn Write) -> std::io::Result<()> {
     // don't bother flushing here because this won't ever be called
     // with a Rust wrapped stdout/stderr
     self.pipe_to_inner(writer, false)
   }
 
-  fn pipe_to_with_flushing(self, writer: &mut dyn Write) -> Result<()> {
+  fn pipe_to_with_flushing(self, writer: &mut dyn Write) -> std::io::Result<()> {
     self.pipe_to_inner(writer, true)
   }
 
@@ -380,7 +379,7 @@ impl ShellPipeReader {
     mut self,
     writer: &mut dyn Write,
     flush: bool,
-  ) -> Result<()> {
+  ) -> std::io::Result<()> {
     loop {
       let mut buffer = [0; 512]; // todo: what is an appropriate buffer size?
       let size = match &mut self {
@@ -399,7 +398,7 @@ impl ShellPipeReader {
   }
 
   /// Pipes this pipe to the specified sender.
-  pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> Result<()> {
+  pub fn pipe_to_sender(self, mut sender: ShellPipeWriter) -> std::io::Result<()> {
     match &mut sender {
       ShellPipeWriter::OsPipe(pipe) => self.pipe_to(pipe),
       ShellPipeWriter::StdFile(file) => self.pipe_to(file),
@@ -427,10 +426,10 @@ impl ShellPipeReader {
     })
   }
 
-  pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+  pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
     match self {
-      ShellPipeReader::OsPipe(pipe) => pipe.read(buf).map_err(|e| e.into()),
-      ShellPipeReader::StdFile(file) => file.read(buf).map_err(|e| e.into()),
+      ShellPipeReader::OsPipe(pipe) => pipe.read(buf),
+      ShellPipeReader::StdFile(file) => file.read(buf),
     }
   }
 }
@@ -492,14 +491,14 @@ impl ShellPipeWriter {
     }
   }
 
-  pub fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+  pub fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
     self.write_all_iter(std::iter::once(bytes))
   }
 
   pub fn write_all_iter<'a>(
     &mut self,
     iter: impl Iterator<Item = &'a [u8]> + 'a,
-  ) -> Result<()> {
+  ) -> std::io::Result<()> {
     match self {
       Self::OsPipe(pipe) => {
         for bytes in iter {
@@ -532,7 +531,7 @@ impl ShellPipeWriter {
     Ok(())
   }
 
-  pub fn write_line(&mut self, line: &str) -> Result<()> {
+  pub fn write_line(&mut self, line: &str) -> std::io::Result<()> {
     let bytes = format!("{line}\n");
     self.write_all(bytes.as_bytes())
   }

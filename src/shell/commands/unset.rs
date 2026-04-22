@@ -2,8 +2,6 @@
 
 use std::ffi::OsString;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::future::LocalBoxFuture;
 
 use crate::EnvChange;
@@ -11,6 +9,8 @@ use crate::shell::types::ExecuteResult;
 
 use super::ShellCommand;
 use super::ShellCommandContext;
+use super::error::ShellCommandError;
+use super::error::bail;
 
 pub struct UnsetCommand;
 
@@ -34,7 +34,7 @@ impl ShellCommand for UnsetCommand {
   }
 }
 
-fn parse_names(mut args: Vec<OsString>) -> Result<Vec<OsString>> {
+fn parse_names(mut args: Vec<OsString>) -> Result<Vec<OsString>, ShellCommandError> {
   match args.first() {
     None => {
       // Running the actual `unset` with no argument completes with success.

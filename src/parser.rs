@@ -1,7 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use anyhow::Result;
-use anyhow::bail;
 use monch::*;
 
 // Shell grammar rules this is loosely based on:
@@ -321,7 +319,7 @@ pub enum RedirectOpOutput {
   Append,
 }
 
-pub fn parse(input: &str) -> Result<SequentialList> {
+pub fn parse(input: &str) -> Result<SequentialList, ParseErrorFailureError> {
   /// Clips the snippet to the current line and, for multi-line input,
   /// prefixes the message with a 1-based line number.
   fn failure_to_error(
@@ -358,18 +356,18 @@ pub fn parse(input: &str) -> Result<SequentialList> {
     Ok((remaining, expr)) => {
       if remaining.trim().is_empty() {
         if expr.items.is_empty() {
-          bail!("Empty command.")
+          Err(ParseErrorFailureError::new("Empty command.".to_string()))
         } else {
           Ok(expr)
         }
       } else {
-        Err(failure_to_error(input, fail_for_trailing_input(remaining)).into())
+        Err(failure_to_error(input, fail_for_trailing_input(remaining)))
       }
     }
     Err(ParseError::Backtrace) => {
-      Err(failure_to_error(input, fail_for_trailing_input(input)).into())
+      Err(failure_to_error(input, fail_for_trailing_input(input)))
     }
-    Err(ParseError::Failure(e)) => Err(failure_to_error(input, e).into()),
+    Err(ParseError::Failure(e)) => Err(failure_to_error(input, e)),
   }
 }
 

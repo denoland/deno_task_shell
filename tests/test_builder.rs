@@ -7,7 +7,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use anyhow::Context;
 use deno_task_shell::KillSignal;
 use deno_task_shell::ShellCommand;
 use deno_task_shell::ShellCommandContext;
@@ -280,8 +279,7 @@ impl TestBuilder {
         }
         TestAssertion::FileTextEquals(path, text) => {
           let actual_text = std::fs::read_to_string(cwd.join(path))
-            .with_context(|| format!("Error reading {path}"))
-            .unwrap();
+            .unwrap_or_else(|err| panic!("Error reading {path}: {err}"));
           assert_eq!(
             &actual_text, text,
             "\n\nFailed for: {}\nPath: {}",
