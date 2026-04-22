@@ -354,7 +354,11 @@ fn failure_to_error(
     .take(60)
     .collect();
   let message = if original.contains('\n') {
-    format!("{} (line {})", failure.message, line_of(original, failure.input))
+    format!(
+      "{} (line {})",
+      failure.message,
+      line_of(original, failure.input)
+    )
   } else {
     failure.message
   };
@@ -367,8 +371,7 @@ fn failure_to_error(
 /// 1-based line number where `remaining` begins within `original`. Falls
 /// back to 1 if `remaining` isn't actually a subslice of `original`.
 fn line_of(original: &str, remaining: &str) -> usize {
-  let line_count =
-    |s: &str| s.bytes().filter(|&b| b == b'\n').count() + 1;
+  let line_count = |s: &str| s.bytes().filter(|&b| b == b'\n').count() + 1;
   // when the failure is at end-of-input, the failure slice may be a
   // detached `""` (monch's `skip_whitespace` returns the literal `""`
   // when it consumes all remaining chars), so handle that up-front.
@@ -921,10 +924,9 @@ fn parse_word_parts(
         // nothing. Applies in unquoted words and inside `"..."`; inside
         // `'...'` the single-quote parser never reaches this branch so
         // the characters are preserved, as per POSIX.
-        map(
-          or(tag("\\\r\n"), tag("\\\n")),
-          |_| PendingPart::Parts(Vec::new()),
-        ),
+        map(or(tag("\\\r\n"), tag("\\\n")), |_| {
+          PendingPart::Parts(Vec::new())
+        }),
         map(tag("$?"), |_| PendingPart::Variable("?")),
         map(first_escaped_char(mode), PendingPart::Char),
         map(parse_command_substitution, PendingPart::Command),
@@ -1265,7 +1267,10 @@ mod test {
 
     // multi-command scripts
     assert_eq!(
-      parse("cd webview\nexport FOO=bar\nmake").unwrap().items.len(),
+      parse("cd webview\nexport FOO=bar\nmake")
+        .unwrap()
+        .items
+        .len(),
       3,
     );
 
@@ -1314,11 +1319,7 @@ mod test {
     // bad operator at start of line 2
     assert_eq!(
       parse("echo ok\n&& echo bad").unwrap_err().to_string(),
-      concat!(
-        "Unexpected character. (line 2)\n",
-        "  && echo bad\n",
-        "  ~",
-      ),
+      concat!("Unexpected character. (line 2)\n", "  && echo bad\n", "  ~",),
     );
     // unexpected `;` on line 3
     assert_eq!(
