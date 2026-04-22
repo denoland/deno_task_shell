@@ -596,10 +596,6 @@ fn parse_boolean_list_op(input: &str) -> ParseResult<'_, BooleanListOperator> {
   )(input)
 }
 
-fn parse_async_list_op(input: &str) -> ParseResult<'_, &str> {
-  parse_op_str("&")(input)
-}
-
 fn parse_negated_op(input: &str) -> ParseResult<'_, &str> {
   terminated(
     tag("!"),
