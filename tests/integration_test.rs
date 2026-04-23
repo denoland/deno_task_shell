@@ -2063,3 +2063,48 @@ async fn pipefail_with_sigpipe() {
     .run()
     .await;
 }
+
+#[tokio::test]
+async fn multi_line_commands() {
+  // newline separates commands, like `;`
+  TestBuilder::new()
+    .command("echo one\necho two\necho three")
+    .assert_stdout("one\ntwo\nthree\n")
+    .run()
+    .await;
+
+  // blank lines are ignored
+  TestBuilder::new()
+    .command("\n\necho foo\n\necho bar\n")
+    .assert_stdout("foo\nbar\n")
+    .run()
+    .await;
+
+  // newline after `&&` is a continuation
+  TestBuilder::new()
+    .command("echo foo &&\n  echo bar")
+    .assert_stdout("foo\nbar\n")
+    .run()
+    .await;
+
+  // newline after `|` is a continuation
+  TestBuilder::new()
+    .command("echo hello |\n  cat")
+    .assert_stdout("hello\n")
+    .run()
+    .await;
+
+  // env assignment on its own line sets a shell var for later lines
+  TestBuilder::new()
+    .command("FOO=bar\necho $FOO")
+    .assert_stdout("bar\n")
+    .run()
+    .await;
+
+  // CRLF line endings work
+  TestBuilder::new()
+    .command("echo one\r\necho two")
+    .assert_stdout("one\ntwo\n")
+    .run()
+    .await;
+}

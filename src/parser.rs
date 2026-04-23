@@ -18,7 +18,10 @@ pub struct SequentialList {
 #[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SequentialListItem {
+  /// Item ended with `&`.
   pub is_async: bool,
+  /// A `\n` or `\r\n` appeared between this item and the next.
+  pub ends_line: bool,
   pub sequence: Sequence,
 }
 
@@ -319,52 +322,110 @@ pub enum RedirectOpOutput {
 }
 
 pub fn parse(input: &str) -> Result<SequentialList> {
+  /// Clips the snippet to the current line and, for multi-line input,
+  /// prefixes the message with a 1-based line number.
+  fn failure_to_error(
+    original: &str,
+    failure: ParseErrorFailure<'_>,
+  ) -> ParseErrorFailureError {
+    fn line_of(original: &str, remaining: &str) -> usize {
+      let offset = original.len().saturating_sub(remaining.len());
+      original[..offset].bytes().filter(|&b| b == b'\n').count() + 1
+    }
+
+    let snippet: String = failure
+      .input
+      .chars()
+      .take_while(|&c| c != '\n' && c != '\r')
+      .take(60)
+      .collect();
+    let message = if original.contains('\n') {
+      format!(
+        "{} (line {})",
+        failure.message,
+        line_of(original, failure.input)
+      )
+    } else {
+      failure.message
+    };
+    ParseErrorFailureError {
+      message,
+      code_snippet: Some(snippet),
+    }
+  }
+
   match parse_sequential_list(input) {
-    Ok((input, expr)) => {
-      if input.trim().is_empty() {
+    Ok((remaining, expr)) => {
+      if remaining.trim().is_empty() {
         if expr.items.is_empty() {
           bail!("Empty command.")
         } else {
           Ok(expr)
         }
       } else {
-        fail_for_trailing_input(input)
-          .into_result()
-          .map_err(|err| err.into())
+        Err(failure_to_error(input, fail_for_trailing_input(remaining)).into())
       }
     }
-    Err(ParseError::Backtrace) => fail_for_trailing_input(input)
-      .into_result()
-      .map_err(|err| err.into()),
-    Err(ParseError::Failure(e)) => e.into_result().map_err(|err| err.into()),
+    Err(ParseError::Backtrace) => {
+      Err(failure_to_error(input, fail_for_trailing_input(input)).into())
+    }
+    Err(ParseError::Failure(e)) => Err(failure_to_error(input, e).into()),
   }
 }
 
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
-  let (input, items) = separated_list(
-    terminated(parse_sequential_list_item, skip_whitespace),
-    terminated(
-      skip_whitespace,
-      or(
-        map(parse_sequential_list_op, |_| ()),
-        map(parse_async_list_op, |_| ()),
-      ),
-    ),
-  )(input)?;
+  let (mut input, _) = skip_whitespace(input)?;
+  let mut items = Vec::new();
+  while !input.is_empty() {
+    let (after_seq, sequence) = match parse_sequence(input) {
+      Ok(v) => v,
+      Err(ParseError::Backtrace) => break,
+      Err(e) => return Err(e),
+    };
+    let (after_ws, _) = skip_inline_whitespace(after_seq)?;
+    let (after_sep, is_async, ends_line) =
+      match parse_list_item_separator(after_ws) {
+        Ok((rest, (is_async, ends_line))) => (rest, is_async, ends_line),
+        Err(ParseError::Backtrace) => (after_ws, false, false),
+        Err(e) => return Err(e),
+      };
+    let reached_end = after_sep.is_empty() && !is_async && !ends_line;
+    items.push(SequentialListItem {
+      is_async,
+      ends_line,
+      sequence,
+    });
+    input = after_sep;
+    if reached_end {
+      break;
+    }
+  }
   Ok((input, SequentialList { items }))
 }
 
-fn parse_sequential_list_item(
-  input: &str,
-) -> ParseResult<'_, SequentialListItem> {
-  let (input, sequence) = parse_sequence(input)?;
-  Ok((
-    input,
-    SequentialListItem {
-      is_async: maybe(parse_async_list_op)(input)?.1.is_some(),
-      sequence,
-    },
-  ))
+/// Returns `(is_async, ends_line)` for the separator following an item.
+fn parse_list_item_separator(input: &str) -> ParseResult<'_, (bool, bool)> {
+  let mut is_async = false;
+  let mut ends_line = false;
+  let mut cursor = input;
+  // lone `&` (not `&&` or `&|`) — async
+  if let Ok((rest, _)) = terminated(ch('&'), check_not(one_of("|&")))(cursor) {
+    is_async = true;
+    let (rest, _) = skip_inline_whitespace(rest)?;
+    cursor = rest;
+  } else if let Ok((rest, _)) = ch(';')(cursor) {
+    let (rest, _) = skip_inline_whitespace(rest)?;
+    cursor = rest;
+  }
+  if let Ok((rest, _)) = or(tag("\r\n"), tag("\n"))(cursor) {
+    ends_line = true;
+    let (rest, _) = skip_whitespace(rest)?;
+    cursor = rest;
+  }
+  if cursor == input {
+    return ParseError::backtrace();
+  }
+  Ok((cursor, (is_async, ends_line)))
 }
 
 fn parse_sequence(input: &str) -> ParseResult<'_, Sequence> {
@@ -373,7 +434,7 @@ fn parse_sequence(input: &str) -> ParseResult<'_, Sequence> {
       parse_shell_var_command,
       map(parse_pipeline, Sequence::Pipeline),
     ),
-    skip_whitespace,
+    skip_inline_whitespace,
   )(input)?;
 
   Ok(match parse_boolean_list_op(input) {
@@ -467,12 +528,12 @@ fn parse_command(input: &str) -> ParseResult<'_, Command> {
       map(parse_subshell, |l| CommandInner::Subshell(Box::new(l))),
       map(parse_simple_command, CommandInner::Simple),
     ),
-    skip_whitespace,
+    skip_inline_whitespace,
   )(input)?;
 
   let before_redirects_input = input;
   let (input, mut redirects) =
-    many0(terminated(parse_redirect, skip_whitespace))(input)?;
+    many0(terminated(parse_redirect, skip_inline_whitespace))(input)?;
 
   if redirects.len() > 1 {
     return ParseError::fail(
@@ -519,7 +580,7 @@ fn parse_shell_arg(input: &str) -> ParseResult<'_, Word> {
 fn parse_list_op(input: &str) -> ParseResult<'_, ()> {
   or(
     map(parse_boolean_list_op, |_| ()),
-    map(or(parse_sequential_list_op, parse_async_list_op), |_| ()),
+    map(parse_list_item_separator, |_| ()),
   )(input)
 }
 
@@ -532,14 +593,6 @@ fn parse_boolean_list_op(input: &str) -> ParseResult<'_, BooleanListOperator> {
       BooleanListOperator::Or
     }),
   )(input)
-}
-
-fn parse_sequential_list_op(input: &str) -> ParseResult<'_, &str> {
-  terminated(tag(";"), skip_whitespace)(input)
-}
-
-fn parse_async_list_op(input: &str) -> ParseResult<'_, &str> {
-  parse_op_str("&")(input)
 }
 
 fn parse_negated_op(input: &str) -> ParseResult<'_, &str> {
@@ -590,7 +643,7 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
   )(input)?;
   let (input, io_file) = or(
     map(preceded(ch('&'), parse_u32), IoFile::Fd),
-    map(preceded(skip_whitespace, parse_word), IoFile::Word),
+    map(preceded(skip_inline_whitespace, parse_word), IoFile::Word),
   )(input)?;
 
   let maybe_fd = if let Some(fd) = maybe_fd {
@@ -612,7 +665,7 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
 }
 
 fn parse_env_vars(input: &str) -> ParseResult<'_, Vec<EnvVar>> {
-  many0(terminated(parse_env_var, skip_whitespace))(input)
+  many0(terminated(parse_env_var, skip_inline_whitespace))(input)
 }
 
 fn parse_env_var(input: &str) -> ParseResult<'_, EnvVar> {
@@ -865,7 +918,11 @@ fn parse_word_parts(
 
     let original_input = input;
     let (input, parts) = many0(or7(
-      or3(
+      or4(
+        // `\<newline>` line continuation — consumed and erased
+        map(or(tag("\\\r\n"), tag("\\\n")), |_| {
+          PendingPart::Parts(Vec::new())
+        }),
         map(tag("$?"), |_| PendingPart::Variable("?")),
         map(first_escaped_char(mode), PendingPart::Char),
         map(parse_command_substitution, PendingPart::Command),
@@ -1041,7 +1098,7 @@ fn parse_u32(input: &str) -> ParseResult<'_, u32> {
 }
 
 fn assert_whitespace_or_end_and_skip(input: &str) -> ParseResult<'_, ()> {
-  terminated(assert_whitespace_or_end, skip_whitespace)(input)
+  terminated(assert_whitespace_or_end, skip_inline_whitespace)(input)
 }
 
 fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
@@ -1052,6 +1109,35 @@ fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
     return Err(ParseError::Failure(fail_for_trailing_input(input)));
   }
   Ok((input, ()))
+}
+
+/// Skips space, tab, and `\<newline>` continuations. Leaves raw newlines.
+fn skip_inline_whitespace(input: &str) -> ParseResult<'_, ()> {
+  let bytes = input.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() {
+    match bytes[i] {
+      b' ' | b'\t' => i += 1,
+      b'\\' if bytes.get(i + 1) == Some(&b'\n') => i += 2,
+      b'\\'
+        if bytes.get(i + 1) == Some(&b'\r')
+          && bytes.get(i + 2) == Some(&b'\n') =>
+      {
+        i += 3;
+      }
+      c if !c.is_ascii() => {
+        let rest = &input[i..];
+        let ch = rest.chars().next().unwrap();
+        if ch.is_whitespace() && ch != '\n' && ch != '\r' {
+          i += ch.len_utf8();
+        } else {
+          break;
+        }
+      }
+      _ => break,
+    }
+  }
+  Ok((&input[i..], ()))
 }
 
 fn is_valid_env_var_char(c: char) -> bool {
@@ -1139,6 +1225,184 @@ mod test {
   }
 
   #[test]
+  fn multi_line_input() {
+    // single-line sanity checks (unchanged)
+    assert_eq!(parse("echo foo").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo; echo bar").unwrap().items.len(), 2);
+    assert_eq!(parse("echo foo && echo bar").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo | grep bar").unwrap().items.len(), 1);
+
+    // newline acts as a sequence separator, like `;`
+    assert_eq!(parse("echo foo\necho bar").unwrap().items.len(), 2);
+    // blank lines between commands are skipped
+    assert_eq!(parse("echo foo\n\n\necho bar").unwrap().items.len(), 2);
+    // a trailing newline is ignored
+    assert_eq!(parse("echo foo\n").unwrap().items.len(), 1);
+    // leading blank lines are ignored
+    assert_eq!(parse("\n\necho foo").unwrap().items.len(), 1);
+    // CRLF line endings behave the same as LF
+    assert_eq!(parse("echo foo\r\necho bar").unwrap().items.len(), 2);
+
+    // newlines inside quoted strings are preserved as part of the arg
+    assert_eq!(parse("echo \"hello\nworld\"").unwrap().items.len(), 1);
+    assert_eq!(parse("echo 'hello\nworld'").unwrap().items.len(), 1);
+
+    // after a trailing operator, a newline is a continuation not a terminator
+    assert_eq!(parse("echo foo &&\necho bar").unwrap().items.len(), 1);
+    assert_eq!(parse("false ||\necho fallback").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo |\ngrep bar").unwrap().items.len(), 1);
+    assert_eq!(parse("echo foo;\necho bar").unwrap().items.len(), 2);
+
+    // newlines inside a subshell act as separators within the subshell
+    assert_eq!(parse("(echo a\necho b)").unwrap().items.len(), 1);
+
+    // multi-command scripts
+    assert_eq!(
+      parse("cd webview\nexport FOO=bar\nmake")
+        .unwrap()
+        .items
+        .len(),
+      3,
+    );
+
+    // env assignment on its own line is a shell var
+    assert_eq!(parse("FOO=bar\ncmd").unwrap().items.len(), 2);
+  }
+
+  #[test]
+  fn item_separator_flags() {
+    // `;` → sync, same line
+    let list = parse("a; b").unwrap();
+    assert_eq!(list.items.len(), 2);
+    assert!(!list.items[0].is_async && !list.items[0].ends_line);
+
+    // `\n` → sync, new line
+    let list = parse("a\nb").unwrap();
+    assert!(!list.items[0].is_async && list.items[0].ends_line);
+
+    // `&` alone → async, same line
+    let list = parse("a & b").unwrap();
+    assert!(list.items[0].is_async && !list.items[0].ends_line);
+
+    // `&\n` → async AND new line (the case raised earlier)
+    let list = parse("a &\nb").unwrap();
+    assert!(list.items[0].is_async && list.items[0].ends_line);
+
+    // `;\n` → new line dominates (treat like `\n`)
+    let list = parse("a;\nb").unwrap();
+    assert!(!list.items[0].is_async && list.items[0].ends_line);
+
+    // CRLF
+    let list = parse("a\r\nb").unwrap();
+    assert!(!list.items[0].is_async && list.items[0].ends_line);
+
+    // last item is never async / ends_line
+    let list = parse("a; b").unwrap();
+    assert!(!list.items[1].is_async && !list.items[1].ends_line);
+  }
+
+  #[test]
+  fn backslash_newline_line_continuation() {
+    // between tokens with a preceding space: the bs+nl is elided
+    assert_eq!(parse("echo hello \\\nworld").unwrap().items.len(), 1);
+    // inside a word (no separator): the two halves are joined into one token
+    assert_eq!(parse("echo hello\\\nworld").unwrap().items.len(), 1);
+    // between command name and first arg: also joined
+    assert_eq!(parse("echo\\\nhello").unwrap().items.len(), 1);
+    // inside double quotes: joined (bash-compatible)
+    assert_eq!(parse("echo \"hello\\\nworld\"").unwrap().items.len(), 1);
+    // inside single quotes: preserved literally (bash-compatible)
+    assert_eq!(parse("echo 'hello\\\nworld'").unwrap().items.len(), 1);
+    // line continuation with a CRLF newline
+    assert_eq!(parse("echo hello\\\r\nworld").unwrap().items.len(), 1);
+    // after a shell var assignment
+    assert_eq!(parse("FOO=bar \\\necho $FOO").unwrap().items.len(), 1);
+    // trailing `\` at EOF is a literal backslash, not a continuation (bash-compatible)
+    let list = parse("echo hello\\").unwrap();
+    assert_eq!(list.items.len(), 1);
+    let Sequence::Pipeline(pipeline) = &list.items[0].sequence else {
+      panic!("expected pipeline");
+    };
+    let PipelineInner::Command(cmd) = &pipeline.inner else {
+      panic!("expected command");
+    };
+    let CommandInner::Simple(simple) = &cmd.inner else {
+      panic!("expected simple command");
+    };
+    assert_eq!(simple.args.len(), 2);
+    assert_eq!(
+      simple.args[1].parts(),
+      &vec![WordPart::Text("hello\\".to_string())],
+    );
+  }
+
+  #[test]
+  fn multi_line_error_messages_point_at_the_right_line() {
+    // unclosed double quote on line 2
+    assert_eq!(
+      parse("echo ok\necho \"unclosed").unwrap_err().to_string(),
+      concat!(
+        "Expected closing double quote. (line 2)\n",
+        "  \"unclosed\n",
+        "  ~",
+      ),
+    );
+    // unclosed double quote on line 1
+    assert_eq!(
+      parse("echo \"unclosed\necho ok").unwrap_err().to_string(),
+      concat!(
+        "Expected closing double quote. (line 1)\n",
+        "  \"unclosed\n",
+        "  ~",
+      ),
+    );
+    // bad operator at start of line 2
+    assert_eq!(
+      parse("echo ok\n&& echo bad").unwrap_err().to_string(),
+      concat!("Unexpected character. (line 2)\n", "  && echo bad\n", "  ~",),
+    );
+    // unexpected `;` on line 3
+    assert_eq!(
+      parse("echo ok\necho ok\n; foo").unwrap_err().to_string(),
+      concat!("Unexpected character. (line 3)\n", "  ; foo\n", "  ~",),
+    );
+    // trailing `&&` with nothing following
+    assert_eq!(
+      parse("echo ok &&\n").unwrap_err().to_string(),
+      concat!(
+        "Expected command following boolean operator. (line 2)\n",
+        "  \n",
+        "  ~",
+      ),
+    );
+    // unclosed subshell: caret points at the opening `(`
+    assert_eq!(
+      parse("echo ok\n(echo nested\necho more")
+        .unwrap_err()
+        .to_string(),
+      concat!(
+        "Expected closing parenthesis on subshell. (line 2)\n",
+        "  (echo nested\n",
+        "  ~",
+      ),
+    );
+    // unclosed backtick on line 2
+    assert_eq!(
+      parse("echo a\necho `not closed").unwrap_err().to_string(),
+      concat!(
+        "Expected closing backtick. (line 2)\n",
+        "  `not closed\n",
+        "  ~",
+      ),
+    );
+    // single-line input keeps its unchanged message (no `(line N)` suffix)
+    assert_eq!(
+      parse("echo \"unclosed").unwrap_err().to_string(),
+      concat!("Expected closing double quote.\n", "  \"unclosed\n", "  ~",),
+    );
+  }
+
+  #[test]
   fn test_sequential_list() {
     run_test(
       parse_sequential_list,
@@ -1152,6 +1416,7 @@ mod test {
         items: vec![
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: SimpleCommand {
                 env_vars: vec![
@@ -1175,6 +1440,7 @@ mod test {
           },
           SequentialListItem {
             is_async: true,
+            ends_line: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: SimpleCommand {
                 env_vars: vec![],
@@ -1191,6 +1457,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![Word::new_word("command5")],
@@ -1199,6 +1466,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![Word::new_word("export"), Word::new_word("ENV6=5")],
@@ -1207,6 +1475,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: Sequence::ShellVar(EnvVar::new(
                 "ENV7".to_string(),
@@ -1230,6 +1499,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::BooleanList(Box::new(BooleanList {
               current: SimpleCommand {
                 env_vars: vec![],
@@ -1241,6 +1511,7 @@ mod test {
                 inner: CommandInner::Subshell(Box::new(SequentialList {
                   items: vec![SequentialListItem {
                     is_async: false,
+                    ends_line: false,
                     sequence: Sequence::BooleanList(Box::new(BooleanList {
                       current: SimpleCommand {
                         env_vars: vec![],
@@ -1272,6 +1543,7 @@ mod test {
         items: vec![
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![Word::new_word("command1")],
@@ -1280,6 +1552,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![Word::new_word("command2")],
@@ -1288,6 +1561,7 @@ mod test {
           },
           SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![EnvVar::new(
                 "A".to_string(),
@@ -1313,6 +1587,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: true,
+          ends_line: false,
           sequence: SimpleCommand {
             env_vars: vec![],
             args: vec![Word::new_word("command")],
@@ -1328,6 +1603,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
+          ends_line: false,
           sequence: PipeSequence {
             current: SimpleCommand {
               env_vars: vec![],
@@ -1352,6 +1628,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
+          ends_line: false,
           sequence: PipeSequence {
             current: SimpleCommand {
               env_vars: vec![],
@@ -1384,6 +1661,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
+          ends_line: false,
           sequence: SimpleCommand {
             env_vars: vec![],
             args: vec![
@@ -1402,6 +1680,7 @@ mod test {
       Ok(SequentialList {
         items: vec![SequentialListItem {
           is_async: false,
+          ends_line: false,
           sequence: Sequence::BooleanList(Box::new(BooleanList {
             current: Pipeline {
               negated: true,
@@ -1477,6 +1756,7 @@ mod test {
         value: Word(vec![WordPart::Command(SequentialList {
           items: vec![SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: SimpleCommand {
               env_vars: vec![],
               args: vec![Word::new_word("test")],
@@ -1495,6 +1775,7 @@ mod test {
         value: Word(vec![WordPart::Command(SequentialList {
           items: vec![SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::ShellVar(EnvVar {
               name: "OTHER".to_string(),
               value: Word::new_word("5"),
@@ -1606,6 +1887,7 @@ mod test {
         WordPart::Command(SequentialList {
           items: Vec::from([SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::Pipeline(Pipeline {
               negated: false,
               inner: PipelineInner::Command(Command {
@@ -1626,6 +1908,7 @@ mod test {
         WordPart::Command(SequentialList {
           items: Vec::from([SequentialListItem {
             is_async: false,
+            ends_line: false,
             sequence: Sequence::Pipeline(Pipeline {
               negated: false,
               inner: PipelineInner::Command(Command {
@@ -1883,6 +2166,7 @@ mod test {
       serialize_to_json("./example > output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -1920,6 +2204,7 @@ mod test {
       serialize_to_json("./example 2> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -1960,6 +2245,7 @@ mod test {
       serialize_to_json("./example &> output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -1999,6 +2285,7 @@ mod test {
       serialize_to_json("./example < output.txt"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
@@ -2037,6 +2324,7 @@ mod test {
       serialize_to_json("./example <&0"),
       serde_json::json!({
         "items": [{
+          "endsLine": false,
           "isAsync": false,
           "sequence": {
             "inner": {
