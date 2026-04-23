@@ -2022,7 +2022,7 @@ async fn pipefail_option() {
   // set -o (list options, readable format)
   TestBuilder::new()
     .command("set -o")
-    .assert_stdout("pipefail\toff\n")
+    .assert_stdout("errexit\toff\npipefail\toff\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -2030,7 +2030,7 @@ async fn pipefail_option() {
   // set -o after enabling pipefail
   TestBuilder::new()
     .command("set -o pipefail && set -o")
-    .assert_stdout("pipefail\ton\n")
+    .assert_stdout("errexit\toff\npipefail\ton\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -2038,7 +2038,7 @@ async fn pipefail_option() {
   // set +o (list options, reusable format)
   TestBuilder::new()
     .command("set +o")
-    .assert_stdout("set +o pipefail\n")
+    .assert_stdout("set +o errexit\nset +o pipefail\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -2046,7 +2046,7 @@ async fn pipefail_option() {
   // set +o after enabling pipefail
   TestBuilder::new()
     .command("set -o pipefail && set +o")
-    .assert_stdout("set -o pipefail\n")
+    .assert_stdout("set +o errexit\nset -o pipefail\n")
     .assert_exit_code(0)
     .run()
     .await;
@@ -2105,6 +2105,54 @@ async fn multi_line_commands() {
   TestBuilder::new()
     .command("echo one\r\necho two")
     .assert_stdout("one\ntwo\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
+async fn errexit_option() {
+  // default: failures between `;`-separated commands don't abort
+  TestBuilder::new()
+    .command("(exit 3); echo kept-going")
+    .assert_stdout("kept-going\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // with `set -e`: abort at the first non-zero command
+  TestBuilder::new()
+    .command("set -e; (exit 3); echo unreachable")
+    .assert_exit_code(3)
+    .run()
+    .await;
+
+  // `set -e` then `set +e` should re-enable continue-on-failure
+  TestBuilder::new()
+    .command("set -e; set +e; (exit 3); echo kept-going")
+    .assert_stdout("kept-going\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // `set -o errexit` long form is equivalent to `set -e`
+  TestBuilder::new()
+    .command("set -o errexit; (exit 3); echo unreachable")
+    .assert_exit_code(3)
+    .run()
+    .await;
+
+  // with errexit on, newline-separated also aborts
+  TestBuilder::new()
+    .command("set -e\n(exit 3)\necho unreachable")
+    .assert_exit_code(3)
+    .run()
+    .await;
+
+  // errexit does NOT abort commands whose failure feeds a `||`
+  TestBuilder::new()
+    .command("set -e; (exit 3) || echo recovered; echo after")
+    .assert_stdout("recovered\nafter\n")
+    .assert_exit_code(0)
     .run()
     .await;
 }
