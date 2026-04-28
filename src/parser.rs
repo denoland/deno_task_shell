@@ -339,12 +339,13 @@ pub fn parse(input: &str) -> Result<SequentialList> {
       .take_while(|&c| c != '\n' && c != '\r')
       .take(60)
       .collect();
-    let message = if original.contains('\n') {
+    let message: std::borrow::Cow<'static, str> = if original.contains('\n') {
       format!(
         "{} (line {})",
         failure.message,
         line_of(original, failure.input)
       )
+      .into()
     } else {
       failure.message
     };
@@ -369,7 +370,7 @@ pub fn parse(input: &str) -> Result<SequentialList> {
     Err(ParseError::Backtrace) => {
       Err(failure_to_error(input, fail_for_trailing_input(input)).into())
     }
-    Err(ParseError::Failure(e)) => Err(failure_to_error(input, e).into()),
+    Err(ParseError::Failure(e)) => Err(failure_to_error(input, *e).into()),
   }
 }
 
@@ -604,10 +605,9 @@ fn parse_negated_op(input: &str) -> ParseResult<'_, &str> {
 }
 
 fn parse_op_str<'a>(
-  operator: &str,
+  operator: &'static str,
 ) -> impl Fn(&'a str) -> ParseResult<'a, &'a str> {
   debug_assert!(operator == "&&" || operator == "||" || operator == "&");
-  let operator = operator.to_string();
   terminated(
     tag(operator),
     terminated(check_not(one_of("|&")), skip_whitespace),
@@ -679,7 +679,7 @@ fn parse_env_var(input: &str) -> ParseResult<'_, EnvVar> {
 }
 
 fn parse_env_var_name(input: &str) -> ParseResult<'_, &str> {
-  if_not_empty(take_while(is_valid_env_var_char))(input)
+  if_not_empty(take_while_byte(is_valid_env_var_byte))(input)
 }
 
 fn parse_env_var_value(input: &str) -> ParseResult<'_, Word> {
@@ -738,9 +738,11 @@ fn parse_quoted_string(input: &str) -> ParseResult<'_, Vec<WordPart>> {
 fn parse_single_quoted_string(input: &str) -> ParseResult<'_, &str> {
   // single quoted strings cannot contain a single quote
   // https://pubs.opengroup.org/onlinepubs/009604499/utilities/xcu_chap02.html#tag_02_02_02
+  // `'` is ASCII so a byte-level scan stops at a valid char boundary
+  // regardless of any multi-byte chars in the body of the string.
   delimited(
     ch('\''),
-    take_while(|c| c != '\''),
+    take_while_byte(|b| b != b'\''),
     with_failure_input(
       input,
       assert_exists(ch('\''), "Expected closing single quote."),
@@ -770,7 +772,7 @@ fn parse_double_quoted_string(input: &str) -> ParseResult<'_, Vec<WordPart>> {
           match &err {
             ParseError::Backtrace => "Could not determine expression.",
             ParseError::Failure(parse_error_failure) =>
-              parse_error_failure.message.as_str(),
+              &parse_error_failure.message,
           }
         ),
       ),
@@ -1043,7 +1045,7 @@ fn parse_backticks_command_substitution(
                 match &err {
                   ParseError::Backtrace => "Could not determine expression.",
                   ParseError::Failure(parse_error_failure) =>
-                    parse_error_failure.message.as_str(),
+                    &parse_error_failure.message,
                 }
               ),
             );
@@ -1106,7 +1108,9 @@ fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
     && !next_char.is_whitespace()
     && !matches!(next_char, ';' | '&' | '|' | '(' | ')')
   {
-    return Err(ParseError::Failure(fail_for_trailing_input(input)));
+    return Err(ParseError::Failure(Box::new(fail_for_trailing_input(
+      input,
+    ))));
   }
   Ok((input, ()))
 }
@@ -1140,9 +1144,9 @@ fn skip_inline_whitespace(input: &str) -> ParseResult<'_, ()> {
   Ok((&input[i..], ()))
 }
 
-fn is_valid_env_var_char(c: char) -> bool {
-  // [a-zA-Z0-9_]+
-  c.is_ascii_alphanumeric() || c == '_'
+fn is_valid_env_var_byte(b: u8) -> bool {
+  // [a-zA-Z0-9_]+ — ASCII-only, safe with byte-level scan.
+  b.is_ascii_alphanumeric() || b == b'_'
 }
 
 fn is_reserved_word(text: &str) -> bool {
