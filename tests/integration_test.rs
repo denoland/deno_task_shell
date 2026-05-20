@@ -155,6 +155,24 @@ async fn boolean_logic() {
 }
 
 #[tokio::test]
+async fn null_command() {
+  // POSIX `:` is the null command — always succeeds, discards args.
+  TestBuilder::new().command(":").run().await;
+
+  TestBuilder::new()
+    .command(": ignored args && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(": && echo yes || echo no")
+    .assert_stdout("yes\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn exit() {
   TestBuilder::new()
     .command("exit 1")
