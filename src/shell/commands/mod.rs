@@ -98,6 +98,12 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
       "false".to_string(),
       Rc::new(ExitCodeCommand(1)) as Rc<dyn ShellCommand>,
     ),
+    // POSIX null command: discards its arguments and always exits 0.
+    // Commonly seen as `"test": ":"` in package.json no-op scripts.
+    (
+      ":".to_string(),
+      Rc::new(ExitCodeCommand(0)) as Rc<dyn ShellCommand>,
+    ),
     (
       "unset".to_string(),
       Rc::new(unset::UnsetCommand) as Rc<dyn ShellCommand>,
