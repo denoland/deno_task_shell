@@ -40,6 +40,9 @@ bitflags! {
     /// When set, the pattern `**` used in a pathname expansion context will
     /// match all files and zero or more directories and subdirectories.
     const GLOBSTAR = 1 << 3;
+    /// Exit the current list on the first non-zero command. Set via
+    /// `set -e` / `set -o errexit`.
+    const ERREXIT = 1 << 4;
   }
 }
 
