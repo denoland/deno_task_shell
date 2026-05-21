@@ -14,8 +14,9 @@ use crate::FutureExecuteResult;
 use crate::ShellCommand;
 use crate::ShellCommandContext;
 use futures::FutureExt;
-use monch::ParseErrorFailureError;
 use thiserror::Error;
+
+use crate::ParseError;
 
 use super::execute::EvaluateWordTextError;
 use super::which::CommandPathResolutionError;
@@ -118,7 +119,7 @@ enum ShebangError {
   )]
   Unsupported(String),
   #[error(transparent)]
-  Parse(#[from] ParseErrorFailureError),
+  Parse(#[from] ParseError),
   #[error(transparent)]
   EvaluateArgs(#[from] EvaluateWordTextError),
 }

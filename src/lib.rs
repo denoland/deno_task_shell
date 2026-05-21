@@ -6,6 +6,8 @@
 
 pub mod parser;
 
+pub use monch::ParseErrorFailureError as ParseError;
+
 #[cfg(feature = "shell")]
 mod shell;
 
