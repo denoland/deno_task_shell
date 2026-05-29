@@ -933,7 +933,17 @@ fn evaluate_word_parts(
             Ok(paths)
           }
         }
-        Err(err) => Err(EvaluateWordTextError::InvalidPattern { pattern, err }),
+        Err(err) => {
+          // bash passes malformed patterns through literally; only error when
+          // failglob is explicitly set
+          if options.contains(ShellOptions::FAILGLOB) {
+            Err(EvaluateWordTextError::InvalidPattern { pattern, err })
+          } else if options.contains(ShellOptions::NULLGLOB) {
+            Ok(Vec::new())
+          } else {
+            Ok(vec![current_text.into()])
+          }
+        }
       }
     } else {
       Ok(vec![text_parts_to_string(text_parts)])
