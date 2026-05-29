@@ -535,6 +535,24 @@ async fn pipeline() {
     .assert_file_equals("output.txt", "1\n")
     .run()
     .await;
+
+  // redirect on the left side of a pipe: the left command's stdout goes to the
+  // file, so the right side of the pipe receives nothing.
+  TestBuilder::new()
+    .command(r#"echo 1 > output.txt | deno eval 'const s = await new Response(Deno.stdin.readable).text(); console.log("len=" + s.length)'"#)
+    .assert_file_equals("output.txt", "1\n")
+    .assert_stdout("len=0\n")
+    .run()
+    .await;
+
+  // `2>&1 | reader` — both stdout and stderr of the left command are
+  // funneled through the pipe to the reader. This is the use case from
+  // denoland/deno#28808.
+  TestBuilder::new()
+    .command(r#"deno eval 'console.log("o"); console.error("e")' 2>&1 | deno eval 'await Deno.stdin.readable.pipeTo(Deno.stdout.writable)'"#)
+    .assert_stdout("o\ne\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]

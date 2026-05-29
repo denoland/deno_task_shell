@@ -490,7 +490,6 @@ fn parse_pipeline(input: &str) -> ParseResult<'_, Pipeline> {
 }
 
 fn parse_pipeline_inner(input: &str) -> ParseResult<'_, PipelineInner> {
-  let original_input = input;
   let (input, command) = parse_command(input)?;
 
   let (input, inner) = match parse_pipe_sequence_op(input) {
@@ -499,13 +498,6 @@ fn parse_pipeline_inner(input: &str) -> ParseResult<'_, PipelineInner> {
         &parse_pipeline_inner,
         "Expected command following pipeline operator.",
       )(input)?;
-
-      if command.redirect.is_some() {
-        return ParseError::fail(
-          original_input,
-          "Redirects in pipe sequence commands are currently not supported.",
-        );
-      }
 
       (
         input,
@@ -2154,12 +2146,60 @@ mod test {
       "1> stdout.txt 2> stderr.txt",
     );
 
-    // redirect in pipeline sequence command should error
-    run_test_with_end(
+    // redirect on the left side of a pipe sequence
+    run_test(
       parse_sequence,
       "echo 1 1> stdout.txt | cat",
-      Err("Redirects in pipe sequence commands are currently not supported."),
-      "echo 1 1> stdout.txt | cat",
+      Ok(
+        PipeSequence {
+          current: Command {
+            inner: CommandInner::Simple(SimpleCommand {
+              env_vars: vec![],
+              args: vec![Word::new_word("echo"), Word::new_word("1")],
+            }),
+            redirect: Some(Redirect {
+              maybe_fd: Some(RedirectFd::Fd(1)),
+              op: RedirectOp::Output(RedirectOpOutput::Overwrite),
+              io_file: IoFile::Word(Word::new_word("stdout.txt")),
+            }),
+          },
+          op: PipeSequenceOperator::Stdout,
+          next: SimpleCommand {
+            env_vars: vec![],
+            args: vec![Word::new_word("cat")],
+          }
+          .into(),
+        }
+        .into(),
+      ),
+    );
+
+    // `2>&1 | tee` — the use case from denoland/deno#28808
+    run_test(
+      parse_sequence,
+      "cmd 2>&1 | tee log",
+      Ok(
+        PipeSequence {
+          current: Command {
+            inner: CommandInner::Simple(SimpleCommand {
+              env_vars: vec![],
+              args: vec![Word::new_word("cmd")],
+            }),
+            redirect: Some(Redirect {
+              maybe_fd: Some(RedirectFd::Fd(2)),
+              op: RedirectOp::Output(RedirectOpOutput::Overwrite),
+              io_file: IoFile::Fd(1),
+            }),
+          },
+          op: PipeSequenceOperator::Stdout,
+          next: SimpleCommand {
+            env_vars: vec![],
+            args: vec![Word::new_word("tee"), Word::new_word("log")],
+          }
+          .into(),
+        }
+        .into(),
+      ),
     );
   }
 
