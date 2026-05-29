@@ -2174,3 +2174,96 @@ async fn errexit_option() {
     .run()
     .await;
 }
+
+#[tokio::test]
+async fn test_builtin() {
+  // single-arg string truthiness
+  TestBuilder::new()
+    .command("test hello && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("test '' || echo empty")
+    .assert_stdout("empty\n")
+    .run()
+    .await;
+
+  // string predicates
+  TestBuilder::new()
+    .command("test -n hello && echo yes")
+    .assert_stdout("yes\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("test -z '' && echo yes")
+    .assert_stdout("yes\n")
+    .run()
+    .await;
+
+  // string comparison
+  TestBuilder::new()
+    .command("test a = a && test a != b && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+
+  // integer comparison
+  TestBuilder::new()
+    .command("test 1 -lt 2 && test 3 -ge 3 && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+
+  // negation
+  TestBuilder::new()
+    .command("test ! '' && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("test ! 1 -eq 2 && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+
+  // file predicates: -f, -d, -e, -s
+  TestBuilder::new()
+    .file("a.txt", "hi")
+    .file("empty.txt", "")
+    .directory("sub")
+    .command("test -f a.txt && test -d sub && test -e a.txt && echo ok")
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .file("a.txt", "hi")
+    .file("empty.txt", "")
+    .command(
+      "test -s a.txt && ! test -s empty.txt && ! test -e missing && echo ok",
+    )
+    .assert_stdout("ok\n")
+    .run()
+    .await;
+
+  // syntax error → exit code 2
+  TestBuilder::new()
+    .command("test foo -unknown bar")
+    .assert_stderr("test: binary operator expected: -unknown\n")
+    .assert_exit_code(2)
+    .run()
+    .await;
+
+  // common use case: gating a command on a file existing
+  TestBuilder::new()
+    .file("artifact", "x")
+    .command("test -f artifact && echo found || echo missing")
+    .assert_stdout("found\n")
+    .run()
+    .await;
+  TestBuilder::new()
+    .command("test -f artifact && echo found || echo missing")
+    .assert_stdout("missing\n")
+    .run()
+    .await;
+}
