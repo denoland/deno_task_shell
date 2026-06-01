@@ -16,6 +16,7 @@ mod rm;
 mod set;
 mod shopt;
 mod sleep;
+mod test;
 mod unset;
 mod xargs;
 
@@ -90,6 +91,10 @@ pub fn builtin_commands() -> HashMap<String, Rc<dyn ShellCommand>> {
     (
       "sleep".to_string(),
       Rc::new(sleep::SleepCommand) as Rc<dyn ShellCommand>,
+    ),
+    (
+      "test".to_string(),
+      Rc::new(test::TestCommand::new_test()) as Rc<dyn ShellCommand>,
     ),
     (
       "true".to_string(),
