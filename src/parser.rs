@@ -1,7 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use anyhow::Result;
-use anyhow::bail;
 use monch::*;
 
 // Shell grammar rules this is loosely based on:
@@ -257,6 +255,10 @@ pub enum WordPart {
   Command(SequentialList),
   /// Quoted string (ex. `"hello"` or `'test'`)
   Quoted(Vec<WordPart>),
+  /// Brace expansion alternatives (ex. `{a,b,c}` or `{1..3}`).
+  /// Each entry is a Word to expand into; the surrounding word is
+  /// duplicated for every alternative (cartesian product across braces).
+  Brace(Vec<Word>),
 }
 
 #[cfg_attr(feature = "serialization", derive(serde::Serialize))]
@@ -321,7 +323,7 @@ pub enum RedirectOpOutput {
   Append,
 }
 
-pub fn parse(input: &str) -> Result<SequentialList> {
+pub fn parse(input: &str) -> Result<SequentialList, ParseErrorFailureError> {
   /// Clips the snippet to the current line and, for multi-line input,
   /// prefixes the message with a 1-based line number.
   fn failure_to_error(
@@ -359,18 +361,18 @@ pub fn parse(input: &str) -> Result<SequentialList> {
     Ok((remaining, expr)) => {
       if remaining.trim().is_empty() {
         if expr.items.is_empty() {
-          bail!("Empty command.")
+          Err(ParseErrorFailureError::new("Empty command.".to_string()))
         } else {
           Ok(expr)
         }
       } else {
-        Err(failure_to_error(input, fail_for_trailing_input(remaining)).into())
+        Err(failure_to_error(input, fail_for_trailing_input(remaining)))
       }
     }
     Err(ParseError::Backtrace) => {
-      Err(failure_to_error(input, fail_for_trailing_input(input)).into())
+      Err(failure_to_error(input, fail_for_trailing_input(input)))
     }
-    Err(ParseError::Failure(e)) => Err(failure_to_error(input, *e).into()),
+    Err(ParseError::Failure(e)) => Err(failure_to_error(input, *e)),
   }
 }
 
@@ -939,14 +941,25 @@ fn parse_word_parts(
         }),
         PendingPart::Char,
       ),
-      map(
-        if_true(next_char, |&c| match mode {
-          ParseWordPartsMode::DoubleQuotes => c != '"',
+      // Try brace expansion first; on backtrack the `{` falls through to
+      // the catchall char rule and is treated as a literal.
+      or(
+        |input| match mode {
+          ParseWordPartsMode::DoubleQuotes => ParseError::backtrace(),
           ParseWordPartsMode::Unquoted => {
-            !c.is_whitespace() && !"~(){}<>|&;\"'".contains(c)
+            let (input, words) = parse_brace_expansion(input)?;
+            Ok((input, PendingPart::Parts(vec![WordPart::Brace(words)])))
           }
-        }),
-        PendingPart::Char,
+        },
+        map(
+          if_true(next_char, |&c| match mode {
+            ParseWordPartsMode::DoubleQuotes => c != '"',
+            ParseWordPartsMode::Unquoted => {
+              !c.is_whitespace() && !"~()<>|&;\"'".contains(c)
+            }
+          }),
+          PendingPart::Char,
+        ),
       ),
       |input| match mode {
         ParseWordPartsMode::DoubleQuotes => ParseError::backtrace(),
@@ -992,6 +1005,202 @@ fn parse_word_parts(
 
     Ok((input, result))
   }
+}
+
+/// Try to parse a bash-style brace expansion starting at `{`.
+///
+/// Succeeds for `{a,b,...}` (≥2 comma-separated alternatives) and for
+/// numeric/single-char ranges `{N..M}`, `{N..M..S}`, `{a..z}`. Anything
+/// else — including bare `{}`, `{single}`, unmatched `{`, ranges with
+/// non-numeric/multi-char endpoints — backtracks so the caller can treat
+/// the `{` as a literal character.
+fn parse_brace_expansion(input: &str) -> ParseResult<'_, Vec<Word>> {
+  let after_brace = match input.strip_prefix('{') {
+    Some(rest) => rest,
+    None => return ParseError::backtrace(),
+  };
+  let Some(scan) = scan_brace_body(after_brace) else {
+    return ParseError::backtrace();
+  };
+
+  // Prefer the range form. `{1..3,foo}` is a comma form in bash because
+  // a comma exists at the top level, so only try range when no top-level
+  // commas were found.
+  if scan.commas.is_empty()
+    && let Some(words) = try_brace_range(scan.body)
+  {
+    return Ok((scan.rest, words));
+  }
+
+  if scan.commas.is_empty() {
+    return ParseError::backtrace();
+  }
+
+  let mut segments: Vec<&str> = Vec::with_capacity(scan.commas.len() + 1);
+  let mut prev = 0;
+  for &pos in &scan.commas {
+    segments.push(&scan.body[prev..pos]);
+    prev = pos + 1;
+  }
+  segments.push(&scan.body[prev..]);
+
+  let mut words = Vec::with_capacity(segments.len());
+  for seg in segments {
+    let (rest, parts) = parse_word_parts(ParseWordPartsMode::Unquoted)(seg)?;
+    if !rest.is_empty() {
+      // Scanner found a segment but the word-part parser couldn't
+      // consume all of it; bail out and let the outer parser treat
+      // the opening `{` as literal.
+      return ParseError::backtrace();
+    }
+    words.push(Word(parts));
+  }
+
+  Ok((scan.rest, words))
+}
+
+struct BraceScan<'a> {
+  /// Slice between `{` and the matching `}`.
+  body: &'a str,
+  /// Remaining input after the matching `}`.
+  rest: &'a str,
+  /// Byte offsets of top-level commas within `body`.
+  commas: Vec<usize>,
+}
+
+/// Walk `input` (the slice after a leading `{`) looking for the matching
+/// `}` at brace depth 0. Tracks single/double quotes and `\`-escapes so
+/// their `{`, `}`, and `,` are ignored. Returns `None` if no matching
+/// closing brace is found.
+fn scan_brace_body(input: &str) -> Option<BraceScan<'_>> {
+  let bytes = input.as_bytes();
+  let mut depth: usize = 0;
+  let mut commas: Vec<usize> = Vec::new();
+  let mut i = 0;
+  while i < bytes.len() {
+    match bytes[i] {
+      b'\\' => {
+        // Skip the escaped byte if present (any continuation byte of a
+        // multi-byte char is >= 0x80 so we won't land in the middle of one).
+        i += if i + 1 < bytes.len() { 2 } else { 1 };
+      }
+      b'\'' => {
+        i += 1;
+        while i < bytes.len() && bytes[i] != b'\'' {
+          i += 1;
+        }
+        if i < bytes.len() {
+          i += 1;
+        }
+      }
+      b'"' => {
+        i += 1;
+        while i < bytes.len() && bytes[i] != b'"' {
+          if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            i += 2;
+          } else {
+            i += 1;
+          }
+        }
+        if i < bytes.len() {
+          i += 1;
+        }
+      }
+      b'{' => {
+        depth += 1;
+        i += 1;
+      }
+      b'}' => {
+        if depth == 0 {
+          return Some(BraceScan {
+            body: &input[..i],
+            rest: &input[i + 1..],
+            commas,
+          });
+        }
+        depth -= 1;
+        i += 1;
+      }
+      b',' if depth == 0 => {
+        commas.push(i);
+        i += 1;
+      }
+      _ => i += 1,
+    }
+  }
+  None
+}
+
+/// Pre-expand a `{N..M}`, `{N..M..S}`, or `{a..z}` range into its
+/// alternatives. Returns `None` if `body` is not a valid range.
+fn try_brace_range(body: &str) -> Option<Vec<Word>> {
+  let mut parts = body.splitn(3, "..");
+  let start = parts.next()?;
+  let end = parts.next()?;
+  let step_str = parts.next();
+  if start.is_empty() || end.is_empty() {
+    return None;
+  }
+
+  if let (Ok(s), Ok(e)) = (start.parse::<i64>(), end.parse::<i64>()) {
+    let step = match step_str {
+      None => 1i64,
+      Some(s) => {
+        let parsed = s.parse::<i64>().ok()?;
+        if parsed == 0 {
+          return None;
+        }
+        parsed.abs()
+      }
+    };
+    // Cap to avoid pathological allocations (bash itself caps around 2^31).
+    let span = (e - s).unsigned_abs();
+    if span / step.unsigned_abs() > 1_000_000 {
+      return None;
+    }
+    let mut words = Vec::new();
+    let mut n = s;
+    if s <= e {
+      while n <= e {
+        words.push(Word(vec![WordPart::Text(n.to_string())]));
+        n += step;
+      }
+    } else {
+      while n >= e {
+        words.push(Word(vec![WordPart::Text(n.to_string())]));
+        n -= step;
+      }
+    }
+    return Some(words);
+  }
+
+  // Single-character range. Only ASCII letters/digits to match bash.
+  if step_str.is_some() {
+    return None;
+  }
+  let start_chars: Vec<char> = start.chars().collect();
+  let end_chars: Vec<char> = end.chars().collect();
+  if start_chars.len() != 1 || end_chars.len() != 1 {
+    return None;
+  }
+  let sc = start_chars[0];
+  let ec = end_chars[0];
+  if !sc.is_ascii() || !ec.is_ascii() {
+    return None;
+  }
+  let s = sc as u8;
+  let e = ec as u8;
+  let mut words = Vec::new();
+  if s <= e {
+    for n in s..=e {
+      words.push(Word(vec![WordPart::Text((n as char).to_string())]));
+    }
+  } else {
+    for n in (e..=s).rev() {
+      words.push(Word(vec![WordPart::Text((n as char).to_string())]));
+    }
+  }
+  Some(words)
 }
 
 fn parse_command_substitution(input: &str) -> ParseResult<'_, SequentialList> {
@@ -1184,10 +1393,10 @@ mod test {
       parse("&& testing").err().unwrap().to_string(),
       concat!("Unexpected character.\n", "  && testing\n", "  ~",),
     );
-    assert_eq!(
-      parse("test { test").err().unwrap().to_string(),
-      concat!("Unexpected character.\n", "  { test\n", "  ~",),
-    );
+    // Unmatched `{` is a literal character (bash-compatible). The parser
+    // used to reject this with "Unexpected character." but now treats
+    // `{` / `}` outside a valid brace expansion as ordinary word chars.
+    assert!(parse("test { test").is_ok());
     assert!(parse("cp test/* other").is_ok());
     assert!(parse("cp test/? other").is_ok());
     assert_eq!(
@@ -2001,6 +2210,80 @@ mod test {
   }
 
   #[track_caller]
+  #[test]
+  fn test_brace_expansion_parser() {
+    fn text(s: &str) -> WordPart {
+      WordPart::Text(s.to_string())
+    }
+    fn word(parts: Vec<WordPart>) -> Word {
+      Word(parts)
+    }
+
+    // bare {} -> literal `{}`
+    run_test(parse_unquoted_word, "{}", Ok(vec![text("{}")]));
+
+    // single segment, no comma -> literal
+    run_test(parse_unquoted_word, "{abc}", Ok(vec![text("{abc}")]));
+
+    // unmatched `{` -> literal
+    run_test(parse_unquoted_word, "{abc", Ok(vec![text("{abc")]));
+
+    // comma form
+    run_test(
+      parse_unquoted_word,
+      "{a,b,c}",
+      Ok(vec![WordPart::Brace(vec![
+        word(vec![text("a")]),
+        word(vec![text("b")]),
+        word(vec![text("c")]),
+      ])]),
+    );
+
+    // integer range pre-expanded at parse time
+    run_test(
+      parse_unquoted_word,
+      "{1..3}",
+      Ok(vec![WordPart::Brace(vec![
+        word(vec![text("1")]),
+        word(vec![text("2")]),
+        word(vec![text("3")]),
+      ])]),
+    );
+
+    // single-char range
+    run_test(
+      parse_unquoted_word,
+      "{a..c}",
+      Ok(vec![WordPart::Brace(vec![
+        word(vec![text("a")]),
+        word(vec![text("b")]),
+        word(vec![text("c")]),
+      ])]),
+    );
+
+    // surrounding literals
+    run_test(
+      parse_unquoted_word,
+      "pre{a,b}post",
+      Ok(vec![
+        text("pre"),
+        WordPart::Brace(vec![word(vec![text("a")]), word(vec![text("b")])]),
+        text("post"),
+      ]),
+    );
+
+    // empty alternative kept as an empty Word
+    run_test(
+      parse_unquoted_word,
+      "{a,,b}",
+      Ok(vec![WordPart::Brace(vec![
+        word(vec![text("a")]),
+        word(vec![]),
+        word(vec![text("b")]),
+      ])]),
+    );
+  }
+
   fn run_test<'a, T: PartialEq + std::fmt::Debug>(
     combinator: impl Fn(&'a str) -> ParseResult<'a, T>,
     input: &'a str,

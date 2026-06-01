@@ -987,6 +987,11 @@ fn evaluate_word_parts(
             current_text.push(TextPart::Quoted(text));
             continue;
           }
+          // Brace alternatives are pre-expanded by `expand_braces` before
+          // we ever reach the inner evaluator.
+          WordPart::Brace(_) => {
+            unreachable!("brace parts must be expanded before evaluation")
+          }
         };
 
         if let Some(text) = evaluation_result_text {
@@ -1033,7 +1038,58 @@ fn evaluate_word_parts(
     .boxed_local()
   }
 
-  evaluate_word_parts_inner(parts, false, state, stdin, stderr)
+  async move {
+    let mut all_results = Vec::new();
+    for expanded in expand_braces(parts) {
+      let parts_result = evaluate_word_parts_inner(
+        expanded,
+        false,
+        state,
+        stdin.clone(),
+        stderr.clone(),
+      )
+      .await?;
+      all_results.extend(parts_result);
+    }
+    Ok(all_results)
+  }
+  .boxed_local()
+}
+
+/// Expand a flat list of [`WordPart`]s containing any number of
+/// [`WordPart::Brace`] alternatives into a list of brace-free part lists,
+/// one per cartesian-product combination of the alternatives.
+fn expand_braces(parts: Vec<WordPart>) -> Vec<Vec<WordPart>> {
+  let mut results: Vec<Vec<WordPart>> = vec![Vec::new()];
+  for part in parts {
+    match part {
+      WordPart::Brace(alternatives) => {
+        let expanded: Vec<Vec<WordPart>> = alternatives
+          .into_iter()
+          .flat_map(|word| expand_braces(word.into_parts()))
+          .collect();
+        if expanded.is_empty() {
+          continue;
+        }
+        let mut next = Vec::with_capacity(results.len() * expanded.len());
+        for prefix in &results {
+          for alt in &expanded {
+            let mut combined = Vec::with_capacity(prefix.len() + alt.len());
+            combined.extend(prefix.iter().cloned());
+            combined.extend(alt.iter().cloned());
+            next.push(combined);
+          }
+        }
+        results = next;
+      }
+      other => {
+        for r in &mut results {
+          r.push(other.clone());
+        }
+      }
+    }
+  }
+  results
 }
 
 async fn evaluate_command_substitution(

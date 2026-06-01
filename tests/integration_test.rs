@@ -226,6 +226,114 @@ async fn exit() {
 }
 
 #[tokio::test]
+async fn brace_expansion() {
+  // comma form
+  TestBuilder::new()
+    .command("echo {a,b,c}")
+    .assert_stdout("a b c\n")
+    .run()
+    .await;
+
+  // prefix and suffix concat
+  TestBuilder::new()
+    .command("echo pre{a,b}post")
+    .assert_stdout("preapost prebpost\n")
+    .run()
+    .await;
+
+  // cartesian product across multiple braces
+  TestBuilder::new()
+    .command("echo {a,b}{1,2}")
+    .assert_stdout("a1 a2 b1 b2\n")
+    .run()
+    .await;
+
+  // nested
+  TestBuilder::new()
+    .command("echo {a,{b,c}}")
+    .assert_stdout("a b c\n")
+    .run()
+    .await;
+
+  // integer range
+  TestBuilder::new()
+    .command("echo {1..3}")
+    .assert_stdout("1 2 3\n")
+    .run()
+    .await;
+
+  // reverse range
+  TestBuilder::new()
+    .command("echo {3..1}")
+    .assert_stdout("3 2 1\n")
+    .run()
+    .await;
+
+  // integer range with step
+  TestBuilder::new()
+    .command("echo {1..7..2}")
+    .assert_stdout("1 3 5 7\n")
+    .run()
+    .await;
+
+  // single-char range
+  TestBuilder::new()
+    .command("echo {a..e}")
+    .assert_stdout("a b c d e\n")
+    .run()
+    .await;
+
+  // bare {} is literal (find -exec {} idiom — denoland/deno#20893)
+  TestBuilder::new()
+    .command("echo {}")
+    .assert_stdout("{}\n")
+    .run()
+    .await;
+
+  // single-element brace is literal (no comma, no range)
+  TestBuilder::new()
+    .command("echo {abc}")
+    .assert_stdout("{abc}\n")
+    .run()
+    .await;
+
+  // unmatched `{` is literal
+  TestBuilder::new()
+    .command("echo {abc")
+    .assert_stdout("{abc\n")
+    .run()
+    .await;
+
+  // unmatched `}` is literal
+  TestBuilder::new()
+    .command("echo abc}")
+    .assert_stdout("abc}\n")
+    .run()
+    .await;
+
+  // inside double quotes braces are literal
+  TestBuilder::new()
+    .command(r#"echo "{a,b}""#)
+    .assert_stdout("{a,b}\n")
+    .run()
+    .await;
+
+  // inside single quotes braces are literal
+  TestBuilder::new()
+    .command("echo '{a,b}'")
+    .assert_stdout("{a,b}\n")
+    .run()
+    .await;
+
+  // empty alternatives expand to empty strings
+  TestBuilder::new()
+    .command("echo x{a,,b}y")
+    .assert_stdout("xay xy xby\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn double_quotes() {
   // escaped
   TestBuilder::new()

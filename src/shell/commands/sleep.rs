@@ -3,8 +3,6 @@
 use std::ffi::OsString;
 use std::time::Duration;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 
@@ -15,6 +13,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 use super::execute_with_cancellation;
 
 pub struct SleepCommand;
@@ -47,13 +47,13 @@ async fn sleep_command(
   }
 }
 
-async fn execute_sleep(args: &[OsString]) -> Result<()> {
+async fn execute_sleep(args: &[OsString]) -> Result<(), ShellCommandError> {
   let ms = parse_args(args)?;
   tokio::time::sleep(Duration::from_millis(ms)).await;
   Ok(())
 }
 
-fn parse_arg(arg: &str) -> Result<f64> {
+fn parse_arg(arg: &str) -> Result<f64, ShellCommandError> {
   if let Some(t) = arg.strip_suffix('s') {
     return Ok(t.parse()?);
   }
@@ -70,7 +70,7 @@ fn parse_arg(arg: &str) -> Result<f64> {
   Ok(arg.parse()?)
 }
 
-fn parse_args(args: &[OsString]) -> Result<u64> {
+fn parse_args(args: &[OsString]) -> Result<u64, ShellCommandError> {
   // the time to sleep is the sum of all the arguments
   let mut total_time_ms = 0;
   let mut had_value = false;
@@ -79,7 +79,7 @@ fn parse_args(args: &[OsString]) -> Result<u64> {
       ArgKind::Arg(arg) => {
         match arg
           .to_str()
-          .ok_or_else(|| anyhow::anyhow!("invalid utf-8"))
+          .ok_or_else(|| ShellCommandError::new("invalid utf-8"))
           .and_then(parse_arg)
         {
           Ok(value_s) => {

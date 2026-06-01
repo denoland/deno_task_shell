@@ -5,8 +5,6 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::future::LocalBoxFuture;
 use path_dedot::ParseDot;
 
@@ -18,6 +16,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 
 pub struct CdCommand;
 
@@ -39,7 +39,10 @@ impl ShellCommand for CdCommand {
   }
 }
 
-fn execute_cd(cwd: &Path, args: &[OsString]) -> Result<PathBuf> {
+fn execute_cd(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<PathBuf, ShellCommandError> {
   let path = parse_args(args)?;
   let new_dir = cwd.join(path);
   let new_dir = match new_dir.parse_dot() {
@@ -53,7 +56,7 @@ fn execute_cd(cwd: &Path, args: &[OsString]) -> Result<PathBuf> {
   Ok(new_dir)
 }
 
-fn parse_args(args: &[OsString]) -> Result<&OsStr> {
+fn parse_args(args: &[OsString]) -> Result<&OsStr, ShellCommandError> {
   let args = parse_arg_kinds(args);
   let mut paths = Vec::new();
   for arg in args {
