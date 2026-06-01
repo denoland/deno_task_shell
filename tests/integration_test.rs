@@ -1635,6 +1635,27 @@ async fn glob_basic() {
     .assert_exit_code(0)
     .run()
     .await;
+
+  // denoland/deno#27238: a glob inside a non-path argument like a flag value
+  // should pass through literally rather than erroring.
+  TestBuilder::new()
+    .command("echo --allow-write=@mizu/**/README.md,README.md")
+    .assert_stderr("")
+    .assert_stdout("--allow-write=@mizu/**/README.md,README.md\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // Same issue, malformed-pattern form: `**` not in its own path component.
+  // The glob crate rejects the pattern; without failglob we should still
+  // fall through to the literal text.
+  TestBuilder::new()
+    .command("echo --allow-write=**/*.txt")
+    .assert_stderr("")
+    .assert_stdout("--allow-write=**/*.txt\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
 }
 
 #[tokio::test]
@@ -2046,6 +2067,17 @@ async fn shopt_failglob() {
     .file("test.txt", "test\n")
     .command("shopt -u failglob && shopt -u nullglob && echo *.nonexistent")
     .assert_stdout("*.nonexistent\n")
+    .assert_exit_code(0)
+    .run()
+    .await;
+
+  // failglob on with a malformed pattern still errors (exit code 1)
+  TestBuilder::new()
+    .command(
+      "shopt -s failglob && echo --allow-write=**/*.txt 2> /dev/null || echo recovered",
+    )
+    .assert_stderr("")
+    .assert_stdout("recovered\n")
     .assert_exit_code(0)
     .run()
     .await;
