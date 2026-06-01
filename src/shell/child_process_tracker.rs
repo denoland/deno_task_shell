@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-use anyhow::Result;
-
 use tokio::process::Child;
 
 /// Windows does not have a concept of parent processes and so
@@ -22,7 +20,7 @@ impl ChildProcessTracker {
       Ok(tracker) => Self(Rc::new(tracker)),
       Err(err) => {
         if cfg!(debug_assertions) {
-          panic!("Could not start tracking processes. {:#}", err);
+          panic!("Could not start tracking processes. {}", err);
         } else {
           // fallback to not tracking processes if this fails
           Self(Rc::new(NullChildProcessTracker))
@@ -43,19 +41,19 @@ impl ChildProcessTracker {
       && cfg!(debug_assertions)
       && child.id().is_some()
     {
-      panic!("Could not track process: {:#}", err);
+      panic!("Could not track process: {}", err);
     }
   }
 }
 
 trait Tracker: Send + Sync {
-  fn track(&self, child: &Child) -> Result<()>;
+  fn track(&self, child: &Child) -> std::io::Result<()>;
 }
 
 struct NullChildProcessTracker;
 
 impl Tracker for NullChildProcessTracker {
-  fn track(&self, _: &Child) -> Result<()> {
+  fn track(&self, _: &Child) -> std::io::Result<()> {
     Ok(())
   }
 }
@@ -64,8 +62,6 @@ impl Tracker for NullChildProcessTracker {
 mod windows {
   use std::ptr;
 
-  use anyhow::Result;
-  use anyhow::bail;
   use tokio::process::Child;
 
   use windows_sys::Win32::Foundation::HANDLE;
@@ -86,7 +82,7 @@ mod windows {
   pub struct JobObject(WinHandle);
 
   impl JobObject {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> std::io::Result<Self> {
       // SAFETY: WinAPI calls
       unsafe {
         let handle =
@@ -104,25 +100,22 @@ mod windows {
           std::mem::size_of_val(&info) as u32,
         );
         if result != TRUE {
-          bail!(
-            "Could not set job information object. {:#}",
-            std::io::Error::last_os_error()
-          );
+          return Err(std::io::Error::last_os_error());
         }
 
         Ok(Self(handle))
       }
     }
 
-    fn add_process_handle(&self, process_handle: HANDLE) -> Result<()> {
+    fn add_process_handle(
+      &self,
+      process_handle: HANDLE,
+    ) -> std::io::Result<()> {
       // SAFETY: WinAPI call
       unsafe {
         let result = AssignProcessToJobObject(self.0.as_raw(), process_handle);
         if result != TRUE {
-          bail!(
-            "Could not assign process to job object. {:#}",
-            std::io::Error::last_os_error()
-          );
+          Err(std::io::Error::last_os_error())
         } else {
           Ok(())
         }
@@ -131,7 +124,7 @@ mod windows {
   }
 
   impl Tracker for JobObject {
-    fn track(&self, child: &Child) -> Result<()> {
+    fn track(&self, child: &Child) -> std::io::Result<()> {
       if let Some(handle) = child.raw_handle() {
         self.add_process_handle(handle)
       } else {

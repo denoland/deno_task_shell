@@ -1,6 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use anyhow::Result;
 use futures::future::LocalBoxFuture;
 use std::ffi::OsString;
 use std::fs::File;
@@ -12,6 +11,7 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
 
 pub struct CatCommand;
 
@@ -32,7 +32,9 @@ impl ShellCommand for CatCommand {
   }
 }
 
-fn execute_cat(mut context: ShellCommandContext) -> Result<ExecuteResult> {
+fn execute_cat(
+  mut context: ShellCommandContext,
+) -> Result<ExecuteResult, ShellCommandError> {
   let flags = parse_args(context.args)?;
   let mut exit_code = 0;
   let mut buf = vec![0; 4096];
@@ -78,7 +80,7 @@ struct CatFlags {
   paths: Vec<OsString>,
 }
 
-fn parse_args(args: Vec<OsString>) -> Result<CatFlags> {
+fn parse_args(args: Vec<OsString>) -> Result<CatFlags, ShellCommandError> {
   let mut paths = Vec::new();
   for arg in parse_arg_kinds(&args) {
     match arg {

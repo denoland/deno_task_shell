@@ -3,8 +3,7 @@
 use std::ffi::OsStr;
 use std::ffi::OsString;
 
-use anyhow::Result;
-use anyhow::bail;
+use super::error::ShellCommandError;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ArgKind<'a> {
@@ -14,16 +13,17 @@ pub enum ArgKind<'a> {
 }
 
 impl ArgKind<'_> {
-  pub fn bail_unsupported(&self) -> Result<()> {
+  pub fn bail_unsupported(&self) -> Result<(), ShellCommandError> {
     match self {
-      ArgKind::Arg(arg) => {
-        bail!("unsupported argument: {}", arg.to_string_lossy())
-      }
-      ArgKind::LongFlag(name) => {
-        bail!("unsupported flag: --{}", name)
-      }
+      ArgKind::Arg(arg) => Err(ShellCommandError::new(format!(
+        "unsupported argument: {}",
+        arg.to_string_lossy()
+      ))),
+      ArgKind::LongFlag(name) => Err(ShellCommandError::new(format!(
+        "unsupported flag: --{name}"
+      ))),
       ArgKind::ShortFlag(name) => {
-        bail!("unsupported flag: -{}", name)
+        Err(ShellCommandError::new(format!("unsupported flag: -{name}")))
       }
     }
   }

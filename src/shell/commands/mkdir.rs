@@ -1,7 +1,5 @@
 // Copyright 2018-2025 the Deno authors. MIT license.
 
-use anyhow::Result;
-use anyhow::bail;
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use std::ffi::OsStr;
@@ -15,6 +13,8 @@ use super::ShellCommand;
 use super::ShellCommandContext;
 use super::args::ArgKind;
 use super::args::parse_arg_kinds;
+use super::error::ShellCommandError;
+use super::error::bail;
 use super::execute_with_cancellation;
 
 pub struct MkdirCommand;
@@ -48,7 +48,10 @@ async fn mkdir_command(
   }
 }
 
-async fn execute_mkdir(cwd: &Path, args: &[OsString]) -> Result<()> {
+async fn execute_mkdir(
+  cwd: &Path,
+  args: &[OsString],
+) -> Result<(), ShellCommandError> {
   let flags = parse_args(args)?;
   for specified_path in flags.paths {
     let path = cwd.join(specified_path);
@@ -83,7 +86,7 @@ struct MkdirFlags<'a> {
   paths: Vec<&'a OsStr>,
 }
 
-fn parse_args(args: &[OsString]) -> Result<MkdirFlags<'_>> {
+fn parse_args(args: &[OsString]) -> Result<MkdirFlags<'_>, ShellCommandError> {
   let mut result = MkdirFlags::default();
 
   for arg in parse_arg_kinds(args) {
