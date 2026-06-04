@@ -377,7 +377,7 @@ pub fn parse(input: &str) -> Result<SequentialList, ParseErrorFailureError> {
 }
 
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
-  let (mut input, _) = skip_whitespace(input)?;
+  let (mut input, _) = skip_whitespace_and_comments(input)?;
   let mut items = Vec::new();
   while !input.is_empty() {
     let (after_seq, sequence) = match parse_sequence(input) {
@@ -422,7 +422,7 @@ fn parse_list_item_separator(input: &str) -> ParseResult<'_, (bool, bool)> {
   }
   if let Ok((rest, _)) = or(tag("\r\n"), tag("\n"))(cursor) {
     ends_line = true;
-    let (rest, _) = skip_whitespace(rest)?;
+    let (rest, _) = skip_whitespace_and_comments(rest)?;
     cursor = rest;
   }
   if cursor == input {
@@ -604,7 +604,7 @@ fn parse_op_str<'a>(
   debug_assert!(operator == "&&" || operator == "||" || operator == "&");
   terminated(
     tag(operator),
-    terminated(check_not(one_of("|&")), skip_whitespace),
+    terminated(check_not(one_of("|&")), skip_whitespace_and_comments),
   )
 }
 
@@ -616,7 +616,7 @@ fn parse_pipe_sequence_op(
       map(tag("|&"), |_| PipeSequenceOperator::StdoutStderr),
       map(ch('|'), |_| PipeSequenceOperator::Stdout),
     ),
-    terminated(check_not(one_of("|&")), skip_whitespace),
+    terminated(check_not(one_of("|&")), skip_whitespace_and_comments),
   )(input)
 }
 
@@ -1268,7 +1268,7 @@ fn parse_backticks_command_substitution(
 
 fn parse_subshell(input: &str) -> ParseResult<'_, SequentialList> {
   delimited(
-    terminated(ch('('), skip_whitespace),
+    terminated(ch('('), skip_whitespace_and_comments),
     parse_sequential_list,
     with_failure_input(
       input,
@@ -1316,7 +1316,9 @@ fn assert_whitespace_or_end(input: &str) -> ParseResult<'_, ()> {
   Ok((input, ()))
 }
 
-/// Skips space, tab, and `\<newline>` continuations. Leaves raw newlines.
+/// Skips space, tab, and `\<newline>` continuations, plus a trailing
+/// `#`-comment if one begins at the resulting word boundary. Leaves raw
+/// newlines (a comment runs to, but does not consume, the next newline).
 fn skip_inline_whitespace(input: &str) -> ParseResult<'_, ()> {
   let bytes = input.as_bytes();
   let mut i = 0;
@@ -1342,7 +1344,38 @@ fn skip_inline_whitespace(input: &str) -> ParseResult<'_, ()> {
       _ => break,
     }
   }
-  Ok((&input[i..], ()))
+  Ok((skip_comment(&input[i..]), ()))
+}
+
+/// If `input` starts with a `#`, consume the comment up to (but not
+/// including) the next newline. Otherwise return `input` unchanged.
+///
+/// Callers must invoke this only at a word boundary (after skipping
+/// whitespace or following a metacharacter); a `#` in the middle of a
+/// word is an ordinary character, not a comment.
+fn skip_comment(input: &str) -> &str {
+  if input.starts_with('#') {
+    let end = input.find(['\n', '\r']).unwrap_or(input.len());
+    &input[end..]
+  } else {
+    input
+  }
+}
+
+/// Skips whitespace (including newlines) and any whole-line `#`-comments,
+/// repeating until neither remains. Mirrors `skip_whitespace` but is
+/// comment-aware, so it can be used both as `skip_whitespace_and_comments(input)?`
+/// and as a combinator (e.g. `terminated(op, skip_whitespace_and_comments)`).
+fn skip_whitespace_and_comments(input: &str) -> ParseResult<'_, ()> {
+  let mut current = input;
+  loop {
+    let (rest, _) = skip_whitespace(current)?;
+    let rest = skip_comment(rest);
+    if rest == current {
+      return Ok((current, ()));
+    }
+    current = rest;
+  }
 }
 
 fn is_valid_env_var_byte(b: u8) -> bool {
@@ -1472,6 +1505,92 @@ mod test {
 
     // env assignment on its own line is a shell var
     assert_eq!(parse("FOO=bar\ncmd").unwrap().items.len(), 2);
+  }
+
+  #[test]
+  fn comments() {
+    fn single_command_args(input: &str) -> Vec<Word> {
+      let list = parse(input).unwrap();
+      assert_eq!(list.items.len(), 1, "input: {input:?}");
+      let Sequence::Pipeline(pipeline) = &list.items[0].sequence else {
+        panic!("expected pipeline for input: {input:?}");
+      };
+      let PipelineInner::Command(cmd) = &pipeline.inner else {
+        panic!("expected command for input: {input:?}");
+      };
+      let CommandInner::Simple(simple) = &cmd.inner else {
+        panic!("expected simple command for input: {input:?}");
+      };
+      simple.args.clone()
+    }
+
+    // trailing comment after a command (the case from denoland/deno#27644)
+    assert_eq!(
+      single_command_args("echo foo # this is a comment"),
+      vec![Word::new_word("echo"), Word::new_word("foo")],
+    );
+    // no space before `#` is still a comment at a word boundary
+    assert_eq!(
+      single_command_args("echo foo #comment"),
+      vec![Word::new_word("echo"), Word::new_word("foo")],
+    );
+    // `#` in the middle of a word is a literal character, not a comment
+    assert_eq!(
+      single_command_args("echo foo#bar"),
+      vec![Word::new_word("echo"), Word::new_word("foo#bar")],
+    );
+    // `#` attached to the start of a word (no preceding space) is literal
+    assert_eq!(
+      single_command_args("echo #foo"),
+      vec![Word::new_word("echo")],
+    );
+    // `#` inside quotes is literal
+    assert_eq!(
+      single_command_args("echo '# not a comment'"),
+      vec![Word::new_word("echo"), Word::new_string("# not a comment"),],
+    );
+    assert_eq!(
+      single_command_args("echo \"# not a comment\""),
+      vec![Word::new_word("echo"), Word::new_string("# not a comment"),],
+    );
+
+    // a comment line between commands is skipped
+    assert_eq!(
+      parse("echo foo\n# a comment\necho bar")
+        .unwrap()
+        .items
+        .len(),
+      2,
+    );
+    // a leading comment line is skipped
+    assert_eq!(parse("# leading comment\necho foo").unwrap().items.len(), 1);
+    // a trailing comment line is skipped
+    assert_eq!(parse("echo foo\n# trailing").unwrap().items.len(), 1);
+    // a comment after `;`
+    assert_eq!(
+      parse("echo foo ;# comment\necho bar").unwrap().items.len(),
+      2
+    );
+    // a comment following a boolean operator continuation
+    assert_eq!(
+      parse("echo foo && # comment\necho bar")
+        .unwrap()
+        .items
+        .len(),
+      1,
+    );
+    // a comment following a pipe continuation
+    assert_eq!(
+      parse("echo foo | # comment\ngrep bar").unwrap().items.len(),
+      1,
+    );
+    // a comment line inside a subshell is skipped
+    assert_eq!(parse("(echo a\n# comment\necho b)").unwrap().items.len(), 1);
+    // a comment-only input is an empty command
+    assert_eq!(
+      parse("# just a comment").err().unwrap().to_string(),
+      "Empty command.",
+    );
   }
 
   #[test]
