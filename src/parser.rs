@@ -1371,7 +1371,9 @@ fn skip_whitespace_and_comments(input: &str) -> ParseResult<'_, ()> {
   loop {
     let (rest, _) = skip_whitespace(current)?;
     let rest = skip_comment(rest);
-    if rest == current {
+    // `rest` is always a suffix of `current`, so equal lengths means
+    // nothing was consumed — compare lengths to avoid a byte-wise compare.
+    if rest.len() == current.len() {
       return Ok((current, ()));
     }
     current = rest;
