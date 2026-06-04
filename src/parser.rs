@@ -376,6 +376,130 @@ pub fn parse(input: &str) -> Result<SequentialList, ParseErrorFailureError> {
   }
 }
 
+/// A `deno task` dependency parsed into the referenced task name and the
+/// extra arguments to forward to that task. Produced by
+/// [`parse_task_dependency`].
+#[cfg_attr(feature = "serialization", derive(serde::Serialize))]
+#[cfg_attr(feature = "serialization", serde(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDependency {
+  /// The name of the task being depended on.
+  pub name: String,
+  /// Extra arguments to append when running the dependency. May be empty.
+  pub args: Vec<String>,
+}
+
+/// Parses a `deno task` dependency entry such as `"test"` or
+/// `"test --coverage='.coverage/' --clean"` into its task name and the
+/// literal arguments to forward to that task.
+///
+/// The entry must be a single plain command: anything that would require
+/// a runtime environment or alter control flow is rejected so the result
+/// is unambiguous at configuration-load time. The following are errors:
+/// pipelines (`|`), boolean/sequential operators (`&&`, `||`, `;`),
+/// background `&`, redirects, subshells, `!` negation, environment
+/// variable assignments, and any argument containing variable
+/// substitution (`$VAR`), command substitution (`$(...)` / backticks),
+/// tilde expansion (`~`), or brace expansion (`{a,b}`).
+///
+/// Quotes are honored and removed, so `--flag='a b'` yields the single
+/// argument `--flag=a b`.
+pub fn parse_task_dependency(
+  input: &str,
+) -> Result<TaskDependency, ParseErrorFailureError> {
+  fn err(message: &str) -> ParseErrorFailureError {
+    ParseErrorFailureError::new(message.to_string())
+  }
+
+  /// Flattens a word into a literal string, returning `None` if it
+  /// contains any part that would require runtime expansion.
+  fn word_to_literal(word: &Word) -> Option<String> {
+    fn collect(parts: &[WordPart], out: &mut String) -> bool {
+      for part in parts {
+        match part {
+          WordPart::Text(text) => out.push_str(text),
+          WordPart::Quoted(inner) => {
+            if !collect(inner, out) {
+              return false;
+            }
+          }
+          WordPart::Variable(_)
+          | WordPart::Command(_)
+          | WordPart::Tilde
+          | WordPart::Brace(_) => return false,
+        }
+      }
+      true
+    }
+
+    let mut out = String::new();
+    collect(word.parts(), &mut out).then_some(out)
+  }
+
+  let mut list = parse(input)?;
+  if list.items.len() != 1 {
+    return Err(err(
+      "Expected a single task name optionally followed by arguments.",
+    ));
+  }
+  let item = list.items.remove(0);
+  if item.is_async {
+    return Err(err("Unexpected '&' in task dependency."));
+  }
+  let pipeline = match item.sequence {
+    Sequence::Pipeline(pipeline) => pipeline,
+    Sequence::ShellVar(_) => {
+      return Err(err(
+        "Unexpected environment variable assignment in task dependency.",
+      ));
+    }
+    Sequence::BooleanList(_) => {
+      return Err(err(
+        "Unexpected operator in task dependency. A dependency must be a single task.",
+      ));
+    }
+  };
+  if pipeline.negated {
+    return Err(err("Unexpected '!' in task dependency."));
+  }
+  let command = match pipeline.inner {
+    PipelineInner::Command(command) => command,
+    PipelineInner::PipeSequence(_) => {
+      return Err(err("Unexpected '|' in task dependency."));
+    }
+  };
+  if command.redirect.is_some() {
+    return Err(err("Unexpected redirect in task dependency."));
+  }
+  let simple = match command.inner {
+    CommandInner::Simple(simple) => simple,
+    CommandInner::Subshell(_) => {
+      return Err(err("Unexpected subshell in task dependency."));
+    }
+  };
+  if !simple.env_vars.is_empty() {
+    return Err(err(
+      "Unexpected environment variable assignment in task dependency.",
+    ));
+  }
+
+  let mut words = simple.args.into_iter();
+  let name_word = words.next().ok_or_else(|| err("Empty task dependency."))?;
+  let name = word_to_literal(&name_word).ok_or_else(|| {
+    err("A task dependency name must not contain an expansion.")
+  })?;
+  let mut args = Vec::new();
+  for word in words {
+    args.push(word_to_literal(&word).ok_or_else(|| {
+      err(
+        "Task dependency arguments must not contain variable, command, tilde, or brace expansions.",
+      )
+    })?);
+  }
+
+  Ok(TaskDependency { name, args })
+}
+
 fn parse_sequential_list(input: &str) -> ParseResult<'_, SequentialList> {
   let (mut input, _) = skip_whitespace(input)?;
   let mut items = Vec::new();
@@ -1472,6 +1596,108 @@ mod test {
 
     // env assignment on its own line is a shell var
     assert_eq!(parse("FOO=bar\ncmd").unwrap().items.len(), 2);
+  }
+
+  #[test]
+  fn task_dependency() {
+    fn dep(name: &str, args: &[&str]) -> TaskDependency {
+      TaskDependency {
+        name: name.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
+      }
+    }
+
+    // bare task name (back-compat)
+    assert_eq!(parse_task_dependency("test").unwrap(), dep("test", &[]));
+    // surrounding whitespace is ignored
+    assert_eq!(parse_task_dependency("  test  ").unwrap(), dep("test", &[]));
+    // name with forwarded args
+    assert_eq!(
+      parse_task_dependency("test --coverage --clean").unwrap(),
+      dep("test", &["--coverage", "--clean"]),
+    );
+    // quotes are honored and removed (the case from denoland/deno#27870)
+    assert_eq!(
+      parse_task_dependency("test --coverage='.coverage/' --clean").unwrap(),
+      dep("test", &["--coverage=.coverage/", "--clean"]),
+    );
+    assert_eq!(
+      parse_task_dependency(r#"test --msg="a b c""#).unwrap(),
+      dep("test", &["--msg=a b c"]),
+    );
+    // an empty quoted arg is preserved
+    assert_eq!(
+      parse_task_dependency("test \"\"").unwrap(),
+      dep("test", &[""]),
+    );
+    // `#` in an arg is literal here (it is not at a word boundary)
+    assert_eq!(
+      parse_task_dependency("test a#b").unwrap(),
+      dep("test", &["a#b"]),
+    );
+
+    // rejected: control flow / shell features
+    assert_eq!(
+      parse_task_dependency("a && b").unwrap_err().to_string(),
+      "Unexpected operator in task dependency. A dependency must be a single task.",
+    );
+    assert_eq!(
+      parse_task_dependency("a; b").unwrap_err().to_string(),
+      "Expected a single task name optionally followed by arguments.",
+    );
+    assert_eq!(
+      parse_task_dependency("a | b").unwrap_err().to_string(),
+      "Unexpected '|' in task dependency.",
+    );
+    assert_eq!(
+      parse_task_dependency("a &").unwrap_err().to_string(),
+      "Unexpected '&' in task dependency.",
+    );
+    assert_eq!(
+      parse_task_dependency("! a").unwrap_err().to_string(),
+      "Unexpected '!' in task dependency.",
+    );
+    assert_eq!(
+      parse_task_dependency("a > out.txt")
+        .unwrap_err()
+        .to_string(),
+      "Unexpected redirect in task dependency.",
+    );
+    assert_eq!(
+      parse_task_dependency("(a)").unwrap_err().to_string(),
+      "Unexpected subshell in task dependency.",
+    );
+    assert_eq!(
+      parse_task_dependency("FOO=1 a").unwrap_err().to_string(),
+      "Unexpected environment variable assignment in task dependency.",
+    );
+
+    // rejected: arguments requiring runtime expansion
+    let expansion_err = "Task dependency arguments must not contain variable, command, tilde, or brace expansions.";
+    assert_eq!(
+      parse_task_dependency("test $FOO").unwrap_err().to_string(),
+      expansion_err,
+    );
+    assert_eq!(
+      parse_task_dependency("test $(echo hi)")
+        .unwrap_err()
+        .to_string(),
+      expansion_err,
+    );
+    assert_eq!(
+      parse_task_dependency("test {a,b}").unwrap_err().to_string(),
+      expansion_err,
+    );
+    assert_eq!(
+      parse_task_dependency("test ~/x").unwrap_err().to_string(),
+      expansion_err,
+    );
+
+    // empty input is an empty command
+    assert_eq!(
+      parse_task_dependency("").unwrap_err().to_string(),
+      "Empty command.",
+    );
   }
 
   #[test]
