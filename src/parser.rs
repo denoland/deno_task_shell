@@ -628,6 +628,7 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
   } else {
     (input, None)
   };
+  let redirect_op_input = input;
   let (input, op) = or3(
     map(tag(">>"), |_| RedirectOp::Output(RedirectOpOutput::Append)),
     map(or(tag(">"), tag(">|")), |_| {
@@ -639,6 +640,15 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
     map(preceded(ch('&'), parse_u32), IoFile::Fd),
     map(preceded(skip_inline_whitespace, parse_word), IoFile::Word),
   )(input)?;
+
+  // A redirect operator must be followed by a target. An empty word here
+  // means the path was missing (e.g. `cmd >` at end of input, or a comment
+  // beginning right after the operator as in `cmd > # comment`).
+  if let IoFile::Word(word) = &io_file
+    && word.parts().is_empty()
+  {
+    return ParseError::fail(redirect_op_input, "Expected redirect path.");
+  }
 
   let maybe_fd = if let Some(fd) = maybe_fd {
     Some(RedirectFd::Fd(fd))
@@ -1593,6 +1603,27 @@ mod test {
       parse("# just a comment").err().unwrap().to_string(),
       "Empty command.",
     );
+    // a comment right after a redirect operator leaves no path: error
+    assert_eq!(
+      parse("echo foo > # comment").err().unwrap().to_string(),
+      concat!("Expected redirect path.\n", "  > # comment\n", "  ~"),
+    );
+  }
+
+  #[test]
+  fn redirect_missing_path_is_error() {
+    // a redirect operator with no following path is a parse error,
+    // not a redirect to an empty target
+    assert_eq!(
+      parse("echo foo >").err().unwrap().to_string(),
+      concat!("Expected redirect path.\n", "  >\n", "  ~"),
+    );
+    assert_eq!(
+      parse("cat <").err().unwrap().to_string(),
+      concat!("Expected redirect path.\n", "  <\n", "  ~"),
+    );
+    // still parses normally with a path
+    assert_eq!(parse("echo foo > out").unwrap().items.len(), 1);
   }
 
   #[test]
