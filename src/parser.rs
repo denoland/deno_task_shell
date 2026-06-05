@@ -631,7 +631,10 @@ fn parse_redirect(input: &str) -> ParseResult<'_, Redirect> {
   let redirect_op_input = input;
   let (input, op) = or3(
     map(tag(">>"), |_| RedirectOp::Output(RedirectOpOutput::Append)),
-    map(or(tag(">"), tag(">|")), |_| {
+    // `>|` (clobber) must be tried before `>`, otherwise `>` matches the
+    // prefix and the `|` is left to be misparsed as a pipe. We don't model
+    // `noclobber`, so `>|` is treated the same as `>` (overwrite).
+    map(or(tag(">|"), tag(">")), |_| {
       RedirectOp::Output(RedirectOpOutput::Overwrite)
     }),
     map(ch('<'), |_| RedirectOp::Input(RedirectOpInput::Redirect)),
@@ -2539,6 +2542,11 @@ mod test {
         }),
       }),
     );
+
+    // clobber (`>|`) is treated as overwrite; the `>|` must win over `>`
+    // so the `|` isn't left behind and misparsed as a pipe
+    run_test(parse_command, r#"echo 1 >| test.txt"#, expected.clone());
+    run_test(parse_command, r#"echo 1 >|test.txt"#, expected.clone());
 
     // output redirect to fd
     run_test(
