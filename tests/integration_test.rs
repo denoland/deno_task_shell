@@ -15,6 +15,51 @@ mod test_builder;
 const FOLDER_SEPERATOR: char = if cfg!(windows) { '\\' } else { '/' };
 
 #[tokio::test]
+async fn comments() {
+  // trailing comment after a command (denoland/deno#27644)
+  TestBuilder::new()
+    .command("echo foo # this is a comment")
+    .assert_stdout("foo\n")
+    .run()
+    .await;
+
+  // `#` with no preceding space is still a comment at a word boundary
+  TestBuilder::new()
+    .command("echo foo #comment")
+    .assert_stdout("foo\n")
+    .run()
+    .await;
+
+  // `#` in the middle of a word is a literal character, not a comment
+  TestBuilder::new()
+    .command("echo foo#bar")
+    .assert_stdout("foo#bar\n")
+    .run()
+    .await;
+
+  // `#` inside quotes is literal
+  TestBuilder::new()
+    .command("echo '# not a comment'")
+    .assert_stdout("# not a comment\n")
+    .run()
+    .await;
+
+  // comment lines interspersed with commands
+  TestBuilder::new()
+    .command("# leading\necho foo\n# middle\necho bar\n# trailing")
+    .assert_stdout("foo\nbar\n")
+    .run()
+    .await;
+
+  // comment after a `&&` continuation
+  TestBuilder::new()
+    .command("echo foo && # comment\necho bar")
+    .assert_stdout("foo\nbar\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn commands() {
   TestBuilder::new()
     .command("echo 1")
