@@ -256,9 +256,18 @@ fn parse_mv_args(
     );
   }
 
-  Ok(MvFlags {
-    operations: get_copy_and_move_operations(cwd, paths)?,
-  })
+  let operations = get_copy_and_move_operations(cwd, paths)?;
+  for (from, _) in &operations {
+    // matches GNU mv, which errors renaming these (ex. `mv public/. dist`)
+    let last_component = last_specified_component(&from.specified);
+    if last_component == b"." || last_component == b".." {
+      bail!(
+        "cannot move '{}': refusing to move '.' or '..'",
+        from.specified.to_string_lossy()
+      );
+    }
+  }
+  Ok(MvFlags { operations })
 }
 
 struct PathWithSpecified {
@@ -284,7 +293,7 @@ fn get_copy_and_move_operations(
     }
     for from in from_args {
       let from_path = cwd.join(from);
-      let to_path = destination.join(from_path.file_name().unwrap());
+      let to_path = calculate_destination_path(&destination, from, &from_path);
       operations.push((
         PathWithSpecified {
           specified: from.into(),
@@ -299,7 +308,7 @@ fn get_copy_and_move_operations(
   } else {
     let from_path = cwd.join(from_args[0]);
     let to_path = if destination.is_dir() {
-      destination.join(from_path.file_name().unwrap())
+      calculate_destination_path(&destination, from_args[0], &from_path)
     } else {
       destination
     };
@@ -315,6 +324,43 @@ fn get_copy_and_move_operations(
     ));
   }
   Ok(operations)
+}
+
+/// Calculates the path in the destination directory to copy or
+/// move to, using the final component of the path as the user
+/// specified it rather than the resolved path so that a trailing
+/// `.` resolves to the destination itself like GNU cp
+/// (ex. `cp -r public/. dist` copies the contents of `public`
+/// into `dist`).
+fn calculate_destination_path(
+  destination: &Path,
+  from_specified: &OsStr,
+  from_path: &Path,
+) -> PathBuf {
+  match last_specified_component(from_specified) {
+    b"." => destination.to_path_buf(),
+    b".." => destination.join(".."),
+    _ => destination.join(from_path.file_name().unwrap()),
+  }
+}
+
+fn last_specified_component(specified: &OsStr) -> &[u8] {
+  fn is_separator(byte: &u8) -> bool {
+    *byte == b'/' || (cfg!(windows) && *byte == b'\\')
+  }
+
+  let bytes = specified.as_encoded_bytes();
+  let end = bytes
+    .iter()
+    .rposition(|b| !is_separator(b))
+    .map(|i| i + 1)
+    .unwrap_or(0);
+  let start = bytes[..end]
+    .iter()
+    .rposition(is_separator)
+    .map(|i| i + 1)
+    .unwrap_or(0);
+  &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -429,6 +475,53 @@ mod test {
   }
 
   #[tokio::test]
+  async fn should_copy_trailing_dot_dir_contents() {
+    // https://github.com/denoland/deno_task_shell/issues/176
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("public").join(".well-known")).unwrap();
+    fs::write(dir.path().join("public").join("index.html"), "test").unwrap();
+    fs::write(
+      dir
+        .path()
+        .join("public")
+        .join(".well-known")
+        .join("security.txt"),
+      "test",
+    )
+    .unwrap();
+
+    let dist_dir = dir.path().join("dist");
+    fs::create_dir(&dist_dir).unwrap();
+    execute_cp(dir.path(), &["-r".into(), "public/.".into(), "dist".into()])
+      .await
+      .unwrap();
+    assert!(!dist_dir.join("public").exists());
+    assert!(dist_dir.join("index.html").exists());
+    assert!(dist_dir.join(".well-known").join("security.txt").exists());
+
+    // non-existent destination
+    execute_cp(
+      dir.path(),
+      &["-r".into(), "public/.".into(), "dist2".into()],
+    )
+    .await
+    .unwrap();
+    assert!(dir.path().join("dist2").join("index.html").exists());
+
+    // "." as the entire source
+    let dist3_dir = dir.path().join("dist3");
+    fs::create_dir(&dist3_dir).unwrap();
+    execute_cp(
+      &dir.path().join("public"),
+      &["-r".into(), ".".into(), "../dist3".into()],
+    )
+    .await
+    .unwrap();
+    assert!(dist3_dir.join("index.html").exists());
+    assert!(dist3_dir.join(".well-known").join("security.txt").exists());
+  }
+
+  #[tokio::test]
   async fn should_move() {
     let dir = tempdir().unwrap();
     let file1 = dir.path().join("file1.txt");
@@ -490,5 +583,24 @@ mod test {
       result.to_string(),
       "missing destination file operand after 'file1.txt'"
     );
+
+    // refuses to move '.' or '..' like GNU mv
+    let result = execute_mv(dir.path(), &["dest/.".into(), "dest2".into()])
+      .await
+      .err()
+      .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move 'dest/.': refusing to move '.' or '..'"
+    );
+    let result = execute_mv(dir.path(), &["..".into(), "dest2".into()])
+      .await
+      .err()
+      .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move '..': refusing to move '.' or '..'"
+    );
+    assert!(dest_dir.join("file1.txt").exists());
   }
 }
