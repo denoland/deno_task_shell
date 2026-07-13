@@ -74,12 +74,12 @@ async fn do_copy_operation(
   from: &PathWithSpecified,
   to: &PathWithSpecified,
 ) -> Result<(), ShellCommandError> {
-  // These are racy with the file system, but that's ok.
-  // They only exists to give better error messages.
   if from.path.components().eq(to.path.components()) {
     // copying to the same path truncates the source's files
     bail!("source and destination are the same");
   }
+  // These are racy with the file system, but that's ok.
+  // They only exists to give better error messages.
   if from.path.is_dir() {
     if flags.recursive {
       if to.path.exists() && to.path.is_file() {
