@@ -76,6 +76,10 @@ async fn do_copy_operation(
 ) -> Result<(), ShellCommandError> {
   // These are racy with the file system, but that's ok.
   // They only exists to give better error messages.
+  if from.path.components().eq(to.path.components()) {
+    // copying to the same path truncates the source's files
+    bail!("source and destination are the same");
+  }
   if from.path.is_dir() {
     if flags.recursive {
       if to.path.exists() && to.path.is_file() {
@@ -175,6 +179,16 @@ fn parse_cp_args(
     );
   }
 
+  for from in &paths[..paths.len() - 1] {
+    // a trailing `..` would resolve the target to the destination's
+    // parent directory, so refuse it like the guard in mv
+    if last_specified_component(from) == b".." {
+      bail!(
+        "cannot copy '{}': refusing to copy '..'",
+        from.to_string_lossy()
+      );
+    }
+  }
   Ok(CpFlags {
     recursive,
     operations: get_copy_and_move_operations(cwd, paths)?,
@@ -256,18 +270,19 @@ fn parse_mv_args(
     );
   }
 
-  let operations = get_copy_and_move_operations(cwd, paths)?;
-  for (from, _) in &operations {
+  for from in &paths[..paths.len() - 1] {
     // matches GNU mv, which errors renaming these (ex. `mv public/. dist`)
-    let last_component = last_specified_component(&from.specified);
+    let last_component = last_specified_component(from);
     if last_component == b"." || last_component == b".." {
       bail!(
         "cannot move '{}': refusing to move '.' or '..'",
-        from.specified.to_string_lossy()
+        from.to_string_lossy()
       );
     }
   }
-  Ok(MvFlags { operations })
+  Ok(MvFlags {
+    operations: get_copy_and_move_operations(cwd, paths)?,
+  })
 }
 
 struct PathWithSpecified {
@@ -337,9 +352,9 @@ fn calculate_destination_path(
   from_specified: &OsStr,
   from_path: &Path,
 ) -> PathBuf {
+  // a trailing `..` is refused by both cp and mv before getting here
   match last_specified_component(from_specified) {
     b"." => destination.to_path_buf(),
-    b".." => destination.join(".."),
     _ => destination.join(from_path.file_name().unwrap()),
   }
 }
@@ -519,6 +534,64 @@ mod test {
     .unwrap();
     assert!(dist3_dir.join("index.html").exists());
     assert!(dist3_dir.join(".well-known").join("security.txt").exists());
+
+    // refuses to copy '..' since the target would resolve to the
+    // destination's parent directory
+    let result = execute_cp(
+      dir.path(),
+      &["-r".into(), "public/..".into(), "dist".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy 'public/..': refusing to copy '..'"
+    );
+    let result =
+      execute_cp(dir.path(), &["-r".into(), "..".into(), "dist".into()])
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy '..': refusing to copy '..'"
+    );
+
+    // refuses to copy a directory to itself since that would
+    // truncate its files
+    let result = execute_cp(
+      dir.path(),
+      &["-r".into(), "public/.".into(), "public".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "could not copy public/. to public: source and destination are the same"
+    );
+    assert_eq!(
+      fs::read_to_string(dir.path().join("public").join("index.html")).unwrap(),
+      "test"
+    );
+
+    // same for copying a file to itself
+    let result = execute_cp(
+      dir.path(),
+      &["public/index.html".into(), "public/index.html".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "could not copy public/index.html to public/index.html: source and destination are the same"
+    );
+    assert_eq!(
+      fs::read_to_string(dir.path().join("public").join("index.html")).unwrap(),
+      "test"
+    );
   }
 
   #[tokio::test]
