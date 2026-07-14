@@ -595,6 +595,20 @@ mod test {
   }
 
   #[tokio::test]
+  async fn should_not_panic_copying_root() {
+    // a source whose last specified component is empty (ex. `/`) still
+    // reaches `from_path.file_name().unwrap()`, which is `None` for the
+    // root, so this should error gracefully instead of panicking
+    let dir = tempdir().unwrap();
+    let dest_dir = dir.path().join("dest");
+    fs::create_dir(&dest_dir).unwrap();
+    execute_cp(dir.path(), &["-r".into(), "/".into(), "dest".into()])
+      .await
+      .err()
+      .unwrap();
+  }
+
+  #[tokio::test]
   async fn should_move() {
     let dir = tempdir().unwrap();
     let file1 = dir.path().join("file1.txt");
