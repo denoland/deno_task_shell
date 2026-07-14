@@ -180,13 +180,24 @@ fn parse_cp_args(
   }
 
   for from in &paths[..paths.len() - 1] {
-    // a trailing `..` would resolve the target to the destination's
-    // parent directory, so refuse it like the guard in mv
-    if last_specified_component(from) == b".." {
-      bail!(
-        "cannot copy '{}': refusing to copy '..'",
-        from.to_string_lossy()
-      );
+    match last_specified_component(from) {
+      // a trailing `..` would resolve the target to the destination's
+      // parent directory, so refuse it like the guard in mv
+      b".." => {
+        bail!(
+          "cannot copy '{}': refusing to copy '..'",
+          from.to_string_lossy()
+        );
+      }
+      // an empty final component means the source is the root (ex. `/`),
+      // which has no name to place inside the destination
+      b"" => {
+        bail!(
+          "cannot copy '{}': the source has no final path component",
+          from.to_string_lossy()
+        );
+      }
+      _ => {}
     }
   }
   Ok(CpFlags {
@@ -271,13 +282,23 @@ fn parse_mv_args(
   }
 
   for from in &paths[..paths.len() - 1] {
-    // matches GNU mv, which errors renaming these (ex. `mv public/. dist`)
-    let last_component = last_specified_component(from);
-    if last_component == b"." || last_component == b".." {
-      bail!(
-        "cannot move '{}': refusing to move '.' or '..'",
-        from.to_string_lossy()
-      );
+    match last_specified_component(from) {
+      // matches GNU mv, which errors renaming these (ex. `mv public/. dist`)
+      b"." | b".." => {
+        bail!(
+          "cannot move '{}': refusing to move '.' or '..'",
+          from.to_string_lossy()
+        );
+      }
+      // an empty final component means the source is the root (ex. `/`),
+      // which has no name to place inside the destination
+      b"" => {
+        bail!(
+          "cannot move '{}': the source has no final path component",
+          from.to_string_lossy()
+        );
+      }
+      _ => {}
     }
   }
   Ok(MvFlags {
@@ -352,7 +373,9 @@ fn calculate_destination_path(
   from_specified: &OsStr,
   from_path: &Path,
 ) -> PathBuf {
-  // a trailing `..` is refused by both cp and mv before getting here
+  // sources with no final component (a trailing `..` or the root) are
+  // refused by both cp and mv before getting here, so `file_name()` is
+  // `Some` in the fallback arm
   match last_specified_component(from_specified) {
     b"." => destination.to_path_buf(),
     _ => destination.join(from_path.file_name().unwrap()),
@@ -595,17 +618,33 @@ mod test {
   }
 
   #[tokio::test]
-  async fn should_not_panic_copying_root() {
-    // a source whose last specified component is empty (ex. `/`) still
-    // reaches `from_path.file_name().unwrap()`, which is `None` for the
-    // root, so this should error gracefully instead of panicking
+  async fn should_not_panic_with_root_source() {
+    // a source whose last specified component is empty (ex. `/`) has no
+    // name to place inside the destination and used to reach
+    // `from_path.file_name().unwrap()`, which is `None` for the root, so
+    // both cp and mv should error gracefully instead of panicking
     let dir = tempdir().unwrap();
     let dest_dir = dir.path().join("dest");
     fs::create_dir(&dest_dir).unwrap();
-    execute_cp(dir.path(), &["-r".into(), "/".into(), "dest".into()])
+
+    let result =
+      execute_cp(dir.path(), &["-r".into(), "/".into(), "dest".into()])
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy '/': the source has no final path component"
+    );
+
+    let result = execute_mv(dir.path(), &["/".into(), "dest".into()])
       .await
       .err()
       .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move '/': the source has no final path component"
+    );
   }
 
   #[tokio::test]
