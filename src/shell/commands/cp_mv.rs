@@ -74,6 +74,10 @@ async fn do_copy_operation(
   from: &PathWithSpecified,
   to: &PathWithSpecified,
 ) -> Result<(), ShellCommandError> {
+  if from.path.components().eq(to.path.components()) {
+    // copying to the same path truncates the source's files
+    bail!("source and destination are the same");
+  }
   // These are racy with the file system, but that's ok.
   // They only exists to give better error messages.
   if from.path.is_dir() {
@@ -175,6 +179,27 @@ fn parse_cp_args(
     );
   }
 
+  for from in &paths[..paths.len() - 1] {
+    match last_specified_component(from) {
+      // a trailing `..` would resolve the target to the destination's
+      // parent directory, so refuse it like the guard in mv
+      b".." => {
+        bail!(
+          "cannot copy '{}': refusing to copy '..'",
+          from.to_string_lossy()
+        );
+      }
+      // an empty final component means the source is the root (ex. `/`),
+      // which has no name to place inside the destination
+      b"" => {
+        bail!(
+          "cannot copy '{}': the source has no final path component",
+          from.to_string_lossy()
+        );
+      }
+      _ => {}
+    }
+  }
   Ok(CpFlags {
     recursive,
     operations: get_copy_and_move_operations(cwd, paths)?,
@@ -256,6 +281,26 @@ fn parse_mv_args(
     );
   }
 
+  for from in &paths[..paths.len() - 1] {
+    match last_specified_component(from) {
+      // matches GNU mv, which errors renaming these (ex. `mv public/. dist`)
+      b"." | b".." => {
+        bail!(
+          "cannot move '{}': refusing to move '.' or '..'",
+          from.to_string_lossy()
+        );
+      }
+      // an empty final component means the source is the root (ex. `/`),
+      // which has no name to place inside the destination
+      b"" => {
+        bail!(
+          "cannot move '{}': the source has no final path component",
+          from.to_string_lossy()
+        );
+      }
+      _ => {}
+    }
+  }
   Ok(MvFlags {
     operations: get_copy_and_move_operations(cwd, paths)?,
   })
@@ -284,7 +329,7 @@ fn get_copy_and_move_operations(
     }
     for from in from_args {
       let from_path = cwd.join(from);
-      let to_path = destination.join(from_path.file_name().unwrap());
+      let to_path = calculate_destination_path(&destination, from, &from_path);
       operations.push((
         PathWithSpecified {
           specified: from.into(),
@@ -299,7 +344,7 @@ fn get_copy_and_move_operations(
   } else {
     let from_path = cwd.join(from_args[0]);
     let to_path = if destination.is_dir() {
-      destination.join(from_path.file_name().unwrap())
+      calculate_destination_path(&destination, from_args[0], &from_path)
     } else {
       destination
     };
@@ -315,6 +360,45 @@ fn get_copy_and_move_operations(
     ));
   }
   Ok(operations)
+}
+
+/// Calculates the path in the destination directory to copy or
+/// move to, using the final component of the path as the user
+/// specified it rather than the resolved path so that a trailing
+/// `.` resolves to the destination itself like GNU cp
+/// (ex. `cp -r public/. dist` copies the contents of `public`
+/// into `dist`).
+fn calculate_destination_path(
+  destination: &Path,
+  from_specified: &OsStr,
+  from_path: &Path,
+) -> PathBuf {
+  // sources with no final component (a trailing `..` or the root) are
+  // refused by both cp and mv before getting here, so `file_name()` is
+  // `Some` in the fallback arm
+  match last_specified_component(from_specified) {
+    b"." => destination.to_path_buf(),
+    _ => destination.join(from_path.file_name().unwrap()),
+  }
+}
+
+fn last_specified_component(specified: &OsStr) -> &[u8] {
+  fn is_separator(byte: &u8) -> bool {
+    *byte == b'/' || (cfg!(windows) && *byte == b'\\')
+  }
+
+  let bytes = specified.as_encoded_bytes();
+  let end = bytes
+    .iter()
+    .rposition(|b| !is_separator(b))
+    .map(|i| i + 1)
+    .unwrap_or(0);
+  let start = bytes[..end]
+    .iter()
+    .rposition(is_separator)
+    .map(|i| i + 1)
+    .unwrap_or(0);
+  &bytes[start..end]
 }
 
 #[cfg(test)]
@@ -429,6 +513,141 @@ mod test {
   }
 
   #[tokio::test]
+  async fn should_copy_trailing_dot_dir_contents() {
+    // https://github.com/denoland/deno_task_shell/issues/176
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("public").join(".well-known")).unwrap();
+    fs::write(dir.path().join("public").join("index.html"), "test").unwrap();
+    fs::write(
+      dir
+        .path()
+        .join("public")
+        .join(".well-known")
+        .join("security.txt"),
+      "test",
+    )
+    .unwrap();
+
+    let dist_dir = dir.path().join("dist");
+    fs::create_dir(&dist_dir).unwrap();
+    execute_cp(dir.path(), &["-r".into(), "public/.".into(), "dist".into()])
+      .await
+      .unwrap();
+    assert!(!dist_dir.join("public").exists());
+    assert!(dist_dir.join("index.html").exists());
+    assert!(dist_dir.join(".well-known").join("security.txt").exists());
+
+    // non-existent destination
+    execute_cp(
+      dir.path(),
+      &["-r".into(), "public/.".into(), "dist2".into()],
+    )
+    .await
+    .unwrap();
+    assert!(dir.path().join("dist2").join("index.html").exists());
+
+    // "." as the entire source
+    let dist3_dir = dir.path().join("dist3");
+    fs::create_dir(&dist3_dir).unwrap();
+    execute_cp(
+      &dir.path().join("public"),
+      &["-r".into(), ".".into(), "../dist3".into()],
+    )
+    .await
+    .unwrap();
+    assert!(dist3_dir.join("index.html").exists());
+    assert!(dist3_dir.join(".well-known").join("security.txt").exists());
+
+    // refuses to copy '..' since the target would resolve to the
+    // destination's parent directory
+    let result = execute_cp(
+      dir.path(),
+      &["-r".into(), "public/..".into(), "dist".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy 'public/..': refusing to copy '..'"
+    );
+    let result =
+      execute_cp(dir.path(), &["-r".into(), "..".into(), "dist".into()])
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy '..': refusing to copy '..'"
+    );
+
+    // refuses to copy a directory to itself since that would
+    // truncate its files
+    let result = execute_cp(
+      dir.path(),
+      &["-r".into(), "public/.".into(), "public".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "could not copy public/. to public: source and destination are the same"
+    );
+    assert_eq!(
+      fs::read_to_string(dir.path().join("public").join("index.html")).unwrap(),
+      "test"
+    );
+
+    // same for copying a file to itself
+    let result = execute_cp(
+      dir.path(),
+      &["public/index.html".into(), "public/index.html".into()],
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "could not copy public/index.html to public/index.html: source and destination are the same"
+    );
+    assert_eq!(
+      fs::read_to_string(dir.path().join("public").join("index.html")).unwrap(),
+      "test"
+    );
+  }
+
+  #[tokio::test]
+  async fn should_not_panic_with_root_source() {
+    // a source whose last specified component is empty (ex. `/`) has no
+    // name to place inside the destination and used to reach
+    // `from_path.file_name().unwrap()`, which is `None` for the root, so
+    // both cp and mv should error gracefully instead of panicking
+    let dir = tempdir().unwrap();
+    let dest_dir = dir.path().join("dest");
+    fs::create_dir(&dest_dir).unwrap();
+
+    let result =
+      execute_cp(dir.path(), &["-r".into(), "/".into(), "dest".into()])
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot copy '/': the source has no final path component"
+    );
+
+    let result = execute_mv(dir.path(), &["/".into(), "dest".into()])
+      .await
+      .err()
+      .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move '/': the source has no final path component"
+    );
+  }
+
+  #[tokio::test]
   async fn should_move() {
     let dir = tempdir().unwrap();
     let file1 = dir.path().join("file1.txt");
@@ -490,5 +709,24 @@ mod test {
       result.to_string(),
       "missing destination file operand after 'file1.txt'"
     );
+
+    // refuses to move '.' or '..' like GNU mv
+    let result = execute_mv(dir.path(), &["dest/.".into(), "dest2".into()])
+      .await
+      .err()
+      .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move 'dest/.': refusing to move '.' or '..'"
+    );
+    let result = execute_mv(dir.path(), &["..".into(), "dest2".into()])
+      .await
+      .err()
+      .unwrap();
+    assert_eq!(
+      result.to_string(),
+      "cannot move '..': refusing to move '.' or '..'"
+    );
+    assert!(dest_dir.join("file1.txt").exists());
   }
 }
