@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "deno_task_shell"
-version = "0.33.1"
+version = "0.33.2"
 dependencies = [
  "bitflags",
  "deno_path_util",
