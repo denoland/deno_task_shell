@@ -1637,7 +1637,8 @@ mod test {
       ],
     );
 
-    // env var values were never subject to the check either
+    // env var values are not command names, so they aren't subject to the
+    // check either (previously they were, and `FOO=if cmd` failed to parse)
     assert_eq!(
       single_command_args("FOO=if cmd"),
       vec![Word::new_word("cmd")],
