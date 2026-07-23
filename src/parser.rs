@@ -552,14 +552,54 @@ fn parse_simple_command(input: &str) -> ParseResult<'_, SimpleCommand> {
 }
 
 fn parse_command_args(input: &str) -> ParseResult<'_, Vec<Word>> {
-  many_till(
-    terminated(parse_shell_arg, assert_whitespace_or_end_and_skip),
+  let end_op = || {
     or4(
       parse_list_op,
       map(parse_redirect, |_| ()),
       map(parse_pipe_sequence_op, |_| ()),
       map(ch(')'), |_| ()),
-    ),
+    )
+  };
+  let (input, maybe_first_arg) = maybe(terminated(
+    parse_command_name_arg,
+    assert_whitespace_or_end_and_skip,
+  ))(input)?;
+  let Some(first_arg) = maybe_first_arg else {
+    return Ok((input, Vec::new()));
+  };
+  let (input, mut rest) = many_till(
+    terminated(parse_shell_arg, assert_whitespace_or_end_and_skip),
+    end_op(),
+  )(input)?;
+  rest.insert(0, first_arg);
+  Ok((input, rest))
+}
+
+/// Parses the command name (first word) of a simple command.
+///
+/// POSIX grammar rule 7a: only `cmd_name` (the command name) applies the
+/// reserved-word check; `cmd_suffix` (arguments, rule 7b) never does. This
+/// shell doesn't implement compound commands, so a bare reserved word here
+/// is rejected with a clear error instead of becoming a nonexistent command
+/// name. Reserved words are never special in argument position, when
+/// quoted, or as part of a larger word.
+fn parse_command_name_arg(input: &str) -> ParseResult<'_, Word> {
+  assert(
+    parse_shell_arg,
+    |result| {
+      result
+        .ok()
+        .map(|(_, word)| {
+          if word.parts().len() == 1
+            && let WordPart::Text(text) = &word.parts()[0]
+          {
+            return !is_reserved_word(text);
+          }
+          true
+        })
+        .unwrap_or(true)
+    },
+    "Unsupported reserved word.",
   )(input)
 }
 
@@ -709,23 +749,7 @@ fn parse_word(input: &str) -> ParseResult<'_, Word> {
 }
 
 fn parse_unquoted_word(input: &str) -> ParseResult<'_, Vec<WordPart>> {
-  assert(
-    parse_word_parts(ParseWordPartsMode::Unquoted),
-    |result| {
-      result
-        .ok()
-        .map(|(_, parts)| {
-          if parts.len() == 1
-            && let WordPart::Text(text) = &parts[0]
-          {
-            return !is_reserved_word(text);
-          }
-          true
-        })
-        .unwrap_or(true)
-    },
-    "Unsupported reserved word.",
-  )(input)
+  parse_word_parts(ParseWordPartsMode::Unquoted)(input)
 }
 
 fn parse_quoted_string(input: &str) -> ParseResult<'_, Vec<WordPart>> {
@@ -1522,6 +1546,176 @@ mod test {
     assert_eq!(parse("FOO=bar\ncmd").unwrap().items.len(), 2);
   }
 
+  /// POSIX XCU 2.4 + grammar rule 7a: reserved words (if/for/while/etc.)
+  /// are only special in command-name position (cmd_name); everywhere else
+  /// (cmd_suffix/arguments, quoted, part of a larger word) they're plain
+  /// WORDs.
+  /// https://github.com/denoland/deno_task_shell/issues/148
+  #[test]
+  fn reserved_words_in_argument_position() {
+    fn single_command_args(input: &str) -> Vec<Word> {
+      let list = parse(input).unwrap_or_else(|e| {
+        panic!("expected input to parse successfully: {input:?}\n{e}")
+      });
+      assert_eq!(list.items.len(), 1, "input: {input:?}");
+      let Sequence::Pipeline(pipeline) = &list.items[0].sequence else {
+        panic!("expected pipeline for input: {input:?}");
+      };
+      let PipelineInner::Command(cmd) = &pipeline.inner else {
+        panic!("expected command for input: {input:?}");
+      };
+      let CommandInner::Simple(simple) = &cmd.inner else {
+        panic!("expected simple command for input: {input:?}");
+      };
+      simple.args.clone()
+    }
+
+    fn assert_reserved_word_error(input: &str) {
+      let err = parse(input)
+        .err()
+        .unwrap_or_else(|| panic!("expected input to fail: {input:?}"));
+      assert!(
+        err.to_string().contains("Unsupported reserved word."),
+        "input: {input:?}, got error: {err}",
+      );
+    }
+
+    // reserved word as a trailing argument (the case from the issue)
+    assert_eq!(
+      single_command_args("echo for"),
+      vec![Word::new_word("echo"), Word::new_word("for")],
+    );
+    for word in [
+      "if", "then", "else", "elif", "fi", "do", "done", "case", "esac",
+      "while", "until", "for", "in",
+    ] {
+      assert_eq!(
+        single_command_args(&format!("echo {word}")),
+        vec![Word::new_word("echo"), Word::new_word(word)],
+        "reserved word {word:?} should be a plain argument",
+      );
+    }
+
+    // reserved words as any/all arguments, not just the first
+    assert_eq!(
+      single_command_args(
+        "echo if then else elif fi do done case esac while until in"
+      ),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("if"),
+        Word::new_word("then"),
+        Word::new_word("else"),
+        Word::new_word("elif"),
+        Word::new_word("fi"),
+        Word::new_word("do"),
+        Word::new_word("done"),
+        Word::new_word("case"),
+        Word::new_word("esac"),
+        Word::new_word("while"),
+        Word::new_word("until"),
+        Word::new_word("in"),
+      ],
+    );
+
+    // reserved words as arguments to commands other than echo
+    assert_eq!(
+      single_command_args("grep for file.txt"),
+      vec![
+        Word::new_word("grep"),
+        Word::new_word("for"),
+        Word::new_word("file.txt"),
+      ],
+    );
+    assert_eq!(
+      single_command_args("touch do done if"),
+      vec![
+        Word::new_word("touch"),
+        Word::new_word("do"),
+        Word::new_word("done"),
+        Word::new_word("if"),
+      ],
+    );
+
+    // env var values are not command names, so they aren't subject to the
+    // check either (previously they were, and `FOO=if cmd` failed to parse)
+    assert_eq!(
+      single_command_args("FOO=if cmd"),
+      vec![Word::new_word("cmd")],
+    );
+
+    // reserved words only match a whole word, not a substring
+    assert_eq!(
+      single_command_args("iffy forge whiled untile"),
+      vec![
+        Word::new_word("iffy"),
+        Word::new_word("forge"),
+        Word::new_word("whiled"),
+        Word::new_word("untile"),
+      ],
+    );
+    assert_eq!(
+      single_command_args("echo do-something"),
+      vec![Word::new_word("echo"), Word::new_word("do-something")],
+    );
+
+    // POSIX 2.2: quoting suppresses recognition in command-name position too
+    assert_eq!(
+      single_command_args(r#""if" echo"#),
+      vec![Word::new_string("if"), Word::new_word("echo")],
+    );
+    assert_eq!(
+      single_command_args("'for' bar"),
+      vec![Word::new_string("for"), Word::new_word("bar")],
+    );
+    // partially quoted (`f"o"r`) isn't a single unquoted Text part either
+    assert_eq!(
+      single_command_args(r#"f"o"r bar"#),
+      vec![
+        Word(vec![
+          WordPart::Text("f".to_string()),
+          WordPart::Quoted(vec![WordPart::Text("o".to_string())]),
+          WordPart::Text("r".to_string()),
+        ]),
+        Word::new_word("bar"),
+      ],
+    );
+
+    // reserved words remain rejected in command-name position
+    for word in [
+      "if", "then", "else", "elif", "fi", "do", "done", "case", "esac",
+      "while", "until", "for", "in",
+    ] {
+      assert_reserved_word_error(word);
+    }
+
+    // rejection applies at every command-name position, not just the
+    // first token of input
+    assert_reserved_word_error("echo hi; for");
+    assert_reserved_word_error("echo hi && for");
+    assert_reserved_word_error("echo hi || for");
+    assert_reserved_word_error("echo hi | for");
+    assert_reserved_word_error("(for)");
+    assert_reserved_word_error("echo hi\nfor");
+
+    // quoting a reserved word in command-name position makes it a valid
+    // (if nonexistent) command name, no longer a parse error
+    assert!(parse(r#""for""#).is_ok());
+    assert!(parse("'for'").is_ok());
+
+    // case-sensitive: "If"/"FOR" are never reserved
+    assert!(parse("If").is_ok());
+    assert!(parse("FOR").is_ok());
+    assert_eq!(
+      single_command_args("echo If FOR"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("If"),
+        Word::new_word("FOR"),
+      ],
+    );
+  }
+
   #[test]
   fn comments() {
     fn single_command_args(input: &str) -> Vec<Word> {
@@ -2310,7 +2504,11 @@ mod test {
 
   #[test]
   fn test_parse_word() {
-    run_test(parse_unquoted_word, "if", Err("Unsupported reserved word."));
+    run_test(
+      parse_unquoted_word,
+      "if",
+      Ok(vec![WordPart::Text("if".to_string())]),
+    );
     run_test(
       parse_unquoted_word,
       "$",
