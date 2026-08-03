@@ -876,6 +876,23 @@ fn parse_word_parts(
     preceded(ch('\\'), ch(c))
   }
 
+  /// The characters that terminate an unquoted word because they're
+  /// operators (`;`, `&`, `|`, `<`, `>`). A backslash before any of them
+  /// makes them part of the word instead, the same as quoting them would.
+  ///
+  /// Inside double quotes they're already literal, so a backslash there
+  /// keeps its own literal meaning (as in POSIX) and this doesn't apply.
+  fn parse_escaped_operator_char<'a>(
+    mode: ParseWordPartsMode,
+  ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+    move |input| {
+      if mode != ParseWordPartsMode::Unquoted {
+        return ParseError::backtrace();
+      }
+      preceded(ch('\\'), if_true(next_char, |c| ";&|<>".contains(*c)))(input)
+    }
+  }
+
   fn first_escaped_char<'a>(
     mode: ParseWordPartsMode,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
@@ -886,11 +903,12 @@ fn parse_word_parts(
       parse_escaped_char('`'),
       parse_escaped_char('"'),
       parse_escaped_char('('),
-      or(
+      or3(
         parse_escaped_char(')'),
         if_true(parse_escaped_char('\''), move |_| {
           mode == ParseWordPartsMode::DoubleQuotes
         }),
+        parse_escaped_operator_char(mode),
       ),
     )
   }
@@ -2181,6 +2199,105 @@ mod test {
       parse_unquoted_word,
       "test\\ test",
       Ok(vec![WordPart::Text("test test".to_string())]),
+    );
+  }
+
+  #[test]
+  fn test_parse_word_escaped_operators() {
+    for (input, expected) in [
+      (r"\;", ";"),
+      (r"\&", "&"),
+      (r"\|", "|"),
+      (r"\<", "<"),
+      (r"\>", ">"),
+      (r"a\;b", "a;b"),
+      (r"\&\&", "&&"),
+    ] {
+      run_test(
+        parse_unquoted_word,
+        input,
+        Ok(vec![WordPart::Text(expected.to_string())]),
+      );
+    }
+
+    // within double quotes these are already literal, so the backslash
+    // keeps its literal meaning
+    run_test(
+      parse_quoted_string,
+      r#""a\;b""#,
+      Ok(vec![WordPart::Text(r"a\;b".to_string())]),
+    );
+    run_test(
+      parse_quoted_string,
+      r"'a\;b'",
+      Ok(vec![WordPart::Text(r"a\;b".to_string())]),
+    );
+  }
+
+  #[test]
+  fn test_escaped_operators_are_arguments() {
+    fn single_command_args(input: &str) -> Vec<Word> {
+      let list = parse(input).unwrap();
+      assert_eq!(list.items.len(), 1, "input: {input:?}");
+      let Sequence::Pipeline(pipeline) = &list.items[0].sequence else {
+        panic!("expected pipeline for input: {input:?}");
+      };
+      let PipelineInner::Command(cmd) = &pipeline.inner else {
+        panic!("expected command for input: {input:?}");
+      };
+      assert_eq!(cmd.redirect, None, "input: {input:?}");
+      let CommandInner::Simple(simple) = &cmd.inner else {
+        panic!("expected simple command for input: {input:?}");
+      };
+      simple.args.clone()
+    }
+
+    // the case from denoland/deno#36401
+    assert_eq!(
+      single_command_args(r"wt deno task dev:api \; sp deno task dev:vite"),
+      vec![
+        Word::new_word("wt"),
+        Word::new_word("deno"),
+        Word::new_word("task"),
+        Word::new_word("dev:api"),
+        Word::new_word(";"),
+        Word::new_word("sp"),
+        Word::new_word("deno"),
+        Word::new_word("task"),
+        Word::new_word("dev:vite"),
+      ],
+    );
+    assert_eq!(
+      single_command_args(r"find . -exec echo {} \;"),
+      vec![
+        Word::new_word("find"),
+        Word::new_word("."),
+        Word::new_word("-exec"),
+        Word::new_word("echo"),
+        Word::new_word("{}"),
+        Word::new_word(";"),
+      ],
+    );
+    // an escaped redirect operator is an argument, not a redirect
+    assert_eq!(
+      single_command_args(r"echo a \> b"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("a"),
+        Word::new_word(">"),
+        Word::new_word("b"),
+      ],
+    );
+    assert_eq!(
+      single_command_args(r"echo a \| b \& c"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("a"),
+        Word::new_word("|"),
+        Word::new_word("b"),
+        Word::new_word("&"),
+        Word::new_word("c"),
+      ],
     );
   }
 
