@@ -365,6 +365,14 @@ async fn escaped_operators() {
     .assert_stdout("one \\; two\n")
     .run()
     .await;
+
+  // `\\` before an operator is a literal backslash and the operator still
+  // separates, which keeps a trailing Windows separator writable unquoted
+  TestBuilder::new()
+    .command(r"echo one\\;echo two")
+    .assert_stdout("one\\\\\ntwo\n")
+    .run()
+    .await;
 }
 
 #[tokio::test]
