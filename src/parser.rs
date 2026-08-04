@@ -913,6 +913,49 @@ fn parse_word_parts(
     preceded(ch('\\'), ch(c))
   }
 
+  /// The characters that terminate an unquoted word because they're
+  /// operators (`;`, `&`, `|`, `<`, `>`). A backslash before any of them
+  /// makes them part of the word instead, the same as quoting them would.
+  ///
+  /// Inside double quotes they're already literal, so a backslash there
+  /// keeps its own literal meaning (as in POSIX) and this doesn't apply.
+  fn parse_escaped_operator_char<'a>(
+    mode: ParseWordPartsMode,
+  ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
+    move |input| {
+      if mode != ParseWordPartsMode::Unquoted {
+        return ParseError::backtrace();
+      }
+      preceded(ch('\\'), if_true(next_char, |c| ";&|<>".contains(*c)))(input)
+    }
+  }
+
+  /// A backslash escapes the backslash that follows it when the pair comes
+  /// right before an operator character. Both backslashes stay literal and
+  /// the operator still terminates the word, so a Windows path that ends in
+  /// a separator can be written next to an operator (`cd .\foo\\;echo hi`)
+  /// even though `\;` now escapes the semicolon.
+  ///
+  /// This is deliberately limited to that position — elsewhere a backslash
+  /// is not an escape for another backslash, so `\\$FOO` keeps escaping the
+  /// dollar sign as it always has.
+  fn parse_literal_backslashes_before_operator(
+    mode: ParseWordPartsMode,
+  ) -> impl Fn(&str) -> ParseResult<'_, &'static str> {
+    move |input| {
+      if mode != ParseWordPartsMode::Unquoted {
+        return ParseError::backtrace();
+      }
+      let Some(rest) = input.strip_prefix(r"\\") else {
+        return ParseError::backtrace();
+      };
+      match rest.chars().next() {
+        Some(c) if ";&|<>".contains(c) => Ok((rest, r"\\")),
+        _ => ParseError::backtrace(),
+      }
+    }
+  }
+
   fn first_escaped_char<'a>(
     mode: ParseWordPartsMode,
   ) -> impl Fn(&'a str) -> ParseResult<'a, char> {
@@ -923,11 +966,12 @@ fn parse_word_parts(
       parse_escaped_char('`'),
       parse_escaped_char('"'),
       parse_escaped_char('('),
-      or(
+      or3(
         parse_escaped_char(')'),
         if_true(parse_escaped_char('\''), move |_| {
           mode == ParseWordPartsMode::DoubleQuotes
         }),
+        parse_escaped_operator_char(mode),
       ),
     )
   }
@@ -943,6 +987,7 @@ fn parse_word_parts(
   move |input| {
     enum PendingPart<'a> {
       Char(char),
+      Chars(&'static str),
       Variable(&'a str),
       Tilde,
       Command(SequentialList),
@@ -957,7 +1002,13 @@ fn parse_word_parts(
           PendingPart::Parts(Vec::new())
         }),
         map(tag("$?"), |_| PendingPart::Variable("?")),
-        map(first_escaped_char(mode), PendingPart::Char),
+        or(
+          map(
+            parse_literal_backslashes_before_operator(mode),
+            PendingPart::Chars,
+          ),
+          map(first_escaped_char(mode), PendingPart::Char),
+        ),
         map(parse_command_substitution, PendingPart::Command),
       ),
       map(parse_backticks_command_substitution, PendingPart::Command),
@@ -1008,6 +1059,11 @@ fn parse_word_parts(
       match part {
         PendingPart::Char(c) => {
           append_char(&mut result, c);
+        }
+        PendingPart::Chars(s) => {
+          for c in s.chars() {
+            append_char(&mut result, c);
+          }
         }
         PendingPart::Tilde => {
           if i == 0 {
@@ -2534,6 +2590,186 @@ mod test {
       parse_unquoted_word,
       "test\\ test",
       Ok(vec![WordPart::Text("test test".to_string())]),
+    );
+  }
+
+  #[test]
+  fn test_parse_word_escaped_operators() {
+    for (input, expected) in [
+      (r"\;", ";"),
+      (r"\&", "&"),
+      (r"\|", "|"),
+      (r"\<", "<"),
+      (r"\>", ">"),
+      (r"a\;b", "a;b"),
+      (r"\&\&", "&&"),
+    ] {
+      run_test(
+        parse_unquoted_word,
+        input,
+        Ok(vec![WordPart::Text(expected.to_string())]),
+      );
+    }
+
+    // within double quotes these are already literal, so the backslash
+    // keeps its literal meaning
+    run_test(
+      parse_quoted_string,
+      r#""a\;b""#,
+      Ok(vec![WordPart::Text(r"a\;b".to_string())]),
+    );
+    run_test(
+      parse_quoted_string,
+      r"'a\;b'",
+      Ok(vec![WordPart::Text(r"a\;b".to_string())]),
+    );
+
+    // `\\` before an operator is two literal backslashes and the operator
+    // still ends the word, so a trailing backslash remains writable
+    run_test_with_end(
+      parse_unquoted_word,
+      r"a\\;b",
+      Ok(vec![WordPart::Text(r"a\\".to_string())]),
+      ";b",
+    );
+    run_test_with_end(
+      parse_unquoted_word,
+      r"a\\\;b",
+      Ok(vec![WordPart::Text(r"a\\\".to_string())]),
+      ";b",
+    );
+
+    // ...but `\\` elsewhere is unaffected: the second backslash still
+    // escapes what follows it
+    run_test(
+      parse_unquoted_word,
+      r"\\$FOO",
+      Ok(vec![WordPart::Text(r"\$FOO".to_string())]),
+    );
+  }
+
+  /// The args of a sequence that must be a single simple command with no
+  /// redirect.
+  #[track_caller]
+  fn command_args(sequence: &Sequence) -> Vec<Word> {
+    let Sequence::Pipeline(pipeline) = sequence else {
+      panic!("expected pipeline");
+    };
+    let PipelineInner::Command(cmd) = &pipeline.inner else {
+      panic!("expected command");
+    };
+    assert_eq!(cmd.redirect, None);
+    let CommandInner::Simple(simple) = &cmd.inner else {
+      panic!("expected simple command");
+    };
+    simple.args.clone()
+  }
+
+  #[track_caller]
+  fn single_command_args(input: &str) -> Vec<Word> {
+    let list = parse(input).unwrap();
+    assert_eq!(list.items.len(), 1, "input: {input:?}");
+    command_args(&list.items[0].sequence)
+  }
+
+  #[test]
+  fn test_escaped_operators_are_arguments() {
+    // the case from denoland/deno#36401
+    assert_eq!(
+      single_command_args(r"wt deno task dev:api \; sp deno task dev:vite"),
+      vec![
+        Word::new_word("wt"),
+        Word::new_word("deno"),
+        Word::new_word("task"),
+        Word::new_word("dev:api"),
+        Word::new_word(";"),
+        Word::new_word("sp"),
+        Word::new_word("deno"),
+        Word::new_word("task"),
+        Word::new_word("dev:vite"),
+      ],
+    );
+    assert_eq!(
+      single_command_args(r"find . -exec echo {} \;"),
+      vec![
+        Word::new_word("find"),
+        Word::new_word("."),
+        Word::new_word("-exec"),
+        Word::new_word("echo"),
+        Word::new_word("{}"),
+        Word::new_word(";"),
+      ],
+    );
+    // an escaped redirect operator is an argument, not a redirect, even
+    // when it's preceded by what would otherwise be a file descriptor
+    assert_eq!(
+      single_command_args(r"echo a 2\> b"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("a"),
+        Word::new_word("2>"),
+        Word::new_word("b"),
+      ],
+    );
+    // a trailing escaped `&` is an argument, not a background operator
+    let list = parse(r"echo a\&").unwrap();
+    assert!(!list.items[0].is_async);
+    assert_eq!(
+      single_command_args(r"echo a\&"),
+      vec![Word::new_word("echo"), Word::new_word("a&")],
+    );
+    assert_eq!(
+      single_command_args(r"echo a \> b"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("a"),
+        Word::new_word(">"),
+        Word::new_word("b"),
+      ],
+    );
+    assert_eq!(
+      single_command_args(r"echo a \| b \& c"),
+      vec![
+        Word::new_word("echo"),
+        Word::new_word("a"),
+        Word::new_word("|"),
+        Word::new_word("b"),
+        Word::new_word("&"),
+        Word::new_word("c"),
+      ],
+    );
+  }
+
+  #[test]
+  fn test_windows_path_before_operator() {
+    // a single backslash now escapes the `;`, so the whole thing is one
+    // command — this is the cost of the escape and why `\\` is preserved
+    assert_eq!(
+      single_command_args(r"cd .\foo\;echo hi"),
+      vec![
+        Word::new_word("cd"),
+        Word::new_word(r".\foo;echo"),
+        Word::new_word("hi"),
+      ],
+    );
+
+    // doubling the backslash keeps a trailing separator followed by an
+    // operator writable without quoting
+    let list = parse(r"cd .\foo\\;echo hi").unwrap();
+    assert_eq!(list.items.len(), 2);
+    assert_eq!(
+      command_args(&list.items[0].sequence),
+      vec![Word::new_word("cd"), Word::new_word(r".\foo\\")],
+    );
+    assert_eq!(
+      command_args(&list.items[1].sequence),
+      vec![Word::new_word("echo"), Word::new_word("hi")],
+    );
+
+    // quoting remains the other way to write it
+    assert_eq!(
+      single_command_args(r"cd '.\foo\'")[1],
+      Word::new_string(r".\foo\"),
     );
   }
 

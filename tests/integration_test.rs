@@ -389,6 +389,38 @@ async fn double_quotes() {
 }
 
 #[tokio::test]
+async fn escaped_operators() {
+  // a backslash before an operator makes it part of the word
+  // (denoland/deno#36401)
+  TestBuilder::new()
+    .command(r"echo one \; two")
+    .assert_stdout("one ; two\n")
+    .run()
+    .await;
+
+  TestBuilder::new()
+    .command(r"echo a\&b \| c \> d")
+    .assert_stdout("a&b | c > d\n")
+    .run()
+    .await;
+
+  // still literal within quotes
+  TestBuilder::new()
+    .command(r#"echo "one \; two""#)
+    .assert_stdout("one \\; two\n")
+    .run()
+    .await;
+
+  // `\\` before an operator is a literal backslash and the operator still
+  // separates, which keeps a trailing Windows separator writable unquoted
+  TestBuilder::new()
+    .command(r"echo one\\;echo two")
+    .assert_stdout("one\\\\\ntwo\n")
+    .run()
+    .await;
+}
+
+#[tokio::test]
 async fn async_commands() {
   TestBuilder::new()
     .command("sleep 0.1 && echo 2 & echo 1")
